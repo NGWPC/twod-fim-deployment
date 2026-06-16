@@ -1,0 +1,34 @@
+__pycache__/
+*.py[codz]
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Dagster
+*.db
+.tmp_dagster_home_*
+.dg/
+.logs_queue/
+.nux/
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+*.tfvars
+!*.tfvars.example
+backend.hcl
+!backend.hcl.example
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Env
+.env
+
+# OS
+.DS_Store
