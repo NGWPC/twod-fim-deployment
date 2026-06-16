@@ -89,15 +89,38 @@ terraform apply
 
 **Required IAM permissions:** `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`, `iam:CreateInstanceProfile`, `iam:AddRoleToInstanceProfile` scoped to `arn:aws:iam::<account_id>:role/<project_name>-*` and `arn:aws:iam::<account_id>:instance-profile/<project_name>-*`.
 
-### app (coming soon)
+### app
 
 Application infrastructure — ok to destroy and recreate.
 
-**Will create:**
-- EC2 instance (orchestrator) + worker instance(s)
-- RDS Postgres (dagster + pipeline databases)
+**Creates:**
+- SSH key pair + EC2 instance (orchestrator) + optional worker instances
+- RDS Postgres (DB subnet group, instance, random password) + Secrets Manager secret for credentials
 - 4 ECR repos: orchestrator, model-worker, nd-scenario-worker, kwse-scenario-worker
 - Batch compute environment (GPU SPOT), job queue, 2 job definitions (nd, kwse)
-- Lambda function (Batch completion handler via EventBridge)
-- EventBridge rule + target + `aws_lambda_permission`
+- Lambda function (Batch completion handler) + EventBridge rule/target/permission + SQS DLQ + queue policy
 - 3 CloudWatch log groups: batch, ec2, lambda
+
+**Key outputs** (see `app/outputs.tf` for full details):
+- EC2: `orchestrator_public_ip`, `orchestrator_instance_id`, `worker_public_ips`
+- RDS: `rds_endpoint`, `rds_address`, `rds_secret_arn`
+- ECR: `ecr_repository_urls` (docker push targets)
+- Batch: `batch_job_queue_name`, `batch_nd_job_definition_name`, `batch_kwse_job_definition_name`
+- Lambda: `lambda_function_arn`, `eventbridge_dlq_url`
+
+**Setup:**
+
+```bash
+cd app
+
+cp terraform.tfvars.example terraform.tfvars
+cp backend.hcl.example backend.hcl
+# Edit both — populate foundation outputs (cd ../foundation && terraform output) + app config
+# Required: ec2_ssh_public_key, nd_image_tag, kwse_image_tag (git SHA or release tag)
+
+terraform init -backend-config=backend.hcl
+terraform apply
+
+# Post-apply: create pipeline database (required before Lambda/Dagster)
+# ./db/migrate.sh --secret-id <project_name>/rds-credentials --db-name pipeline
+```

@@ -1,0 +1,150 @@
+resource "aws_batch_compute_environment" "gpu" {
+  compute_environment_name = "${var.project_name}-gpu-spot"
+  type                     = "MANAGED"
+  state                    = "ENABLED"
+  service_role             = var.batch_service_role_arn
+
+  compute_resources {
+    type                = "SPOT"
+    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
+    min_vcpus           = 0
+    max_vcpus           = var.batch_max_vcpus
+    desired_vcpus       = 0
+    instance_type       = var.batch_instance_types
+    subnets             = var.public_subnet_ids
+    security_group_ids  = [var.batch_security_group_id]
+    instance_role       = var.batch_instance_profile_arn
+    spot_iam_fleet_role = var.spot_fleet_role_arn
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = { Name = "${var.project_name}-gpu-spot" }
+}
+
+resource "aws_batch_job_queue" "scenarios" {
+  name     = "${var.project_name}-scenarios-queue"
+  state    = "ENABLED"
+  priority = 1
+
+  compute_environment_order {
+    order               = 1
+    compute_environment = aws_batch_compute_environment.gpu.arn
+  }
+
+  tags = { Name = "${var.project_name}-scenarios-queue" }
+}
+
+resource "aws_batch_job_definition" "nd" {
+  name                  = "${var.project_name}-nd-scenarios"
+  type                  = "container"
+  platform_capabilities = ["EC2"]
+
+  retry_strategy {
+    attempts = var.batch_retry_attempts
+
+    evaluate_on_exit {
+      action           = "RETRY"
+      on_status_reason = "Host EC2*"
+    }
+
+    evaluate_on_exit {
+      action    = "EXIT"
+      on_reason = "*"
+    }
+  }
+
+  timeout {
+    attempt_duration_seconds = var.nd_job_timeout_seconds
+  }
+
+  container_properties = jsonencode({
+    image            = "${aws_ecr_repository.nd_scenario_worker.repository_url}:${var.nd_image_tag}"
+    jobRoleArn       = var.batch_job_role_arn
+    executionRoleArn = var.batch_execution_role_arn
+
+    resourceRequirements = [
+      { type = "VCPU", value = tostring(var.nd_job_vcpus) },
+      { type = "MEMORY", value = tostring(var.nd_job_memory) },
+      { type = "GPU", value = "1" },
+    ]
+
+    linuxParameters = {
+      sharedMemorySize = var.batch_shared_memory_size
+    }
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.batch.name
+        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-stream-prefix" = "nd"
+      }
+    }
+
+    environment = [
+      { name = "STORE_ROOT", value = "s3://${var.prod_bucket_name}" },
+      { name = "TEST_STORE_ROOT", value = "s3://${var.test_bucket_name}" },
+    ]
+  })
+
+  tags = { Name = "${var.project_name}-nd-scenarios" }
+}
+
+resource "aws_batch_job_definition" "kwse" {
+  name                  = "${var.project_name}-kwse-scenarios"
+  type                  = "container"
+  platform_capabilities = ["EC2"]
+
+  retry_strategy {
+    attempts = var.batch_retry_attempts
+
+    evaluate_on_exit {
+      action           = "RETRY"
+      on_status_reason = "Host EC2*"
+    }
+
+    evaluate_on_exit {
+      action    = "EXIT"
+      on_reason = "*"
+    }
+  }
+
+  timeout {
+    attempt_duration_seconds = var.kwse_job_timeout_seconds
+  }
+
+  container_properties = jsonencode({
+    image            = "${aws_ecr_repository.kwse_scenario_worker.repository_url}:${var.kwse_image_tag}"
+    jobRoleArn       = var.batch_job_role_arn
+    executionRoleArn = var.batch_execution_role_arn
+
+    resourceRequirements = [
+      { type = "VCPU", value = tostring(var.kwse_job_vcpus) },
+      { type = "MEMORY", value = tostring(var.kwse_job_memory) },
+      { type = "GPU", value = "1" },
+    ]
+
+    linuxParameters = {
+      sharedMemorySize = var.batch_shared_memory_size
+    }
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.batch.name
+        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-stream-prefix" = "kwse"
+      }
+    }
+
+    environment = [
+      { name = "STORE_ROOT", value = "s3://${var.prod_bucket_name}" },
+      { name = "TEST_STORE_ROOT", value = "s3://${var.test_bucket_name}" },
+    ]
+  })
+
+  tags = { Name = "${var.project_name}-kwse-scenarios" }
+}

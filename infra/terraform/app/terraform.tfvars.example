@@ -1,0 +1,61 @@
+# --- Shared (same values across all stacks) ---
+allowed_account_id = "123456789012"
+# project_name     = "twod-fim"
+# region           = "us-east-1"
+
+# --- Foundation inputs (from: cd ../foundation && terraform output) ---
+vpc_id                     = "vpc-xxxxxxxxx"
+public_subnet_ids          = ["subnet-xxx", "subnet-yyy"]
+private_subnet_ids         = ["subnet-aaa", "subnet-bbb"]
+ec2_security_group_id      = "sg-xxxxxxxxx"
+rds_security_group_id      = "sg-xxxxxxxxx"
+batch_security_group_id    = "sg-xxxxxxxxx"
+lambda_security_group_id   = "sg-xxxxxxxxx"
+ec2_instance_profile_name  = "twod-fim-ec2-orchestrator"
+batch_job_role_arn         = "arn:aws:iam::123456789012:role/twod-fim-batch-job"
+batch_execution_role_arn   = "arn:aws:iam::123456789012:role/twod-fim-batch-execution"
+batch_instance_profile_arn = "arn:aws:iam::123456789012:instance-profile/twod-fim-batch-instance"
+batch_service_role_arn     = "arn:aws:iam::123456789012:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+spot_fleet_role_arn        = "arn:aws:iam::123456789012:role/twod-fim-spot-fleet"
+lambda_execution_role_arn  = "arn:aws:iam::123456789012:role/twod-fim-lambda-execution"
+lambda_function_name       = "twod-fim-batch-handler"
+prod_bucket_name           = "twod-fim-prod-123456789012"
+test_bucket_name           = "twod-fim-test-123456789012"
+ecr_repository_name_prefix = "twod-fim-"
+batch_log_group_name       = "/aws/batch/twod-fim"
+ec2_log_group_name         = "/aws/ec2/twod-fim"
+lambda_log_group_name      = "/aws/lambda/twod-fim-batch-handler"
+rds_secret_name            = "twod-fim/rds-credentials"
+
+# --- App-specific (required) ---
+ec2_ssh_public_key = "ssh-ed25519 AAAA..."
+nd_image_tag       = "sha-abc1234"       # git SHA or release tag — no "latest" in prod
+kwse_image_tag     = "sha-abc1234"       # git SHA or release tag — no "latest" in prod
+
+# --- App-specific (optional, defaults shown) ---
+# ec2_instance_type           = "t3.medium"
+# ec2_root_volume_size        = 30         # 8-1000 GB
+# worker_count                = 0          # additional EC2 instances for build_model at scale (0-10)
+# rds_instance_class          = "db.t3.micro"
+# rds_allocated_storage       = 20         # 20-1000 GB
+# rds_engine_version          = "16"
+# rds_master_username         = "dagster_admin"
+# rds_backup_retention_days   = 7          # 0-35
+# rds_skip_final_snapshot     = true       # false for prod (takes snapshot before destroy)
+# rds_final_snapshot_identifier = null     # required when skip is false (must be unique)
+# rds_secret_recovery_window_days = 0      # 0 = immediate delete on destroy (test); 7-30 for prod
+# batch_max_vcpus             = 256
+# batch_instance_types        = ["g4dn.xlarge"]
+# batch_retry_attempts        = 3          # 1-10
+# batch_shared_memory_size    = 4096
+# nd_job_vcpus                = 4
+# nd_job_memory               = 15000      # min 512 MB
+# nd_job_timeout_seconds      = 14400      # min 60s
+# kwse_job_vcpus              = 4
+# kwse_job_memory             = 15000      # min 512 MB
+# kwse_job_timeout_seconds    = 14400      # min 60s
+# lambda_timeout              = 60         # 1-900s
+# lambda_memory_size          = 128        # 128-10240 MB
+# log_retention_days          = 30         # AWS-supported values: 1/3/5/7/14/30/60/90/120/150/180/365/...
+# ecr_force_delete            = true
+# ecr_image_tag_mutability    = "IMMUTABLE"  # MUTABLE allows tag reuse (less safe)
