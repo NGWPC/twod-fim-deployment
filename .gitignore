@@ -1,0 +1,5 @@
+# Local deployment data
+/.data/
+
+# Local env overrides
+.env
