@@ -5,6 +5,6 @@ CREATE SCHEMA IF NOT EXISTS twodfim;
 
 DO $$
 BEGIN
-    EXECUTE format('ALTER DATABASE %I SET search_path = fim, public', current_database());
+    EXECUTE format('ALTER DATABASE %I SET search_path = twodfim, public', current_database());
 END
 $$;
