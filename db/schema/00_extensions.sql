@@ -1,9 +1,7 @@
 -- 00_extensions.sql
-
 CREATE EXTENSION IF NOT EXISTS postgis;
 
-CREATE SCHEMA IF NOT EXISTS fim;
-
+CREATE SCHEMA IF NOT EXISTS twodfim;
 
 DO $$
 BEGIN

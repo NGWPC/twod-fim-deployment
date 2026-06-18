@@ -11,9 +11,9 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ## Layout
 
 ```
-├── README.md 
+├── README.md
 ├── justfile
-├── compatibility_policy   	# placeholder for future document 
+├── compatibility_policy   	# placeholder for future document
 ├── docker-compose.yml     	# for local deployment
 ├── example.env
 ├── orchestrator/           #  the self contained dagster project
@@ -25,3 +25,7 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ├── infra/terraform/        # modules + envs/dev
 └── scripts/ 								# could also call tools
 ```
+
+## Justfile
+
+Need just binary
