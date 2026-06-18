@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS desired_state (
     reach_id                    BIGINT PRIMARY KEY
         REFERENCES reach_network (reach_id) ON DELETE CASCADE,
 
-    min_flow                    INTEGER,                 -- cms (whole-number flows only)
-    max_flow                    INTEGER,                 -- cms (whole-number flows only)
+    q_lower_bound            INTEGER,                 -- cms (whole-number flows only)
+    q_upper_bound            INTEGER,                 -- cms (whole-number flows only)
 
     initial_dq_step_for_nd      INTEGER,                 -- cms 
 
@@ -28,16 +28,15 @@ CREATE TABLE IF NOT EXISTS desired_state (
     q_set                       INTEGER[],
 
 
-    ds_min_kwse                 DOUBLE PRECISION,        -- m
-    ds_max_kwse                 DOUBLE PRECISION,        -- m
+    kwse_upper_bound            DOUBLE PRECISION,        -- m
 
 
     revision                    INTEGER NOT NULL DEFAULT 0, -- field autoincrement
 
     CONSTRAINT desired_state_flow_bounds_chk
-        CHECK (min_flow IS NULL OR max_flow IS NULL OR min_flow < max_flow),
+        CHECK (q_lower_bound IS NULL OR q_upper_bound IS NULL OR q_lower_bound < q_upper_bound),
     CONSTRAINT desired_state_kwse_bounds_chk
-        CHECK (ds_min_kwse IS NULL OR ds_max_kwse IS NULL OR ds_min_kwse <= ds_max_kwse),
+        CHECK (kwse_upper_bound IS NULL OR kwse_upper_bound > 0),
     CONSTRAINT desired_state_ld_positive_chk
         CHECK (
             (ld_q_mean_stage_delta       IS NULL OR ld_q_mean_stage_delta       > 0) AND

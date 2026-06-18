@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS runs (
     kwse_m                   DOUBLE PRECISION,             -- known WSE; NULL for nd runs
 
     -- Outputs
-    run_uri                TEXT NOT NULL,                
-    stl_nominal_wse          DOUBLE PRECISION,             
+    run_uri                  TEXT NOT NULL,                
+    us_wse                  DOUBLE PRECISION,              -- nominal upstream wse at STL
     transfer_bc_from_run_hash CHAR(8)                      -- downstream run that supplied this BC (provenance)
         CONSTRAINT runs_transfer_hash_chk
         CHECK (transfer_bc_from_run_hash IS NULL OR transfer_bc_from_run_hash ~ '^[0-9a-f]{8}$'),

@@ -1,17 +1,24 @@
 -- 08_views.sql
 -- Per guide.md, what can be derived is not stored
 
---   q_set         : distinct library discharges (kwse runs reuse nd discharges, so
---                   distinct q over the reach's runs is the library, DR-030).
---   ds_min/max_kwse: range of known WSE actually run; nd runs have kwse_m NULL and
---                   so are naturally ignored by min()/max().
-CREATE OR REPLACE VIEW current_state_realized AS
+--   q_set / n_discharges: distinct library discharges for THIS reach (DR-030).
+--   max_kwse            : highest known-WSE actually run on THIS reach (nd runs have
+--                         kwse_m NULL and so are ignored by max()).
+--   ds_r_max_us_wse : the DOWNSTREAM reach's upstream WSEL (us_wse) max, which
+--                         bounds this reach's KWSE library. NULL at
+--                         terminals or until the downstream reach has runs.
+
+-- Since it is a view, we drop it first and then create it.
+DROP VIEW IF EXISTS current_state_realized;
+CREATE VIEW current_state_realized AS
 SELECT
     r.reach_id,
     array_agg(DISTINCT r.q_cms ORDER BY r.q_cms) AS q_set,
     count(DISTINCT r.q_cms)                       AS n_discharges,
-    min(r.kwse_m)                                 AS ds_min_kwse,
-    max(r.kwse_m)                                 AS ds_max_kwse
+    max(r.kwse_m)                                 AS max_kwse,
+    (SELECT max(d.us_wse) FROM runs d WHERE d.reach_id = rn.reach_to_id) AS ds_r_max_us_wse
 FROM runs r
-GROUP BY r.reach_id;
+JOIN reach_network rn ON rn.reach_id = r.reach_id
+GROUP BY r.reach_id, rn.reach_to_id;
 
+COMMENT ON VIEW current_state_realized IS 'Current state of realized runs for each reach';
