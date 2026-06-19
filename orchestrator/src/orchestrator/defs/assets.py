@@ -16,13 +16,14 @@ def process_build_model(
     """Orchestrator wrapper for build_model worker.
 
     1. Read desired_state for the reach.
-    2. Construct base_output_path from store_root + S3 path conventions.
+    2. Construct base_output_path from artifacts_s3_bucket + S3 path conventions.
     3. Submit build_model job with constructed inputs.
     4. Verify model.json exists at expected S3 path.
     5. Update current_state with worker response.
 
-    On error: re-raises. processing flag stays TRUE — reconciliation sensor
-    retries on next tick.
+    Does not manage the processing flag — that is reserved for the future
+    cascade coordinator (build → nd → kwse). On error: re-raises;
+    run_key dedup prevents the sensor from resubmitting the same revision.
     """
     reach_id = int(context.partition_key)
     store = state_store.get_store()
@@ -32,10 +33,9 @@ def process_build_model(
         raise ValueError(f"No desired_state for reach {reach_id}")
     revision = desired["revision"]
 
-    base_output_path = f"{settings.store_root}/version=v{settings.major_version}/models/reach={reach_id}"
+    base_output_path = f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/models/reach={reach_id}"
 
     context.log.info(f"Processing build_model for reach {reach_id} (revision {revision})")
-    store.set_processing(reach_id, True)
 
     result = build_model(
         reach_id=reach_id,
@@ -47,11 +47,10 @@ def process_build_model(
     if not object_exists(artifact_path):
         raise RuntimeError(f"model.json not found at {artifact_path}")
 
-    domain_code = result.model_id.split("+", 1)[1] if "+" in result.model_id else ""
+    domain_code = result.model_id.split("+", 1)[1]
 
     store.update_current(
         reach_id=reach_id,
-        model_id=result.model_id,
         identity_hash=result.identity_hash,
         domain_code=domain_code,
         applied_revision=revision,

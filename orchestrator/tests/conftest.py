@@ -1,12 +1,16 @@
+import glob
 import os
 import platform
+from pathlib import Path
 
+import psycopg
 import pytest
 from testcontainers.postgres import PostgresContainer
 
 from orchestrator.state_store import StateStore
 
-POSTGIS_IMAGE = "imresamu/postgis:16-3.4-alpine"
+POSTGIS_IMAGE = "postgis/postgis:16-3.4"
+SCHEMA_DIR = Path(__file__).resolve().parents[2] / "db" / "schema"
 
 if not os.environ.get("DOCKER_HOST"):
     if platform.system() == "Darwin":
@@ -19,6 +23,20 @@ if not os.environ.get("DOCKER_HOST"):
         os.environ["DOCKER_HOST"] = f"unix://{sock}"
 
 
+def _init_schema(connection_string: str):
+    """Apply db/schema/*.sql in order, each in its own connection.
+
+    Mimics docker-entrypoint-initdb.d: separate connections so
+    ALTER DATABASE SET search_path takes effect for subsequent files.
+    """
+    sql_files = sorted(glob.glob(str(SCHEMA_DIR / "*.sql")))
+    for sql_file in sql_files:
+        sql = Path(sql_file).read_text()
+        with psycopg.connect(connection_string) as conn:
+            conn.execute(sql)
+            conn.commit()
+
+
 @pytest.fixture(scope="session")
 def pg_container():
     """Spin up an ephemeral PostGIS container for the entire test session."""
@@ -26,7 +44,7 @@ def pg_container():
         image=POSTGIS_IMAGE,
         username="test",
         password="test",
-        dbname="pipeline_test",
+        dbname="twodfim_test",
     ) as pg:
         yield pg
 
@@ -34,7 +52,9 @@ def pg_container():
 @pytest.fixture(scope="session")
 def connection_string(pg_container):
     """Connection string for the ephemeral test database."""
-    return pg_container.get_connection_url().replace("postgresql+psycopg2", "postgresql")
+    url = pg_container.get_connection_url().replace("postgresql+psycopg2", "postgresql")
+    _init_schema(url)
+    return url
 
 
 @pytest.fixture

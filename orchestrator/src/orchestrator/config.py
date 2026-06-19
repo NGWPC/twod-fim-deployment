@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from pydantic import computed_field
@@ -8,19 +9,22 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 class Settings(BaseSettings):
-    pg_username: str
-    pg_password: str
-    pg_host: str
-    pg_port: int = 5432
-    pipeline_pg_db: str = "pipeline"
-    store_root: str
+    postgres_user: str
+    postgres_password: str
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "twodfim"
+    artifacts_s3_bucket: str = "twod-fim-artifacts"
     major_version: int = 1
     aws_endpoint_url: str | None = None
 
     @computed_field
     @property
     def pipeline_db_connection_string(self) -> str:
-        return f"postgresql://{self.pg_username}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pipeline_pg_db}"
+        return (
+            f"postgresql://{quote_plus(self.postgres_user)}:{quote_plus(self.postgres_password)}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
 
 
 settings = Settings()

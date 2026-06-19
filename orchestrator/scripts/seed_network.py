@@ -48,9 +48,9 @@ def seed():
     print(f"Seeding {len(NETWORK)} reaches...")
     for reach_id, reach_to_id, is_terminal, is_headwater in NETWORK:
         store.insert_reach(reach_id, reach_to_id, is_terminal, is_headwater)
-        store.upsert_desired(reach_id, revision=1)
+        store.upsert_desired(reach_id)
 
-    print(f"Done. {len(NETWORK)} reaches in reach_network + desired_state (revision=1).")
+    print(f"Done. {len(NETWORK)} reaches in reach_network and desired_state.")
 
 
 if __name__ == "__main__":

@@ -15,3 +15,37 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  minio:
+    image: minio/minio
+    container_name: twodfim-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minio}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minio123}
+    volumes:
+      - ./.data/minio:/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc
+    container_name: twodfim-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$AWS_ACCESS_KEY_ID $$AWS_SECRET_ACCESS_KEY &&
+      mc mb --ignore-existing local/$$DAGSTER_S3_BUCKET &&
+      mc mb --ignore-existing local/$$ARTIFACTS_S3_BUCKET &&
+      echo 'Buckets ready.'
+      "

@@ -2,15 +2,15 @@ storage:
   postgres:
     postgres_db:
       username:
-        env: PG_USERNAME
+        env: POSTGRES_USER
       password:
-        env: PG_PASSWORD
+        env: POSTGRES_PASSWORD
       hostname:
-        env: PG_HOST
+        env: POSTGRES_HOST
       db_name:
         env: DAGSTER_PG_DB
       port:
-        env: PG_PORT
+        env: POSTGRES_PORT
 
 run_queue:
   max_concurrent_runs: 5

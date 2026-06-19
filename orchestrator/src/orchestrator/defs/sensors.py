@@ -17,10 +17,14 @@ def reconciliation_sensor(
     Downstream-first traversal: a reach is eligible only when it is stale AND
     its downstream dependency is complete (or it is terminal).
 
-    Double-submission prevented by:
-    1. run_key dedup (primary) — Dagster skips duplicate run_keys per reach+revision
-    2. processing flag in DB (secondary) — get_eligible_reaches() excludes processing=TRUE
-       Note: processing flag is a no-op for fresh reaches (no current_state row yet)
+    Double-submission guard: run_key dedup — Dagster skips duplicate run_keys
+    per reach+revision. The DB processing flag is reserved for the future
+    cascade coordinator (build → nd → kwse) and is not set by current workers.
+
+    Note: After Dagster retries are exhausted for a given run_key, the reach stays
+    stale but the sensor will not resubmit it (same run_key). To retry:
+    bump desired_state (any field change increments revision via trigger,
+    producing a new run_key) or manually re-launch the asset.
     """
     store = state_store.get_store()
     eligible = store.get_eligible_reaches()
