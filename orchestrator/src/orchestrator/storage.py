@@ -44,3 +44,13 @@ def put_json(path: str, data: str) -> None:
         Body=data,
         ContentType="application/json",
     )
+
+
+def model_base_path(reach_id: int) -> str:
+    """Base S3 location for a reach's model artifacts."""
+    return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/models/reach={reach_id}"
+
+
+def model_artifact_path(reach_id: int, model_id: str) -> str:
+    """Full s3:// path to a reach's model.json."""
+    return f"{model_base_path(reach_id)}/{model_id}/model.json"

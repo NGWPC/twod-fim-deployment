@@ -19,48 +19,38 @@ See [`db/schema/`](../db/schema/) for full definitions.
 
 ## Prerequisites
 
-- Docker (for PostGIS + MinIO)
-- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- Docker
+- [uv](https://docs.astral.sh/uv/) for maintenance commands (e.g. regenerating `uv.lock`)
 
 ## Local dev setup
 
 ### 1. Environment
 
-Copy `example.env` to `.env` at the repo root and adjust paths:
+Copy `example.env` to `.env` at the repo root:
 
 ```bash
 cp example.env .env
-# Edit DAGSTER_HOME to your local orchestrator path
 ```
 
-`orchestrator/.env` is a symlink to `../.env` — one file serves both
-docker-compose and the orchestrator. Git preserves the symlink on clone.
-If deleted, recreate with `ln -s ../.env orchestrator/.env`.
+`orchestrator/.env` is a symlink to `../.env` - one file serves both docker-compose and host-local orchestrator commands. Git preserves the symlink on clone. If deleted, recreate with `ln -s ../.env orchestrator/.env`.
 
-### 2. Start services
+The compose `orchestrator` service overrides container-only values such as
+`POSTGRES_HOST`, `AWS_ENDPOINT_URL`, and `DAGSTER_HOME`.
+
+### 2. Start the local stack
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 This brings up:
-- **PostGIS** (`localhost:5432`) — applies `db/schema/*.sql` on first boot, creates the `dagster` database via `00_create_dagster_db.sh`
-- **MinIO** (`localhost:9000`, console at `localhost:9001`) — creates `dagster-logs` and artifact buckets on first boot
+- **PostGIS** (`localhost:5432`) - applies `db schema/*.sql` on first boot, creates the `dagster` database via `00_create_dagster_db.sh`
+- **MinIO** (`localhost:9000`, console at `localhost:9001`) - creates `dagster-logs` and artifact buckets on first boot
+- **Dagster UI** (`localhost:3000`) - runs the orchestrator in Docker
 
-To reset from scratch: `docker compose down -v && rm -rf .data/ && docker compose up -d`
+To reset from scratch: `docker compose down -v && rm -rf .data/ && docker compose up -d --build`
 
-### 3. Install and run
-
-```bash
-cd orchestrator
-uv sync
-uv run python scripts/seed_network.py    # seed 20-reach demo network
-uv run dg dev                            # Dagster UI at localhost:3000
-```
-
-In the Dagster UI: **Automation** -> toggle `reconciliation_sensor` ON.
-
-### 4. Endpoints
+### 3. Endpoints
 
 | Service | URL |
 |---|---|
@@ -71,11 +61,15 @@ In the Dagster UI: **Automation** -> toggle `reconciliation_sensor` ON.
 
 Credentials are in `.env` / `example.env`.
 
-### 5. Running tests
+### 4. Verify the stack (smoke check)
+
+End-to-end check: seeds the 20-reach demo network, polls until every reach
+reconciles, then verifies final DB and storage state. Best run on a fresh stack.
+
+In the Dagster UI: **Automation** -> toggle `reconciliation_sensor` ON, then:
 
 ```bash
-cd orchestrator
-uv run pytest -v
+docker compose exec orchestrator python scripts/smoke_check.py
 ```
 
 ## Env vars
@@ -84,14 +78,14 @@ uv run pytest -v
 |---|---|---|
 | `POSTGRES_USER` | docker-compose, config.py, dagster.yaml | DB username |
 | `POSTGRES_PASSWORD` | docker-compose, config.py, dagster.yaml | DB password |
-| `POSTGRES_HOST` | config.py, dagster.yaml | DB host (localhost for local dev) |
+| `POSTGRES_HOST` | docker-compose, config.py, dagster.yaml | DB host (`localhost` host / `db` compose) |
 | `POSTGRES_PORT` | docker-compose, config.py, dagster.yaml | DB port |
 | `POSTGRES_DB` | docker-compose, config.py | Pipeline database name |
 | `DAGSTER_PG_DB` | dagster.yaml, 00_create_dagster_db.sh | Dagster metadata database |
-| `DAGSTER_HOME` | dagster | Dagster instance directory |
+| `DAGSTER_HOME` | docker-compose, Dockerfile, dagster | Dagster instance directory |
 | `AWS_ACCESS_KEY_ID` | docker-compose, boto3 | S3/MinIO access key |
 | `AWS_SECRET_ACCESS_KEY` | docker-compose, boto3 | S3/MinIO secret key |
-| `AWS_ENDPOINT_URL` | dagster.yaml, storage.py | MinIO endpoint (omit for real S3) |
+| `AWS_ENDPOINT_URL` | docker-compose, dagster.yaml, storage.py | MinIO endpoint (`localhost` host / `minio` compose; omit for real S3) |
 | `DAGSTER_S3_BUCKET` | dagster.yaml, docker-compose | Dagster compute logs bucket |
 | `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
 | `MAJOR_VERSION` | config.py | Artifact path versioning |

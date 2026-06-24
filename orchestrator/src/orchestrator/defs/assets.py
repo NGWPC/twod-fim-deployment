@@ -2,7 +2,7 @@ import dagster as dg
 
 from orchestrator.config import settings
 from orchestrator.defs.resources import StateStoreResource
-from orchestrator.storage import object_exists
+from orchestrator.storage import model_artifact_path, model_base_path, object_exists
 from orchestrator.workers import build_model
 
 reaches_partitions = dg.DynamicPartitionsDefinition(name="reaches")
@@ -16,10 +16,9 @@ def process_build_model(
     """Orchestrator wrapper for build_model worker.
 
     1. Read desired_state for the reach.
-    2. Construct base_output_path from artifacts_s3_bucket + S3 path conventions.
-    3. Submit build_model job with constructed inputs.
-    4. Verify model.json exists at expected S3 path.
-    5. Update current_state with worker response.
+    2. Construct base_output_path (model_base_path) and submit build_model.
+    3. Verify model.json exists at the expected S3 path (model_artifact_path).
+    4. Update current_state with worker response.
 
     Does not manage the processing flag — that is reserved for the future
     cascade coordinator (build → nd → kwse). On error: re-raises;
@@ -33,7 +32,7 @@ def process_build_model(
         raise ValueError(f"No desired_state for reach {reach_id}")
     revision = desired["revision"]
 
-    base_output_path = f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/models/reach={reach_id}"
+    base_output_path = model_base_path(reach_id)
 
     context.log.info(f"Processing build_model for reach {reach_id} (revision {revision})")
 
@@ -43,7 +42,7 @@ def process_build_model(
         base_output_path=base_output_path,
     )
 
-    artifact_path = f"{base_output_path}/{result.model_id}/model.json"
+    artifact_path = model_artifact_path(reach_id, result.model_id)
     if not object_exists(artifact_path):
         raise RuntimeError(f"model.json not found at {artifact_path}")
 

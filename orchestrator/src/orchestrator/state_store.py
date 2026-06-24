@@ -140,6 +140,31 @@ class StateStore:
             """).fetchall()
         return rows
 
+    def get_reach_states(self) -> list[dict]:
+        """Per-reach reconciliation status, for the smoke check.
+
+        A reach is reconciled when current_state matches the desired
+        revision and is not mid-processing.
+        model_id is the DB-generated identity_hash+domain_code.
+        """
+        with self._connect() as conn:
+            rows = conn.execute("""
+                SELECT
+                    d.reach_id,
+                    c.model_id,
+                    COALESCE(
+                        c.applied_revision >= d.revision
+                        AND c.identity_hash IS NOT NULL
+                        AND c.domain_code IS NOT NULL
+                        AND COALESCE(c.processing, FALSE) = FALSE,
+                        FALSE
+                    ) AS reconciled
+                FROM desired_state d
+                LEFT JOIN current_state c ON d.reach_id = c.reach_id
+                ORDER BY d.reach_id
+            """).fetchall()
+        return rows
+
     def reset(self):
         """Truncate all data tables. Schema and triggers are preserved."""
         with self._connect() as conn:

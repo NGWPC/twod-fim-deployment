@@ -17,8 +17,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "dagster-dg-cli",
-    "pytest",
-    "testcontainers[postgres]",
 ]
 
 [build-system]
@@ -36,7 +34,3 @@ root_module = "orchestrator"
 registry_modules = [
     "orchestrator.components.*",
 ]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src", "tests"]

@@ -17,7 +17,7 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: twodfim-minio
     command: server /data --console-address ":9001"
     ports:
@@ -35,7 +35,7 @@ services:
       retries: 10
 
   minio-init:
-    image: minio/mc
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: twodfim-minio-init
     depends_on:
       minio:
@@ -49,3 +49,24 @@ services:
       mc mb --ignore-existing local/$$ARTIFACTS_S3_BUCKET &&
       echo 'Buckets ready.'
       "
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+    container_name: twodfim-orchestrator
+    depends_on:
+      db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      AWS_ENDPOINT_URL: http://minio:9000
+      DAGSTER_HOME: /opt/dagster
+    command: [ "dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-m", "orchestrator.definitions" ]
+    ports:
+      - "3000:3000"
+    healthcheck:
+      disable: true
