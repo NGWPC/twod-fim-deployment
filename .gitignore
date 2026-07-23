@@ -28,8 +28,11 @@ override.tf.json
 *_override.tf.json
 lambda_placeholder.zip
 
-# Env
-.env
-
 # OS
 .DS_Store
+
+# Local deployment data
+/.data/
+
+# Env
+.env
