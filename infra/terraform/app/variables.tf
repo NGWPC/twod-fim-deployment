@@ -68,6 +68,12 @@ variable "vpc_id" {
 
 # --- App-specific: Batch ---
 
+variable "use_spot" {
+  description = "Use SPOT instances (true) or on-demand EC2 (false) for Batch compute"
+  type        = bool
+  default     = true
+}
+
 variable "batch_instance_types" {
   description = "GPU instance types for Batch compute environment"
   type        = list(string)

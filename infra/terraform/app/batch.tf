@@ -1,23 +1,31 @@
 resource "aws_batch_compute_environment" "gpu" {
-  name         = "${var.project_name}-gpu-spot"
+  name         = "${var.project_name}-gpu-${var.use_spot ? "spot" : "ec2"}"
   type         = "MANAGED"
   state        = "ENABLED"
   service_role = local.batch_service_role_arn
 
   compute_resources {
-    type                = "SPOT"
-    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
+    type                = var.use_spot ? "SPOT" : "EC2"
+    allocation_strategy = var.use_spot ? "SPOT_CAPACITY_OPTIMIZED" : "BEST_FIT_PROGRESSIVE"
     min_vcpus           = 0
+    desired_vcpus       = 0
     max_vcpus           = var.batch_max_vcpus
     instance_type       = var.batch_instance_types
     subnets             = var.private_subnet_ids
     security_group_ids  = [aws_security_group.batch.id]
     instance_role       = local.batch_instance_profile_arn
-    spot_iam_fleet_role = local.spot_fleet_role_arn
+    spot_iam_fleet_role = var.use_spot ? local.spot_fleet_role_arn : null
+
+    tags = merge({
+      ManagedBy = "Terraform"
+      Project   = var.project_name
+      Stack     = "app"
+    }, local.optional_tags)
   }
 
   lifecycle {
     create_before_destroy = true
+    ignore_changes        = [compute_resources[0].desired_vcpus]
   }
 
   depends_on = [
@@ -45,6 +53,7 @@ resource "aws_batch_job_definition" "nd" {
   name                  = "${var.project_name}-nd-scenarios"
   type                  = "container"
   platform_capabilities = ["EC2"]
+  propagate_tags        = true
 
   retry_strategy {
     attempts = var.batch_retry_attempts
@@ -101,6 +110,7 @@ resource "aws_batch_job_definition" "kwse" {
   name                  = "${var.project_name}-kwse-scenarios"
   type                  = "container"
   platform_capabilities = ["EC2"]
+  propagate_tags        = true
 
   retry_strategy {
     attempts = var.batch_retry_attempts
