@@ -1,3 +1,7 @@
+# All resources here are gated by var.create_storage:
+#   true  -> create prod + test artifact S3 buckets
+#   false -> create nothing; the app layer uses var.existing_prod_bucket_name / existing_test_bucket_name
+
 locals {
   prod_bucket_name = var.prod_bucket_name != "" ? var.prod_bucket_name : "${var.project_name}-prod-${data.aws_caller_identity.current.account_id}"
   test_bucket_name = var.test_bucket_name != "" ? var.test_bucket_name : "${var.project_name}-test-${data.aws_caller_identity.current.account_id}"
@@ -6,6 +10,8 @@ locals {
 # --- Prod artifact bucket ---
 
 resource "aws_s3_bucket" "prod" {
+  count = var.create_storage ? 1 : 0
+
   bucket = local.prod_bucket_name
 
   lifecycle {
@@ -14,7 +20,9 @@ resource "aws_s3_bucket" "prod" {
 }
 
 resource "aws_s3_bucket_versioning" "prod" {
-  bucket = aws_s3_bucket.prod.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.prod[0].id
 
   versioning_configuration {
     status = "Enabled"
@@ -22,7 +30,9 @@ resource "aws_s3_bucket_versioning" "prod" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "prod" {
-  bucket = aws_s3_bucket.prod.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.prod[0].id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -32,7 +42,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "prod" {
 }
 
 resource "aws_s3_bucket_public_access_block" "prod" {
-  bucket = aws_s3_bucket.prod.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.prod[0].id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -41,7 +53,9 @@ resource "aws_s3_bucket_public_access_block" "prod" {
 }
 
 resource "aws_s3_bucket_policy" "prod" {
-  bucket = aws_s3_bucket.prod.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.prod[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -51,8 +65,8 @@ resource "aws_s3_bucket_policy" "prod" {
       Principal = "*"
       Action    = "s3:*"
       Resource = [
-        aws_s3_bucket.prod.arn,
-        "${aws_s3_bucket.prod.arn}/*",
+        aws_s3_bucket.prod[0].arn,
+        "${aws_s3_bucket.prod[0].arn}/*",
       ]
       Condition = {
         Bool = { "aws:SecureTransport" = "false" }
@@ -66,12 +80,16 @@ resource "aws_s3_bucket_policy" "prod" {
 # --- Test artifact bucket ---
 
 resource "aws_s3_bucket" "test" {
+  count = var.create_storage ? 1 : 0
+
   bucket        = local.test_bucket_name
   force_destroy = true
 }
 
 resource "aws_s3_bucket_versioning" "test" {
-  bucket = aws_s3_bucket.test.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.test[0].id
 
   versioning_configuration {
     status = "Enabled"
@@ -79,7 +97,9 @@ resource "aws_s3_bucket_versioning" "test" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "test" {
-  bucket = aws_s3_bucket.test.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.test[0].id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -89,7 +109,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "test" {
 }
 
 resource "aws_s3_bucket_public_access_block" "test" {
-  bucket = aws_s3_bucket.test.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.test[0].id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -98,7 +120,9 @@ resource "aws_s3_bucket_public_access_block" "test" {
 }
 
 resource "aws_s3_bucket_policy" "test" {
-  bucket = aws_s3_bucket.test.id
+  count = var.create_storage ? 1 : 0
+
+  bucket = aws_s3_bucket.test[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -108,8 +132,8 @@ resource "aws_s3_bucket_policy" "test" {
       Principal = "*"
       Action    = "s3:*"
       Resource = [
-        aws_s3_bucket.test.arn,
-        "${aws_s3_bucket.test.arn}/*",
+        aws_s3_bucket.test[0].arn,
+        "${aws_s3_bucket.test[0].arn}/*",
       ]
       Condition = {
         Bool = { "aws:SecureTransport" = "false" }

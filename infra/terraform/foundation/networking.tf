@@ -1,14 +1,25 @@
+# All resources here are gated by var.create_networking:
+#   true  -> create a VPC + public/private subnets + IGW + NAT + VPC endpoints
+#   false -> create nothing; the app layer uses var.existing_vpc_id / existing_private_subnet_ids /
+#            existing_vpce_security_group_id
+#
+# Two-tier networking: public subnets exist ONLY for NAT gateway placement (no workloads).
+# Private subnets host all workloads (EC2, RDS, Batch, Lambda).
+
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+  az_count = max(length(var.public_subnet_cidrs), length(var.private_subnet_cidrs))
+  azs      = slice(data.aws_availability_zones.available.names, 0, local.az_count)
 }
 
 # --- VPC ---
 
 resource "aws_vpc" "main" {
+  count = var.create_networking ? 1 : 0
+
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -17,48 +28,52 @@ resource "aws_vpc" "main" {
 }
 
 resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
+  count = var.create_networking ? 1 : 0
+
+  vpc_id = aws_vpc.main[0].id
 
   tags = { Name = "${var.project_name}-igw" }
 }
 
-# --- Public subnets ---
+# --- Public subnets (NAT gateway placement only, no workloads) ---
 
 resource "aws_subnet" "public" {
-  count = 2
+  count = var.create_networking ? length(var.public_subnet_cidrs) : 0
 
-  vpc_id                  = aws_vpc.main.id
+  vpc_id                  = aws_vpc.main[0].id
   cidr_block              = var.public_subnet_cidrs[count.index]
   availability_zone       = local.azs[count.index]
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 
   tags = { Name = "${var.project_name}-public-${local.azs[count.index]}" }
 }
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
+  count = var.create_networking ? 1 : 0
+
+  vpc_id = aws_vpc.main[0].id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
+    gateway_id = aws_internet_gateway.main[0].id
   }
 
   tags = { Name = "${var.project_name}-public-rt" }
 }
 
 resource "aws_route_table_association" "public" {
-  count = 2
+  count = var.create_networking ? length(var.public_subnet_cidrs) : 0
 
   subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public.id
+  route_table_id = aws_route_table.public[0].id
 }
 
-# --- Private subnets ---
+# --- Private subnets (all workloads) ---
 
 resource "aws_subnet" "private" {
-  count = 2
+  count = var.create_networking ? length(var.private_subnet_cidrs) : 0
 
-  vpc_id            = aws_vpc.main.id
+  vpc_id            = aws_vpc.main[0].id
   cidr_block        = var.private_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
@@ -66,22 +81,24 @@ resource "aws_subnet" "private" {
 }
 
 resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
+  count = var.create_networking ? 1 : 0
+
+  vpc_id = aws_vpc.main[0].id
 
   tags = { Name = "${var.project_name}-private-rt" }
 }
 
 resource "aws_route_table_association" "private" {
-  count = 2
+  count = var.create_networking ? length(var.private_subnet_cidrs) : 0
 
   subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[0].id
 }
 
-# --- NAT gateway (conditional) ---
+# --- NAT gateway (conditional; sits in public subnet, routes private traffic to internet) ---
 
 resource "aws_eip" "nat" {
-  count = var.enable_nat_gateway ? 1 : 0
+  count = var.create_networking && var.enable_nat_gateway ? 1 : 0
 
   domain = "vpc"
 
@@ -89,7 +106,7 @@ resource "aws_eip" "nat" {
 }
 
 resource "aws_nat_gateway" "main" {
-  count = var.enable_nat_gateway ? 1 : 0
+  count = var.create_networking && var.enable_nat_gateway ? 1 : 0
 
   allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public[0].id
@@ -100,9 +117,9 @@ resource "aws_nat_gateway" "main" {
 }
 
 resource "aws_route" "private_nat" {
-  count = var.enable_nat_gateway ? 1 : 0
+  count = var.create_networking && var.enable_nat_gateway ? 1 : 0
 
-  route_table_id         = aws_route_table.private.id
+  route_table_id         = aws_route_table.private[0].id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.main[0].id
 }
@@ -110,159 +127,59 @@ resource "aws_route" "private_nat" {
 # --- VPC endpoints ---
 
 resource "aws_vpc_endpoint" "s3" {
-  vpc_id       = aws_vpc.main.id
+  count = var.create_networking ? 1 : 0
+
+  vpc_id       = aws_vpc.main[0].id
   service_name = "com.amazonaws.${var.region}.s3"
 
   route_table_ids = [
-    aws_route_table.public.id,
-    aws_route_table.private.id,
+    aws_route_table.public[0].id,
+    aws_route_table.private[0].id,
   ]
 
   tags = { Name = "${var.project_name}-s3-endpoint" }
 }
 
 resource "aws_vpc_endpoint" "secretsmanager" {
-  vpc_id              = aws_vpc.main.id
+  count = var.create_networking ? 1 : 0
+
+  vpc_id              = aws_vpc.main[0].id
   service_name        = "com.amazonaws.${var.region}.secretsmanager"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
 
   tags = { Name = "${var.project_name}-secretsmanager-endpoint" }
 }
 
 resource "aws_vpc_endpoint" "batch" {
-  vpc_id              = aws_vpc.main.id
+  count = var.create_networking ? 1 : 0
+
+  vpc_id              = aws_vpc.main[0].id
   service_name        = "com.amazonaws.${var.region}.batch"
   vpc_endpoint_type   = "Interface"
   private_dns_enabled = true
   subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
 
   tags = { Name = "${var.project_name}-batch-endpoint" }
 }
 
-# --- Security groups ---
-
-resource "aws_security_group" "ec2" {
-  name_prefix = "${var.project_name}-ec2-"
-  description = "EC2 orchestrator: SSH + Dagster UI from admin CIDRs, all egress"
-  vpc_id      = aws_vpc.main.id
-
-  tags = { Name = "${var.project_name}-ec2-sg" }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "ec2_ssh" {
-  count = length(var.allowed_admin_cidrs)
-
-  security_group_id = aws_security_group.ec2.id
-  cidr_ipv4         = var.allowed_admin_cidrs[count.index]
-  from_port         = 22
-  to_port           = 22
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "ec2_dagster_ui" {
-  count = length(var.allowed_admin_cidrs)
-
-  security_group_id = aws_security_group.ec2.id
-  cidr_ipv4         = var.allowed_admin_cidrs[count.index]
-  from_port         = 3000
-  to_port           = 3000
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_egress_rule" "ec2_all" {
-  security_group_id = aws_security_group.ec2.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-}
-
-resource "aws_security_group" "rds" {
-  name_prefix = "${var.project_name}-rds-"
-  description = "RDS Postgres: ingress from EC2 and Lambda SGs only"
-  vpc_id      = aws_vpc.main.id
-
-  tags = { Name = "${var.project_name}-rds-sg" }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "rds_from_ec2" {
-  security_group_id            = aws_security_group.rds.id
-  referenced_security_group_id = aws_security_group.ec2.id
-  from_port                    = 5432
-  to_port                      = 5432
-  ip_protocol                  = "tcp"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "rds_from_lambda" {
-  security_group_id            = aws_security_group.rds.id
-  referenced_security_group_id = aws_security_group.lambda.id
-  from_port                    = 5432
-  to_port                      = 5432
-  ip_protocol                  = "tcp"
-}
-
-resource "aws_security_group" "batch" {
-  name_prefix = "${var.project_name}-batch-"
-  description = "Batch compute instances: all egress for S3, ECR, CloudWatch"
-  vpc_id      = aws_vpc.main.id
-
-  tags = { Name = "${var.project_name}-batch-sg" }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_vpc_security_group_egress_rule" "batch_all" {
-  security_group_id = aws_security_group.batch.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-}
-
-resource "aws_security_group" "lambda" {
-  name_prefix = "${var.project_name}-lambda-"
-  description = "Lambda: all egress for RDS, S3, Secrets Manager, Batch API"
-  vpc_id      = aws_vpc.main.id
-
-  tags = { Name = "${var.project_name}-lambda-sg" }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_vpc_security_group_egress_rule" "lambda_all" {
-  security_group_id = aws_security_group.lambda.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-}
+# --- VPC endpoint security group ---
+# Co-located with the endpoints it protects. Ingress rules are NOT defined here -
+# the app stack owns the Lambda SG and adds the ingress rule from app/security_groups.tf.
 
 resource "aws_security_group" "vpc_endpoints" {
+  count = var.create_networking ? 1 : 0
+
   name_prefix = "${var.project_name}-vpce-"
-  description = "VPC interface endpoints: HTTPS from Lambda SG"
-  vpc_id      = aws_vpc.main.id
+  description = "VPC interface endpoints (ingress rules added by app stack)"
+  vpc_id      = aws_vpc.main[0].id
 
   tags = { Name = "${var.project_name}-vpce-sg" }
 
   lifecycle {
     create_before_destroy = true
   }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "vpce_from_lambda" {
-  security_group_id            = aws_security_group.vpc_endpoints.id
-  referenced_security_group_id = aws_security_group.lambda.id
-  from_port                    = 443
-  to_port                      = 443
-  ip_protocol                  = "tcp"
 }

@@ -1,13 +1,25 @@
 # --- Shared (same values across all stacks) ---
 
 variable "allowed_account_id" {
-  description = "AWS account ID — prevents accidental apply in wrong account"
+  description = "AWS account ID - prevents accidental apply in wrong account"
   type        = string
 
   validation {
     condition     = can(regex("^[0-9]{12}$", var.allowed_account_id))
     error_message = "allowed_account_id must be a 12-digit AWS account ID."
   }
+}
+
+variable "team" {
+  description = "Team name for cost-allocation and ownership tagging (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "poc" {
+  description = "Point of contact for these resources (omitted from tags if empty)"
+  type        = string
+  default     = ""
 }
 
 variable "project_name" {
@@ -29,113 +41,18 @@ variable "region" {
 
 # --- Foundation inputs (from `terraform output` on foundation stack) ---
 
-variable "batch_execution_role_arn" {
-  description = "Batch ECS execution role ARN (ECR pull + log shipping)"
-  type        = string
-}
-
-variable "batch_instance_profile_arn" {
-  description = "Batch ECS container instance profile ARN"
-  type        = string
-}
-
-variable "batch_job_role_arn" {
-  description = "Batch job IAM role ARN (S3 data access)"
-  type        = string
-}
-
-variable "batch_log_group_name" {
-  description = "CloudWatch log group name for Batch jobs"
-  type        = string
-}
-
-variable "batch_security_group_id" {
-  description = "Batch compute security group ID"
-  type        = string
-}
-
-variable "batch_service_role_arn" {
-  description = "Batch service-linked role ARN"
-  type        = string
-}
-
-variable "ec2_instance_profile_name" {
-  description = "EC2 orchestrator instance profile name"
-  type        = string
-}
-
-variable "ec2_log_group_name" {
-  description = "CloudWatch log group name for EC2"
-  type        = string
-}
-
-variable "ec2_security_group_id" {
-  description = "EC2 orchestrator security group ID"
-  type        = string
-}
-
-variable "ecr_repository_name_prefix" {
-  description = "ECR repo name prefix from foundation"
-  type        = string
-}
-
-variable "lambda_execution_role_arn" {
-  description = "Lambda execution role ARN"
-  type        = string
-}
-
-variable "lambda_function_name" {
-  description = "Lambda function name (from foundation naming contract)"
-  type        = string
-}
-
-variable "lambda_log_group_name" {
-  description = "CloudWatch log group name for Lambda"
-  type        = string
-}
-
-variable "lambda_security_group_id" {
-  description = "Lambda security group ID"
-  type        = string
-}
-
 variable "private_subnet_ids" {
-  description = "Private subnet IDs (for RDS, Lambda)"
+  description = "Private subnet IDs (for EC2, Batch, RDS, Lambda - foundation output: private_subnet_ids)"
   type        = list(string)
 
   validation {
     condition     = length(var.private_subnet_ids) >= 2
-    error_message = "At least 2 private subnet IDs required (RDS multi-AZ)."
+    error_message = "At least 2 private subnet IDs required (multi-AZ)."
   }
 }
 
 variable "prod_bucket_name" {
   description = "Prod artifact S3 bucket name"
-  type        = string
-}
-
-variable "public_subnet_ids" {
-  description = "Public subnet IDs (for EC2, Batch)"
-  type        = list(string)
-
-  validation {
-    condition     = length(var.public_subnet_ids) >= 2
-    error_message = "At least 2 public subnet IDs required (multi-AZ)."
-  }
-}
-
-variable "rds_secret_name" {
-  description = "Secrets Manager secret name for RDS credentials"
-  type        = string
-}
-
-variable "rds_security_group_id" {
-  description = "RDS security group ID"
-  type        = string
-}
-
-variable "spot_fleet_role_arn" {
-  description = "Spot Fleet IAM role ARN"
   type        = string
 }
 
@@ -145,7 +62,7 @@ variable "test_bucket_name" {
 }
 
 variable "vpc_id" {
-  description = "VPC ID (reserved for future use)"
+  description = "VPC ID (foundation output: vpc_id)"
   type        = string
 }
 
@@ -197,6 +114,16 @@ variable "batch_shared_memory_size" {
 
 # --- App-specific: EC2 ---
 
+variable "ec2_ami_id" {
+  description = "AMI ID for EC2 orchestrator and workers (Ubuntu Noble 24.04 or golden AMI build)"
+  type        = string
+
+  validation {
+    condition     = can(regex("^ami-", var.ec2_ami_id))
+    error_message = "ec2_ami_id must be a valid AMI ID starting with 'ami-'."
+  }
+}
+
 variable "ec2_instance_type" {
   description = "EC2 orchestrator instance type"
   type        = string
@@ -222,13 +149,13 @@ variable "ec2_ssh_public_key" {
 # --- App-specific: ECR ---
 
 variable "ecr_force_delete" {
-  description = "Allow ECR repos to be deleted with images (true for test)"
+  description = "Allow ECR repos to be deleted with images (false for production, true for sandbox/test)"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "ecr_image_tag_mutability" {
-  description = "ECR image tag mutability (IMMUTABLE prevents tag reuse — prod safe)"
+  description = "ECR image tag mutability (IMMUTABLE prevents tag reuse - prod safe)"
   type        = string
   default     = "IMMUTABLE"
 
@@ -379,6 +306,12 @@ variable "rds_backup_retention_days" {
   }
 }
 
+variable "rds_deletion_protection" {
+  description = "Enable deletion protection for RDS (true for production, false for sandbox)"
+  type        = bool
+  default     = true
+}
+
 variable "rds_engine_version" {
   description = "Postgres major version"
   type        = string
@@ -386,7 +319,7 @@ variable "rds_engine_version" {
 }
 
 variable "rds_final_snapshot_identifier" {
-  description = "RDS final snapshot identifier (required when rds_skip_final_snapshot is false — must be unique)"
+  description = "RDS final snapshot identifier (required when rds_skip_final_snapshot is false - must be unique)"
   type        = string
   default     = null
 }
@@ -401,6 +334,12 @@ variable "rds_master_username" {
   description = "RDS master username"
   type        = string
   default     = "dagster_admin"
+}
+
+variable "rds_multi_az" {
+  description = "Enable Multi-AZ for RDS (true for production, false for sandbox)"
+  type        = bool
+  default     = true
 }
 
 variable "rds_secret_recovery_window_days" {

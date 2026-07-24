@@ -1,5 +1,5 @@
 variable "allowed_account_id" {
-  description = "AWS account ID to restrict operations to — prevents accidental apply in wrong account"
+  description = "AWS account ID to restrict operations to - prevents accidental apply in wrong account"
   type        = string
 
   validation {
@@ -18,4 +18,16 @@ variable "region" {
   description = "AWS region for all resources"
   type        = string
   default     = "us-east-1"
+}
+
+variable "team" {
+  description = "Team name for cost-allocation and ownership tagging (omitted from tags if empty)"
+  type        = string
+  default     = ""
+}
+
+variable "poc" {
+  description = "Point of contact for these resources (omitted from tags if empty)"
+  type        = string
+  default     = ""
 }

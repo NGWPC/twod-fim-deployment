@@ -1,5 +1,5 @@
 output "bucket_name" {
-  description = "S3 bucket name for Terraform state — use in foundation/ and app/ backend config"
+  description = "S3 bucket name for Terraform state - use in foundation/ and app/ backend config"
   value       = aws_s3_bucket.state.id
 }
 
@@ -9,6 +9,6 @@ output "bucket_arn" {
 }
 
 output "region" {
-  description = "AWS region — use in foundation/ and app/ backend config"
+  description = "AWS region - use in foundation/ and app/ backend config"
   value       = var.region
 }

@@ -1,1 +1,9 @@
 allowed_account_id = "123456789012"
+
+# --- Ownership tags (set if required by your org) ---
+# team = "your-team"
+# poc  = "your-name"
+
+# --- Optional overrides (defaults shown) ---
+# project_name = "twod-fim"
+# region       = "us-east-1"

@@ -1,25 +1,29 @@
 resource "aws_batch_compute_environment" "gpu" {
-  compute_environment_name = "${var.project_name}-gpu-spot"
-  type                     = "MANAGED"
-  state                    = "ENABLED"
-  service_role             = var.batch_service_role_arn
+  name         = "${var.project_name}-gpu-spot"
+  type         = "MANAGED"
+  state        = "ENABLED"
+  service_role = local.batch_service_role_arn
 
   compute_resources {
     type                = "SPOT"
     allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
     min_vcpus           = 0
     max_vcpus           = var.batch_max_vcpus
-    desired_vcpus       = 0
     instance_type       = var.batch_instance_types
-    subnets             = var.public_subnet_ids
-    security_group_ids  = [var.batch_security_group_id]
-    instance_role       = var.batch_instance_profile_arn
-    spot_iam_fleet_role = var.spot_fleet_role_arn
+    subnets             = var.private_subnet_ids
+    security_group_ids  = [aws_security_group.batch.id]
+    instance_role       = local.batch_instance_profile_arn
+    spot_iam_fleet_role = local.spot_fleet_role_arn
   }
 
   lifecycle {
     create_before_destroy = true
   }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.batch_instance_ecs,
+    aws_iam_role_policy_attachment.spot_fleet,
+  ]
 
   tags = { Name = "${var.project_name}-gpu-spot" }
 }
@@ -62,8 +66,8 @@ resource "aws_batch_job_definition" "nd" {
 
   container_properties = jsonencode({
     image            = "${aws_ecr_repository.nd_scenario_worker.repository_url}:${var.nd_image_tag}"
-    jobRoleArn       = var.batch_job_role_arn
-    executionRoleArn = var.batch_execution_role_arn
+    jobRoleArn       = local.batch_job_role_arn
+    executionRoleArn = local.batch_execution_role_arn
 
     resourceRequirements = [
       { type = "VCPU", value = tostring(var.nd_job_vcpus) },
@@ -79,7 +83,7 @@ resource "aws_batch_job_definition" "nd" {
       logDriver = "awslogs"
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.batch.name
-        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-region"        = var.region
         "awslogs-stream-prefix" = "nd"
       }
     }
@@ -118,8 +122,8 @@ resource "aws_batch_job_definition" "kwse" {
 
   container_properties = jsonencode({
     image            = "${aws_ecr_repository.kwse_scenario_worker.repository_url}:${var.kwse_image_tag}"
-    jobRoleArn       = var.batch_job_role_arn
-    executionRoleArn = var.batch_execution_role_arn
+    jobRoleArn       = local.batch_job_role_arn
+    executionRoleArn = local.batch_execution_role_arn
 
     resourceRequirements = [
       { type = "VCPU", value = tostring(var.kwse_job_vcpus) },
@@ -135,7 +139,7 @@ resource "aws_batch_job_definition" "kwse" {
       logDriver = "awslogs"
       options = {
         "awslogs-group"         = aws_cloudwatch_log_group.batch.name
-        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-region"        = var.region
         "awslogs-stream-prefix" = "kwse"
       }
     }

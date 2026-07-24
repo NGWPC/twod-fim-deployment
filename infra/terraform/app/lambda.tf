@@ -14,8 +14,8 @@ data "archive_file" "lambda_placeholder" {
 }
 
 resource "aws_lambda_function" "batch_handler" {
-  function_name    = var.lambda_function_name
-  role             = var.lambda_execution_role_arn
+  function_name    = "${var.project_name}-batch-handler"
+  role             = local.lambda_execution_role_arn
   handler          = "handler.lambda_handler"
   runtime          = "python3.12"
   timeout          = var.lambda_timeout
@@ -25,10 +25,10 @@ resource "aws_lambda_function" "batch_handler" {
 
   vpc_config {
     subnet_ids         = var.private_subnet_ids
-    security_group_ids = [var.lambda_security_group_id]
+    security_group_ids = [aws_security_group.lambda.id]
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda]
+  depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy_attachment.lambda_vpc_access]
 
   tags = { Name = "${var.project_name}-batch-handler" }
 }
@@ -57,6 +57,8 @@ resource "aws_cloudwatch_event_target" "batch_to_lambda" {
   dead_letter_config {
     arn = aws_sqs_queue.eventbridge_dlq.arn
   }
+
+  depends_on = [aws_lambda_permission.eventbridge, aws_sqs_queue_policy.eventbridge_dlq]
 }
 
 resource "aws_lambda_permission" "eventbridge" {
@@ -70,7 +72,8 @@ resource "aws_lambda_permission" "eventbridge" {
 # --- SQS Dead-Letter Queue ---
 
 resource "aws_sqs_queue" "eventbridge_dlq" {
-  name = "${var.project_name}-eventbridge-dlq"
+  name                    = "${var.project_name}-eventbridge-dlq"
+  sqs_managed_sse_enabled = true
 
   tags = { Name = "${var.project_name}-eventbridge-dlq" }
 }
