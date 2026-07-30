@@ -3,8 +3,8 @@
 Deployment + orchestration for the 2D-FIM system. This repo is the **orchestrator**
 and the **platform** it runs on. It does *not* contain the modeling jobs
 (`build_model`, `run_nd_scenarios`, `run_kwse_scenarios` those live in
-[`twod-fim-jobs`](../twod-fim-jobs)) or the methodology
-([`twod-fim-knowledge-base`](../twod-fim-knowledge-base)).
+[`twod-fim-jobs`](https://github.com/NGWPC/twod-fim-jobs)) or the methodology
+([`twod-fim-knowledge-base`](https://github.com/NGWPC/twod-fim-knowledge-base)).
 
 Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orchestrator-design.md`, `triggers-and-propagation.md`)
 
