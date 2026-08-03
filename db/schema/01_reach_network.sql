@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS reach_network(
     -- TRUE if the modeling geometry was clipped at a lake boundary, i.e.
     -- geom differs from the source reach geometry.
     is_trimmed boolean NOT NULL DEFAULT FALSE,
+    total_da_sqkm double precision,
+    stream_order integer,
+    slope double precision,
     -- Modeling reach centerline, EPSG:5070
     geom geometry(LineString, 5070) NOT NULL,
     -- A terminal reach has no in-scope downstream link, and carries a reason.

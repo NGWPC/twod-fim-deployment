@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS current_state(
     model_id text GENERATED ALWAYS AS ( CASE WHEN identity_hash IS NULL OR domain_code IS NULL THEN
         NULL
     ELSE
-        identity_hash || '+' || domain_code
+        identity_hash || '_' || domain_code
     END) STORED,
     processing boolean NOT NULL DEFAULT FALSE,
     build_model_version text,
@@ -28,7 +28,7 @@ COMMENT ON COLUMN current_state.identity_hash IS 'Current model identity (8-hex)
 
 COMMENT ON COLUMN current_state.domain_code IS 'Realized domain as grid-snapped N/S/E/W offset code.';
 
-COMMENT ON COLUMN current_state.model_id IS 'Generated identity_hash+domain_code (also name of model folder).';
+COMMENT ON COLUMN current_state.model_id IS 'Generated identity_hash_domain_code (also name of model folder).';
 
 COMMENT ON COLUMN current_state.processing IS 'TRUE while the reconciliation loop has work in flight for this reach.';
 
