@@ -18,7 +18,10 @@ class StateStore:
     def insert_reach(self, reach_id: int, reach_to_id: int | None,
                      is_terminal: bool = False, is_headwater: bool = False,
                      terminal_reason: str | None = None,
-                     geom: str = "LINESTRING(0 0, 1 1)"):
+                     geom: str = "LINESTRING(0 0, 1 1)",
+                     total_da_sqkm: float | None = None,
+                     stream_order: int | None = None,
+                     slope: float | None = None):
         """Insert a reach into the network. Demo/seed helper — production loads use bulk ETL."""
         _VALID_TERMINAL_REASONS = ("outlet", "lake", "coast")
         if is_terminal:
@@ -34,10 +37,12 @@ class StateStore:
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO reach_network
-                       (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason, geom)
-                   VALUES (%s, %s, %s, %s, %s, ST_GeomFromText(%s, 5070))
+                       (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
+                        total_da_sqkm, stream_order, slope, geom)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, ST_GeomFromText(%s, 5070))
                    ON CONFLICT (reach_id) DO NOTHING""",
-                (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason, geom),
+                (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
+                 total_da_sqkm, stream_order, slope, geom),
             )
             conn.commit()
 
@@ -70,7 +75,8 @@ class StateStore:
     # -- current_state --
 
     def update_current(self, reach_id: int, identity_hash: str,
-                       domain_code: str, applied_revision: int):
+                       domain_code: str, applied_revision: int,
+                       build_model_version: str | None = None):
         """Upsert current_state after a successful build. Clears old runs if
         identity changes (FK constraint). model_id is DB-generated.
 
@@ -87,14 +93,15 @@ class StateStore:
             )
             conn.execute(
                 """INSERT INTO current_state
-                       (reach_id, identity_hash, domain_code, processing, applied_revision)
-                   VALUES (%s, %s, %s, FALSE, %s)
+                       (reach_id, identity_hash, domain_code, processing, applied_revision, build_model_version)
+                   VALUES (%s, %s, %s, FALSE, %s, %s)
                    ON CONFLICT (reach_id) DO UPDATE SET
                        identity_hash = EXCLUDED.identity_hash,
                        domain_code = EXCLUDED.domain_code,
                        processing = FALSE,
-                       applied_revision = EXCLUDED.applied_revision""",
-                (reach_id, identity_hash, domain_code, applied_revision),
+                       applied_revision = EXCLUDED.applied_revision,
+                       build_model_version = EXCLUDED.build_model_version""",
+                (reach_id, identity_hash, domain_code, applied_revision, build_model_version),
             )
             conn.commit()
 
@@ -145,7 +152,7 @@ class StateStore:
 
         A reach is reconciled when current_state matches the desired
         revision and is not mid-processing.
-        model_id is the DB-generated identity_hash+domain_code.
+        model_id is the DB-generated identity_hash_domain_code.
         """
         with self._connect() as conn:
             rows = conn.execute("""

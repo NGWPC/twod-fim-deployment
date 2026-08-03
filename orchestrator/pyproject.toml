@@ -17,6 +17,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "dagster-dg-cli",
+    "geopandas>=1.0",
 ]
 
 [build-system]

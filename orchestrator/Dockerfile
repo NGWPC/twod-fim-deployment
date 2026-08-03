@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=ghcr.io/astral-sh/uv:0.11.24 /uv /usr/local/bin/uv
 
 ENV UV_PROJECT_ENVIRONMENT=/usr/local \

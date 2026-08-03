@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     artifacts_s3_bucket: str = "twod-fim-artifacts"
     major_version: int = 1
     aws_endpoint_url: str | None = None
+    build_model_image: str = "twod-fim-jobs:build_model"
+    docker_network: str = "twodfim"
+    docker_platform: str | None = None
+    build_model_timeout: int = 3600
+    docker_data_dir: str | None = None
+    lulc_source: str | None = None
 
     @computed_field
     @property
