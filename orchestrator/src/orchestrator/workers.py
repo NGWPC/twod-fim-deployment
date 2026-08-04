@@ -117,6 +117,9 @@ class LocalDockerRunner:
                 f"stderr: {proc.stderr[-2000:]}"
             )
 
+        if proc.stderr:
+            logger.info(proc.stderr)
+
         stdout_lines = proc.stdout.strip().splitlines()
         if not stdout_lines:
             raise RuntimeError(
