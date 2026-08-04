@@ -8,8 +8,6 @@ Requirements:
   - docker compose services (db, minio) running
   - twod-fim-jobs:build_model container built
   - reconciliation_sensor ON (Dagster UI -> Automation)
-  - real AWS credentials in .env (LULC download needs requester-pays access)
-  - geopandas installed (dev dependency: uv sync)
 
 Usage:
   uv run python scripts/smoke_check.py
@@ -25,14 +23,8 @@ import sys
 import time
 from pathlib import Path
 
-try:
-    import geopandas as gpd
-    import pandas as pd
-except ImportError:
-    sys.exit(
-        "geopandas is required for the smoke check.\n"
-        "Install it with: uv sync (it is in the dev dependency group)"
-    )
+import geopandas as gpd
+import pandas as pd
 
 from orchestrator.state_store import StateStore
 from orchestrator.storage import model_artifact_path, object_exists
