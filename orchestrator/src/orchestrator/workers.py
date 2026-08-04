@@ -17,7 +17,7 @@ from pydantic import BaseModel, field_validator, model_validator
 logger = logging.getLogger(__name__)
 
 IDENTITY_HASH_RE = re.compile(r"^[0-9a-f]{8}$")
-DOMAIN_CODE_RE = re.compile(r"^N(0|[1-9][0-9]*)S(0|[1-9][0-9]*)E(0|[1-9][0-9]*)W(0|[1-9][0-9]*)$")
+DOMAIN_CODE_RE = re.compile(r"^N-?(0|[1-9][0-9]*)S-?(0|[1-9][0-9]*)E-?(0|[1-9][0-9]*)W-?(0|[1-9][0-9]*)$")
 
 
 class BuildResult(BaseModel):
