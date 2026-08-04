@@ -50,6 +50,12 @@ COMMENT ON COLUMN reach_network.lake_outlet IS 'Lake is upstream of this reach.'
 
 COMMENT ON COLUMN reach_network.is_trimmed IS 'Geometry was clipped at a lake boundary, so geom differs from the hydrofabric geometry.';
 
+COMMENT ON COLUMN reach_network.total_da_sqkm IS 'Total drainage area (km2); used by build_model for bankfull width estimation.';
+
+COMMENT ON COLUMN reach_network.stream_order IS 'Strahler stream order from the hydrofabric.';
+
+COMMENT ON COLUMN reach_network.slope IS 'Reach centerline slope from the hydrofabric.';
+
 COMMENT ON COLUMN reach_network.geom IS 'Reach centerline, EPSG:5070; basis of model identity reach_geom_hash.';
 
 -- CREATE TABLE IF NOT EXISTS merged_reaches (

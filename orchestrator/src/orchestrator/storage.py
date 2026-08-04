@@ -38,18 +38,6 @@ def object_exists(path: str) -> bool:
         raise
 
 
-def put_json(path: str, data: str) -> None:
-    """Write a JSON string to the given full s3:// path."""
-    bucket, key = parse_s3_path(path)
-    s3 = get_s3_client()
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=data,
-        ContentType="application/json",
-    )
-
-
 def model_base_path(reach_id: int) -> str:
     """Base S3 location for a reach's model artifacts."""
     return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/models/reach={reach_id}"

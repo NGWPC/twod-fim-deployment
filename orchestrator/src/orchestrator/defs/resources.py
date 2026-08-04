@@ -1,3 +1,5 @@
+import os
+
 import dagster as dg
 from orchestrator.config import settings
 from orchestrator.state_store import StateStore
@@ -16,7 +18,6 @@ class RunnerResource(dg.ConfigurableResource):
     network: str = settings.docker_network
 
     def get_runner(self) -> ContainerRunner:
-        import os
         env_vars: dict[str, str] = {}
         for key in ("AWS_ENDPOINT_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REQUEST_PAYER"):
             val = os.environ.get(key)
