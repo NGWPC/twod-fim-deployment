@@ -44,7 +44,7 @@ infra/terraform/
     ├── batch.tf                   Batch compute environment (GPU SPOT), job queue, nd + kwse job definitions
     ├── cloudwatch.tf              log groups: batch, ec2, lambda
     ├── data.tf                    aws_partition, aws_caller_identity data sources
-    ├── ec2.tf                     SSH key pair, orchestrator instance, optional worker instances
+    ├── ec2.tf                     orchestrator instance, optional worker instances, optional SSH key pair
     ├── ecr.tf                     4 ECR repos + scan-on-push + lifecycle policies
     ├── iam.tf                     create_iam toggle, IAM roles + instance profiles + Batch service-linked role, existing_* fallbacks
     ├── lambda.tf                  Batch completion handler Lambda (placeholder logic), EventBridge rule/target, SQS dead-letter queue
@@ -77,7 +77,7 @@ Creates:
 - VPC with public subnets (NAT gateway placement only, no workloads) and private subnets (all workloads)
 - NAT gateway for private subnet internet access
 - VPC endpoints for S3, Secrets Manager, and Batch
-- VPC endpoint security group (ingress rules added by app stack)
+- VPC endpoint security group (app stack adds ingress rules when `vpce_security_group_id` is provided)
 - Prod and test S3 artifact buckets
 
 Networking and storage are each independently toggleable via `create_networking` and `create_storage`.
@@ -87,14 +87,14 @@ Networking and storage are each independently toggleable via `create_networking`
 Application infrastructure, safe to destroy and recreate.
 
 Creates:
-- EC2 orchestrator and optional worker instances (Ubuntu Noble, private subnet, IMDSv2)
+- EC2 orchestrator and optional worker instances (Ubuntu Noble, private subnet, IMDSv2, SSM-ready)
 - RDS Postgres with AWS-managed master password
 - AWS Batch GPU SPOT compute environment, job queue, nd + kwse job definitions
 - 4 ECR repos with scan-on-push and lifecycle policies
 - Lambda batch-completion handler wired to EventBridge with SQS dead-letter queue
 - CloudWatch log groups
-- 6 IAM roles + 2 instance profiles (scoped to actual resource ARNs)
-- 4 security groups (EC2, RDS, Batch, Lambda) + VPC endpoint ingress rules
+- 6 IAM roles + 2 instance profiles (scoped to actual resource ARNs), optional SSM policy attachment
+- 4 security groups (EC2, RDS, Batch, Lambda) + conditional VPC endpoint ingress rules
 
 IAM is toggleable via `create_iam`.
 Security groups are always created by this stack.
@@ -117,7 +117,7 @@ Set `team` and `poc` in `terraform.tfvars` if required by your organization.
 
 | Toggle | Stack | Default | Controls | `existing_*` fallback variables required when false |
 |---|---|---|---|---|
-| `create_networking` | foundation | `true` | VPC, subnets, IGW, NAT gateway, VPC endpoints, VPC endpoints security group | `existing_vpc_id`, `existing_private_subnet_ids`, `existing_vpce_security_group_id` |
+| `create_networking` | foundation | `true` | VPC, subnets, IGW, NAT gateway, VPC endpoints, VPC endpoints security group | `existing_vpc_id`, `existing_private_subnet_ids` (+ optionally `existing_vpce_security_group_id`) |
 | `create_storage` | foundation | `true` | Prod and test S3 artifact buckets | `existing_prod_bucket_name`, `existing_test_bucket_name` |
 | `create_iam` | app | `true` | 6 IAM roles + 2 instance profiles (EC2 orchestrator, Batch job/execution/instance, Spot Fleet, Lambda execution) | `existing_ec2_instance_profile_name`, `existing_batch_job_role_arn`, `existing_batch_execution_role_arn`, `existing_batch_instance_profile_arn`, `existing_spot_fleet_role_arn`, `existing_lambda_execution_role_arn`, `existing_batch_service_role_arn` |
 | `create_batch_service_linked_role` | app | `true` | The account-global `AWSServiceRoleForBatch` service-linked role | none directly - see note below |
@@ -178,11 +178,13 @@ cd ../app
 cp terraform.tfvars.example terraform.tfvars
 cp backend.hcl.example backend.hcl
 
-# pull foundation outputs (vpc_id, private_subnet_ids, vpce_security_group_id,
-# prod_bucket_name, test_bucket_name) into terraform.tfvars
+# pull foundation outputs (vpc_id, private_subnet_ids, prod_bucket_name,
+# test_bucket_name) into terraform.tfvars
+# vpce_security_group_id is optional - only needed if the VPC has interface endpoints
 terraform -chdir=../foundation output
 
-# also set: ec2_ami_id, ec2_ssh_public_key, allowed_admin_cidrs, nd_image_tag, kwse_image_tag
+# also set: ec2_ami_id, nd_image_tag, kwse_image_tag
+# optional: ssm_logging_policy_arn, ec2_ssh_public_key, allowed_admin_cidrs
 terraform init -backend-config=backend.hcl
 terraform plan
 terraform apply
@@ -232,12 +234,10 @@ Only IAM and the resources gated by foundation's toggles can be skipped.
 
 - Batch compute nodes boot the AWS-managed ECS-optimized AMI, not the Ubuntu Noble golden AMI used for the EC2 orchestrator and workers.
 If Batch hosts also need Noble, a custom AMI with ECS agent, Docker, NVIDIA drivers, and GPU runtime is required.
-- No SSM wiring for private EC2 access yet.
-SSH and the Dagster UI are reachable only from `allowed_admin_cidrs` via AWS Workspace (not tested).
-Instances have no public IP.
-- Dagster UI (port 3000) has no formal access path beyond the security group rule.
-Currently that should be accessible from AWS Workspace (not tested).
-SSM port forwarding would provide access from outside the VPC.
+- EC2 instances have no public IP.
+SSM Session Manager is supported via `ssm_logging_policy_arn` (attaches the required policy to the EC2 role).
+SSH access is optional via `ec2_ssh_public_key` and `allowed_admin_cidrs`.
+- Dagster UI (port 3000) is accessible via SSM port forwarding or directly from a network with a route to private subnets (e.g. AWS Workspace) when `allowed_admin_cidrs` includes the source CIDR.
 - Additional VPC endpoints (ECR, ECS, CloudWatch Logs) would be needed if `enable_nat_gateway` is disabled.
 - Worker EC2 instances reuse the orchestrator's IAM role; there is no separate, scoped-down worker role yet.
 - Single-AZ NAT gateway is a sandbox cost optimization.
