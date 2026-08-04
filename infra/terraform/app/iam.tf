@@ -96,6 +96,17 @@ variable "existing_batch_service_role_arn" {
   }
 }
 
+variable "ssm_logging_policy_arn" {
+  description = "Required SSM/logging policy ARN to attach to EC2 instance profiles (from account infra guide)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.ssm_logging_policy_arn == "" || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:policy/", var.ssm_logging_policy_arn))
+    error_message = "ssm_logging_policy_arn must be empty or a valid IAM policy ARN."
+  }
+}
+
 # --- Derived naming and partition-safe ARNs (GovCloud-safe) ---
 
 locals {
@@ -256,6 +267,12 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
       },
     ]
   })
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_orchestrator_ssm" {
+  count      = var.create_iam && var.ssm_logging_policy_arn != "" ? 1 : 0
+  role       = aws_iam_role.ec2_orchestrator[0].name
+  policy_arn = var.ssm_logging_policy_arn
 }
 
 # --- Batch job role (application permissions for containers, jobRoleArn) ---

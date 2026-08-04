@@ -16,6 +16,8 @@ locals {
 }
 
 resource "aws_key_pair" "deployer" {
+  count = var.ec2_ssh_public_key != "" ? 1 : 0
+
   key_name   = "${var.project_name}-deployer"
   public_key = var.ec2_ssh_public_key
 
@@ -28,7 +30,7 @@ resource "aws_instance" "orchestrator" {
   subnet_id                   = var.private_subnet_ids[0]
   vpc_security_group_ids      = [aws_security_group.ec2.id]
   iam_instance_profile        = local.ec2_instance_profile_name
-  key_name                    = aws_key_pair.deployer.key_name
+  key_name                    = var.ec2_ssh_public_key != "" ? aws_key_pair.deployer[0].key_name : null
   associate_public_ip_address = false
 
   root_block_device {
@@ -56,7 +58,7 @@ resource "aws_instance" "worker" {
   subnet_id                   = var.private_subnet_ids[count.index % length(var.private_subnet_ids)]
   vpc_security_group_ids      = [aws_security_group.ec2.id]
   iam_instance_profile        = local.ec2_instance_profile_name
-  key_name                    = aws_key_pair.deployer.key_name
+  key_name                    = var.ec2_ssh_public_key != "" ? aws_key_pair.deployer[0].key_name : null
   associate_public_ip_address = false
 
   root_block_device {

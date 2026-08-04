@@ -148,8 +148,9 @@ variable "ec2_root_volume_size" {
 }
 
 variable "ec2_ssh_public_key" {
-  description = "SSH public key for EC2 access"
+  description = "SSH public key for EC2 access. Optional - leave empty for SSM-only access."
   type        = string
+  default     = ""
 }
 
 # --- App-specific: ECR ---

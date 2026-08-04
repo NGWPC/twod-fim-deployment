@@ -7,13 +7,9 @@
 # "ingress rules added by app stack" contract (see var.vpce_security_group_id).
 
 variable "allowed_admin_cidrs" {
-  description = "CIDR blocks allowed for SSH (:22) and Dagster UI (:3000) ingress"
+  description = "CIDR blocks allowed for SSH (:22) and Dagster UI (:3000) ingress. Empty for SSM-only access."
   type        = list(string)
-
-  validation {
-    condition     = length(var.allowed_admin_cidrs) > 0
-    error_message = "At least one admin CIDR is required."
-  }
+  default     = []
 
   validation {
     condition     = alltrue([for c in var.allowed_admin_cidrs : can(cidrhost(c, 0))])
@@ -22,12 +18,13 @@ variable "allowed_admin_cidrs" {
 }
 
 variable "vpce_security_group_id" {
-  description = "VPC interface endpoints security group ID (foundation output: vpce_security_group_id)"
+  description = "VPC interface endpoints security group ID. Optional - leave empty if no interface endpoints exist (e.g. TGW-based egress)."
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^sg-", var.vpce_security_group_id))
-    error_message = "vpce_security_group_id must be a security group ID starting with 'sg-'."
+    condition     = var.vpce_security_group_id == "" || can(regex("^sg-", var.vpce_security_group_id))
+    error_message = "vpce_security_group_id must be empty or a security group ID starting with 'sg-'."
   }
 }
 
@@ -148,6 +145,8 @@ resource "aws_vpc_security_group_egress_rule" "lambda_all" {
 # instances do too once they move off public subnets.
 
 resource "aws_vpc_security_group_ingress_rule" "vpce_from_ec2" {
+  count = var.vpce_security_group_id != "" ? 1 : 0
+
   security_group_id            = var.vpce_security_group_id
   referenced_security_group_id = aws_security_group.ec2.id
   from_port                    = 443
@@ -156,6 +155,8 @@ resource "aws_vpc_security_group_ingress_rule" "vpce_from_ec2" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "vpce_from_batch" {
+  count = var.vpce_security_group_id != "" ? 1 : 0
+
   security_group_id            = var.vpce_security_group_id
   referenced_security_group_id = aws_security_group.batch.id
   from_port                    = 443
@@ -164,6 +165,8 @@ resource "aws_vpc_security_group_ingress_rule" "vpce_from_batch" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "vpce_from_lambda" {
+  count = var.vpce_security_group_id != "" ? 1 : 0
+
   security_group_id            = var.vpce_security_group_id
   referenced_security_group_id = aws_security_group.lambda.id
   from_port                    = 443
