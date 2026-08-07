@@ -12,6 +12,9 @@ dist/
 .logs_queue/
 .nux/
 
+# OS
+.DS_Store
+
 # Terraform
 *.tfstate
 *.tfstate.backup
@@ -28,11 +31,8 @@ override.tf.json
 *_override.tf.json
 lambda_placeholder.zip
 
-# OS
-.DS_Store
-
 # Local deployment data
 /.data/
 
-# Env
+# Local env overrides
 .env

@@ -15,13 +15,14 @@ SELECT
     array_agg(DISTINCT r.q_cms ORDER BY r.q_cms) AS q_set,
     count(DISTINCT r.q_cms) AS n_discharges,
     max(r.kwse) AS max_kwse,
-(
+    (
         SELECT
             max(d.us_wse)
         FROM
             runs d
         WHERE
-            d.reach_id = rn.reach_to_id) AS ds_r_max_us_wse
+            d.reach_id = rn.reach_to_id
+    ) AS ds_r_max_us_wse
 FROM
     runs r
     JOIN reach_network rn ON rn.reach_id = r.reach_id
