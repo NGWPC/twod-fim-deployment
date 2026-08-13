@@ -17,7 +17,7 @@ from pydantic import BaseModel, field_validator, model_validator
 logger = logging.getLogger(__name__)
 
 IDENTITY_HASH_RE = re.compile(r"^[0-9a-f]{8}$")
-DOMAIN_CODE_RE = re.compile(r"^N-?(0|[1-9][0-9]*)S-?(0|[1-9][0-9]*)E-?(0|[1-9][0-9]*)W-?(0|[1-9][0-9]*)$")
+DOMAIN_CODE_RE = re.compile(r"^N(0|[1-9][0-9]*)S(0|[1-9][0-9]*)E(0|[1-9][0-9]*)W(0|[1-9][0-9]*)$")
 
 
 class BuildResult(BaseModel):
@@ -135,8 +135,9 @@ class LocalDockerRunner:
                 f"Last line: {result_line[:500]}"
             ) from exc
 
+        result_data = raw.get("plugin_results", raw)
         return BuildResult(
-            identity_hash=raw["identity_hash"],
-            model_id=raw["model_id"],
+            identity_hash=result_data["identity_hash"],
+            model_id=result_data["model_id"],
             build_model_version=self.image_tag,
         )
