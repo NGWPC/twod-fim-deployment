@@ -11,7 +11,7 @@ Design references: [`twod-fim-knowledge-base/system-design/`](https://github.com
 
 See [`db/schema/`](../db/schema/) for full definitions.
 
-- `current_state.model_id` is `GENERATED ALWAYS` from `identity_hash + domain_code` — never written directly ([`04_current_state.sql`](../db/schema/04_current_state.sql))
+- `current_state.model_id` is `GENERATED ALWAYS` from `identity_hash _ domain_code` — never written directly ([`04_current_state.sql`](../db/schema/04_current_state.sql))
 - `desired_state.revision` is auto-incremented by a `BEFORE UPDATE` trigger — the app never writes it ([`09_triggers.sql`](../db/schema/09_triggers.sql))
 - `runs` table has a composite FK to `current_state(reach_id, identity_hash)` — old runs are cleared before identity changes ([`05_runs.sql`](../db/schema/05_runs.sql))
 - `processing` flag is reserved for the future cascade coordinator (build -> nd -> kwse); individual workers do not manage it ([`04_current_state.sql`](../db/schema/04_current_state.sql))
@@ -21,6 +21,11 @@ See [`db/schema/`](../db/schema/) for full definitions.
 
 - Docker
 - [uv](https://docs.astral.sh/uv/) for maintenance commands (e.g. regenerating `uv.lock`)
+- `twod-fim-jobs:build_model` Docker image built locally (the orchestrator launches it via `docker run`):
+  ```bash
+  cd ../twod-fim-jobs
+  docker build --platform linux/amd64 --target build_model -t twod-fim-jobs:build_model .
+  ```
 
 ## Local dev setup
 
@@ -44,11 +49,14 @@ docker compose up -d --build
 ```
 
 This brings up:
-- **PostGIS** (`localhost:5432`) - applies `db schema/*.sql` on first boot, creates the `dagster` database via `00_create_dagster_db.sh`
+- **PostGIS** (`localhost:5432`) - applies `db/schema/*.sql` on first boot, creates the `dagster` database via `00_create_dagster_db.sh`
 - **MinIO** (`localhost:9000`, console at `localhost:9001`) - creates `dagster-logs` and artifact buckets on first boot
 - **Dagster UI** (`localhost:3000`) - runs the orchestrator in Docker
 
-To reset from scratch: `docker compose down -v && rm -rf .data/ && docker compose up -d --build`
+The orchestrator container has the Docker CLI and the host Docker socket mounted.
+It spawns `twod-fim-jobs` worker containers as siblings on the `twodfim` compose network, so they can reach `db` and `minio` by service name.
+
+To reset from scratch: `docker compose down && rm -rf .data/ && docker compose up -d --build`
 
 ### 3. Endpoints
 
@@ -63,14 +71,20 @@ Credentials are in `.env` / `example.env`.
 
 ### 4. Verify the stack (smoke check)
 
-End-to-end check: seeds the 20-reach demo network, polls until every reach
-reconciles, then verifies final DB and storage state. Best run on a fresh stack.
+End-to-end check: loads a reach network from a GeoPackage, seeds the DB, polls
+until eligible reaches reconcile, then verifies DB and storage state.
+Best run on a fresh stack.
 
 In the Dagster UI: **Automation** -> toggle `reconciliation_sensor` ON, then:
 
 ```bash
-docker compose exec orchestrator python scripts/smoke_check.py
+cd orchestrator
+uv run python scripts/smoke_check.py
 ```
+
+Options:
+- `--gpkg /path/to/network.gpkg` - use a custom GeoPackage (default: `scripts/data/reach_network.gpkg`)
+- `--seed-only` - seed the DB and exit without waiting for reconciliation
 
 ## Env vars
 
@@ -89,6 +103,8 @@ docker compose exec orchestrator python scripts/smoke_check.py
 | `DAGSTER_S3_BUCKET` | dagster.yaml, docker-compose | Dagster compute logs bucket |
 | `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
 | `MAJOR_VERSION` | config.py | Artifact path versioning |
+
+See `example.env` for additional optional variables (Docker platform, local raster overrides, AWS session tokens).
 
 ## Dagster infrastructure
 

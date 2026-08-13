@@ -25,25 +25,17 @@ def parse_s3_path(path: str) -> tuple[str, str]:
 
 def object_exists(path: str) -> bool:
     """Check if an S3 object exists at the given full s3:// path."""
+    from botocore.exceptions import ClientError
+
     bucket, key = parse_s3_path(path)
     s3 = get_s3_client()
     try:
         s3.head_object(Bucket=bucket, Key=key)
         return True
-    except Exception:
-        return False
-
-
-def put_json(path: str, data: str) -> None:
-    """Write a JSON string to the given full s3:// path."""
-    bucket, key = parse_s3_path(path)
-    s3 = get_s3_client()
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=data,
-        ContentType="application/json",
-    )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            return False
+        raise
 
 
 def model_base_path(reach_id: int) -> str:
@@ -52,5 +44,5 @@ def model_base_path(reach_id: int) -> str:
 
 
 def model_artifact_path(reach_id: int, model_id: str) -> str:
-    """Full s3:// path to a reach's model.json."""
-    return f"{model_base_path(reach_id)}/{model_id}/model.json"
+    """Full s3:// path to a reach's model_manifest.json."""
+    return f"{model_base_path(reach_id)}/{model_id}/model_manifest.json"

@@ -65,8 +65,14 @@ services:
       POSTGRES_HOST: db
       AWS_ENDPOINT_URL: http://minio:9000
       DAGSTER_HOME: /opt/dagster
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     command: [ "dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-m", "orchestrator.definitions" ]
     ports:
       - "3000:3000"
     healthcheck:
       disable: true
+
+networks:
+  default:
+    name: twodfim

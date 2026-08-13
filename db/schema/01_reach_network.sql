@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS reach_network(
     -- TRUE if the modeling geometry was clipped at a lake boundary, i.e.
     -- geom differs from the source reach geometry.
     is_trimmed boolean NOT NULL DEFAULT FALSE,
+    total_da_sqkm double precision,
+    stream_order integer,
+    slope double precision,
     -- Modeling reach centerline, EPSG:5070
     geom geometry(LineString, 5070) NOT NULL,
     -- A terminal reach has no in-scope downstream link, and carries a reason.
@@ -46,6 +49,12 @@ COMMENT ON COLUMN reach_network.lake_inlet IS 'Outlet of this reach is lake.';
 COMMENT ON COLUMN reach_network.lake_outlet IS 'Lake is upstream of this reach.';
 
 COMMENT ON COLUMN reach_network.is_trimmed IS 'Geometry was clipped at a lake boundary, so geom differs from the hydrofabric geometry.';
+
+COMMENT ON COLUMN reach_network.total_da_sqkm IS 'Total drainage area (km2); used by build_model for bankfull width estimation.';
+
+COMMENT ON COLUMN reach_network.stream_order IS 'Strahler stream order from the hydrofabric.';
+
+COMMENT ON COLUMN reach_network.slope IS 'Reach centerline slope from the hydrofabric.';
 
 COMMENT ON COLUMN reach_network.geom IS 'Reach centerline, EPSG:5070; basis of model identity reach_geom_hash.';
 
