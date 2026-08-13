@@ -135,8 +135,9 @@ class LocalDockerRunner:
                 f"Last line: {result_line[:500]}"
             ) from exc
 
+        result_data = raw.get("plugin_results", raw)
         return BuildResult(
-            identity_hash=raw["identity_hash"],
-            model_id=raw["model_id"],
+            identity_hash=result_data["identity_hash"],
+            model_id=result_data["model_id"],
             build_model_version=self.image_tag,
         )

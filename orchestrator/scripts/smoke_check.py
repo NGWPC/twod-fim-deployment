@@ -47,19 +47,12 @@ def wait_for_reconcile(store: StateStore, expected: int) -> list[dict]:
         time.sleep(POLL_INTERVAL_S)
 
 
-def verify(states: list[dict], headwater_ids: set[int]) -> list[str]:
+def verify(states: list[dict]) -> list[str]:
     """Final DB + storage assertions. Returns failure messages (empty = pass)."""
     failures = []
 
     for s in states:
         reach_id = s["reach_id"]
-
-        if reach_id in headwater_ids:
-            if s["reconciled"]:
-                print(f"  reach {reach_id}: headwater reconciled (upstream bug is fixed!)")
-            else:
-                print(f"  reach {reach_id}: headwater not reconciled (expected, twod-fim-jobs upstream query)")
-            continue
 
         if not s["reconciled"]:
             failures.append(f"reach {reach_id}: not reconciled")
@@ -87,9 +80,8 @@ def main() -> None:
     network = load_network(args.gpkg)
     total = len(network)
     headwater_ids = {r["reach_id"] for r in network if r["is_headwater"]}
-    non_headwater = total - len(headwater_ids)
 
-    print(f"  {total} reaches ({non_headwater} processable, {len(headwater_ids)} headwater)")
+    print(f"  {total} reaches ({len(headwater_ids)} headwater)")
     for r in network:
         flags = []
         if r["is_terminal"]:
@@ -109,12 +101,12 @@ def main() -> None:
         print("\n--seed-only: exiting without waiting for reconciliation.")
         return
 
-    print(f"\nWaiting for reconciliation ({non_headwater}/{total} expected)...")
+    print(f"\nWaiting for reconciliation ({total}/{total} expected)...")
     print("  reconciliation_sensor must be ON in Dagster UI")
-    states = wait_for_reconcile(store, non_headwater)
+    states = wait_for_reconcile(store, total)
 
     print("\nVerifying DB + storage...")
-    failures = verify(states, headwater_ids)
+    failures = verify(states)
 
     if failures:
         print(f"\nFAILED - {len(failures)} issue(s):")
@@ -122,10 +114,7 @@ def main() -> None:
             print(f"  - {f}")
         sys.exit(1)
 
-    reconciled = sum(1 for s in states if s["reconciled"])
-    print(f"\nOK - {reconciled}/{total} reaches reconciled, all artifacts present.")
-    if reconciled < total:
-        print(f"  ({total - reconciled} headwater reaches pending twod-fim-jobs upstream query fix)")
+    print(f"\nOK - {total}/{total} reaches reconciled, all artifacts present.")
 
 
 if __name__ == "__main__":
