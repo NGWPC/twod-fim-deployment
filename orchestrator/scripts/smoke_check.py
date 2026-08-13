@@ -27,7 +27,7 @@ from orchestrator.state_store import StateStore
 from orchestrator.storage import model_artifact_path, object_exists
 from seed import load_network, seed
 
-DEFAULT_GPKG = Path(__file__).parent / "data" / "reach_network.gpkg"
+DEFAULT_GPKG = Path(__file__).parent / "data" / "network.gpkg"
 POLL_INTERVAL_S = 30
 TIMEOUT_S = 1800
 

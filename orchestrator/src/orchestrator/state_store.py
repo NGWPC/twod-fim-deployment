@@ -18,6 +18,8 @@ class StateStore:
     def insert_reach(self, reach_id: int, reach_to_id: int | None,
                      is_terminal: bool = False, is_headwater: bool = False,
                      terminal_reason: str | None = None,
+                     lake_inlet: bool = False, lake_outlet: bool = False,
+                     is_trimmed: bool = False,
                      geom: str = "LINESTRING(0 0, 1 1)",
                      total_da_sqkm: float | None = None,
                      stream_order: int | None = None,
@@ -38,10 +40,12 @@ class StateStore:
             conn.execute(
                 """INSERT INTO reach_network
                        (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
+                        lake_inlet, lake_outlet, is_trimmed,
                         total_da_sqkm, stream_order, slope, geom)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, ST_GeomFromText(%s, 5070))
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, ST_GeomFromText(%s, 5070))
                    ON CONFLICT (reach_id) DO NOTHING""",
                 (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
+                 lake_inlet, lake_outlet, is_trimmed,
                  total_da_sqkm, stream_order, slope, geom),
             )
             conn.commit()
