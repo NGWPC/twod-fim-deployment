@@ -200,6 +200,15 @@ terraform apply
 
 If the account already has the Batch service-linked role from prior use, set `create_batch_service_linked_role = false` instead of importing it.
 
+After `terraform apply`, set up databases and deploy services using the scripts in `deploy/`:
+
+```bash
+# On EC2 (via SSM), from the cloned repo with .env created from example.cloud.env:
+python deploy/init_db.py          # create databases, users, schema
+python deploy/deploy.py           # pull images, start Dagster services
+python deploy/init_db.py --reset  # clean slate (drop + recreate)
+```
+
 ## Enterprise mode
 
 Set every toggle to false: `create_networking`, `create_storage`, `create_iam`, `create_batch_service_linked_role`, `create_ecr`.

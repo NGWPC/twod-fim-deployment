@@ -385,7 +385,7 @@ variable "rds_instance_class" {
 variable "rds_master_username" {
   description = "RDS master username"
   type        = string
-  default     = "dagster_admin"
+  default     = "twodfim_admin"
 }
 
 variable "rds_multi_az" {
