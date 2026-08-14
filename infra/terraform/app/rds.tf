@@ -15,7 +15,6 @@ resource "aws_db_instance" "main" {
   allocated_storage = var.rds_allocated_storage
   storage_encrypted = true
 
-  db_name                     = "dagster"
   username                    = var.rds_master_username
   manage_master_user_password = true
 
@@ -54,9 +53,8 @@ resource "aws_secretsmanager_secret_version" "rds_credentials" {
   # by manage_master_user_password above (aws_db_instance.main.master_user_secret[0].secret_arn),
   # so no plaintext credential ever lands here or in Terraform state.
   secret_string = jsonencode({
-    host       = aws_db_instance.main.address
-    port       = aws_db_instance.main.port
-    username   = aws_db_instance.main.username
-    dagster_db = "dagster"
+    host     = aws_db_instance.main.address
+    port     = aws_db_instance.main.port
+    username = aws_db_instance.main.username
   })
 }
