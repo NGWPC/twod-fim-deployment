@@ -1,0 +1,43 @@
+services:
+  code-server:
+    image: ${ORCHESTRATOR_IMAGE}
+    container_name: twodfim-code-server
+    env_file:
+      - .env
+    environment:
+      DAGSTER_HOME: /opt/dagster
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "dagster", "api", "grpc-health-check", "-p", "4000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  webserver:
+    image: ${ORCHESTRATOR_IMAGE}
+    container_name: twodfim-webserver
+    depends_on:
+      code-server:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DAGSTER_HOME: /opt/dagster
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/app/workspace.yaml"]
+    network_mode: host
+
+  daemon:
+    image: ${ORCHESTRATOR_IMAGE}
+    container_name: twodfim-daemon
+    depends_on:
+      code-server:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DAGSTER_HOME: /opt/dagster
+    command: ["dagster-daemon", "run", "-w", "/app/workspace.yaml"]
+    network_mode: host
