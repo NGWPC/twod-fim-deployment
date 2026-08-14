@@ -21,15 +21,17 @@ allowed_account_id = "123456789012"
 # --- Storage (create_storage = true) ---
 # Uncomment to customize; defaults shown.
 
-# prod_bucket_name = ""   # default: {project_name}-prod-{account_id}
-# test_bucket_name = ""   # default: {project_name}-test-{account_id}
+# prod_bucket_name    = ""   # default: {project_name}-prod-{account_id}
+# test_bucket_name    = ""   # default: {project_name}-test-{account_id}
+# dagster_bucket_name = ""   # default: {project_name}-dagster-{account_id}
 
 # --- Storage (create_storage = false) ---
 # Required when create_storage = false; provide existing S3 bucket names.
 
 # create_storage            = false
-# existing_prod_bucket_name = "bucket-name-prod"
-# existing_test_bucket_name = "bucket-name-test"
+# existing_prod_bucket_name    = "bucket-name-prod"
+# existing_test_bucket_name    = "bucket-name-test"
+# existing_dagster_bucket_name = "bucket-name-dagster"
 
 # --- Ownership tags (set if required by your org) ---
 # team = "your-team"

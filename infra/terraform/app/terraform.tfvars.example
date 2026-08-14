@@ -8,6 +8,7 @@ vpc_id             = "vpc-xxxxxxxxx"
 private_subnet_ids = ["subnet-aaa", "subnet-bbb"]
 prod_bucket_name   = "twod-fim-prod-123456789012"
 test_bucket_name   = "twod-fim-test-123456789012"
+dagster_s3_bucket  = "twod-fim-dagster-123456789012"
 
 # Required only if the VPC has interface endpoints with a shared security group.
 # Leave commented out if egress to AWS services routes through TGW or NAT.
@@ -15,8 +16,20 @@ test_bucket_name   = "twod-fim-test-123456789012"
 
 # --- App-specific (required) ---
 ec2_ami_id     = "ami-xxxxxxxxx"     # Ubuntu Noble 24.04 or golden AMI
-nd_image_tag   = "sha-abc1234"       # git SHA or release tag - no "latest" in prod
-kwse_image_tag = "sha-abc1234"       # git SHA or release tag - no "latest" in prod
+nd_image_tag   = "sha-abc1234"       # git SHA or release tag
+kwse_image_tag = "sha-abc1234"       # git SHA or release tag
+
+# --- Container registry (ECR by default, GHCR alternative) ---
+# create_ecr = true                  # false to skip ECR repos (use GHCR or other registry)
+# Required when create_ecr = false (used by Batch job definitions):
+# nd_image_repo           = "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu"
+# kwse_image_repo         = "ghcr.io/ngwpc/twod-fim-jobs/run_kwse_scenarios"
+# Optional (populates terraform output image_repos for the deployment layer):
+# orchestrator_image_repo = "ghcr.io/ngwpc/twod-fim-deployment/orchestrator"
+# build_model_image_repo  = "ghcr.io/ngwpc/twod-fim-jobs/build_model"
+# ECR-only settings (ignored when create_ecr = false):
+# ecr_force_delete        = false    # true for sandbox/test
+# ecr_image_tag_mutability = "IMMUTABLE"  # MUTABLE allows tag reuse (less safe)
 
 # --- SSH access (optional, SSM-only by default) ---
 # ec2_ssh_public_key  = "ssh-ed25519 AAAA..."
@@ -73,5 +86,3 @@ kwse_image_tag = "sha-abc1234"       # git SHA or release tag - no "latest" in p
 # lambda_timeout                  = 60         # 1-900s
 # lambda_memory_size              = 128        # 128-10240 MB
 # log_retention_days              = 30         # AWS-supported values: 1/3/5/7/14/30/60/90/120/150/180/365/...
-# ecr_force_delete                = false      # true for sandbox/test
-# ecr_image_tag_mutability        = "IMMUTABLE"  # MUTABLE allows tag reuse (less safe)

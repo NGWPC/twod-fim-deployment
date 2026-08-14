@@ -61,6 +61,11 @@ variable "test_bucket_name" {
   type        = string
 }
 
+variable "dagster_s3_bucket" {
+  description = "S3 bucket for Dagster compute logs"
+  type        = string
+}
+
 variable "vpc_id" {
   description = "VPC ID (foundation output: vpc_id)"
   type        = string
@@ -153,16 +158,56 @@ variable "ec2_ssh_public_key" {
   default     = ""
 }
 
-# --- App-specific: ECR ---
+# --- App-specific: Container registry ---
+
+variable "create_ecr" {
+  description = "Create ECR repos for container images. Set false when using an external registry (e.g. GHCR)."
+  type        = bool
+  default     = true
+}
+
+variable "orchestrator_image_repo" {
+  description = "Image repository for orchestrator. Optional - populates terraform output image_repos for the deployment layer."
+  type        = string
+  default     = ""
+}
+
+variable "build_model_image_repo" {
+  description = "Image repository for build_model worker. Optional - populates terraform output image_repos for the deployment layer."
+  type        = string
+  default     = ""
+}
+
+variable "nd_image_repo" {
+  description = "Image repository for nd-scenario-worker (required when create_ecr = false, e.g. ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_ecr || var.nd_image_repo != ""
+    error_message = "nd_image_repo is required when create_ecr = false."
+  }
+}
+
+variable "kwse_image_repo" {
+  description = "Image repository for kwse-scenario-worker (required when create_ecr = false, e.g. ghcr.io/ngwpc/twod-fim-jobs/run_kwse_scenarios)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_ecr || var.kwse_image_repo != ""
+    error_message = "kwse_image_repo is required when create_ecr = false."
+  }
+}
 
 variable "ecr_force_delete" {
-  description = "Allow ECR repos to be deleted with images (false for production, true for sandbox/test)"
+  description = "Allow ECR repos to be deleted with images. Only applies when create_ecr = true."
   type        = bool
   default     = false
 }
 
 variable "ecr_image_tag_mutability" {
-  description = "ECR image tag mutability (IMMUTABLE prevents tag reuse - prod safe)"
+  description = "ECR image tag mutability (IMMUTABLE prevents tag reuse). Only applies when create_ecr = true."
   type        = string
   default     = "IMMUTABLE"
 
@@ -188,7 +233,7 @@ variable "log_retention_days" {
 # --- App-specific: Job tuning (ND) ---
 
 variable "nd_image_tag" {
-  description = "Docker image tag for nd-scenario-worker (use git SHA or release tag)"
+  description = "Docker image tag for nd-scenario-worker. Sets the base job definition image; overridable at Batch submission time via containerOverrides."
   type        = string
 }
 
@@ -228,7 +273,7 @@ variable "nd_job_vcpus" {
 # --- App-specific: Job tuning (KWSE) ---
 
 variable "kwse_image_tag" {
-  description = "Docker image tag for kwse-scenario-worker (use git SHA or release tag)"
+  description = "Docker image tag for kwse-scenario-worker. Sets the base job definition image; overridable at Batch submission time via containerOverrides."
   type        = string
 }
 
