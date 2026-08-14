@@ -61,6 +61,11 @@ variable "test_bucket_name" {
   type        = string
 }
 
+variable "dagster_s3_bucket" {
+  description = "S3 bucket for Dagster compute logs"
+  type        = string
+}
+
 variable "vpc_id" {
   description = "VPC ID (foundation output: vpc_id)"
   type        = string

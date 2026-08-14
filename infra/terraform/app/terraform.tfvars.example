@@ -8,6 +8,7 @@ vpc_id             = "vpc-xxxxxxxxx"
 private_subnet_ids = ["subnet-aaa", "subnet-bbb"]
 prod_bucket_name   = "twod-fim-prod-123456789012"
 test_bucket_name   = "twod-fim-test-123456789012"
+dagster_s3_bucket  = "twod-fim-dagster-123456789012"
 
 # Required only if the VPC has interface endpoints with a shared security group.
 # Leave commented out if egress to AWS services routes through TGW or NAT.

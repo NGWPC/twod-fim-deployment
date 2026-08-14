@@ -15,7 +15,7 @@ variable "create_networking" {
 }
 
 variable "create_storage" {
-  description = "Create the prod and test artifact S3 buckets. Set false to reference existing buckets via existing_* variables."
+  description = "Create the prod, test, and Dagster compute logs S3 buckets. Set false to reference existing buckets via existing_* variables."
   type        = bool
   default     = true
 }
@@ -61,6 +61,17 @@ variable "existing_test_bucket_name" {
   validation {
     condition     = var.create_storage || can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.existing_test_bucket_name))
     error_message = "existing_test_bucket_name is required (and must be a valid S3 bucket name) when create_storage = false."
+  }
+}
+
+variable "existing_dagster_bucket_name" {
+  description = "Existing Dagster compute logs S3 bucket name (required when create_storage = false)"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_storage || can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.existing_dagster_bucket_name))
+    error_message = "existing_dagster_bucket_name is required (and must be a valid S3 bucket name) when create_storage = false."
   }
 }
 
@@ -154,6 +165,17 @@ variable "test_bucket_name" {
   validation {
     condition     = var.test_bucket_name == "" || can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.test_bucket_name))
     error_message = "test_bucket_name must be a valid S3 bucket name (lowercase, 3-63 chars)."
+  }
+}
+
+variable "dagster_bucket_name" {
+  description = "Override Dagster compute logs bucket name (default: {project_name}-dagster-{account_id})"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.dagster_bucket_name == "" || can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.dagster_bucket_name))
+    error_message = "dagster_bucket_name must be a valid S3 bucket name (lowercase, 3-63 chars)."
   }
 }
 

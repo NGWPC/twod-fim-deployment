@@ -2,7 +2,9 @@
 
 Infrastructure as code for the 2D flood inundation mapping (FIM) pipeline.
 Three independent stacks, applied in order: bootstrap, then foundation, then app.
+Bootstrap and foundation are **optional** when using existing infrastructure - only the app stack is required.
 Destroy in reverse order: app, then foundation, then bootstrap.
+When using existing networking and storage, skip bootstrap and foundation entirely.
 
 Each stack reads two local config files that are gitignored and created from committed `.example` templates.
 
@@ -32,9 +34,9 @@ infra/terraform/
 ├── foundation/                    persistent infra stack - VPC, endpoints, buckets
 │   ├── data.tf                    aws_caller_identity data source
 │   ├── networking.tf              VPC, public/private subnets, IGW, NAT gateway, VPC endpoints, vpce SG
-│   ├── outputs.tf                 vpc_id, private_subnet_ids, vpce_security_group_id, prod_bucket_name, test_bucket_name
+│   ├── outputs.tf                 vpc_id, private_subnet_ids, vpce_security_group_id, prod_bucket_name, test_bucket_name, dagster_bucket_name
 │   ├── providers.tf               AWS provider config, default tags (incl. optional team/poc)
-│   ├── storage.tf                 prod (prevent_destroy) and test (force_destroy) artifact S3 buckets
+│   ├── storage.tf                 prod (prevent_destroy), test (force_destroy), and dagster (force_destroy) S3 buckets
 │   ├── terraform.tf               version constraints, S3 backend block
 │   ├── variables.tf               create_networking, create_storage, CIDRs, existing_* fallbacks, team, poc
 │   ├── backend.hcl.example        remote state backend template
@@ -45,15 +47,15 @@ infra/terraform/
     ├── cloudwatch.tf              log groups: batch, ec2, lambda
     ├── data.tf                    aws_partition, aws_caller_identity data sources
     ├── ec2.tf                     orchestrator instance, optional worker instances, optional SSH key pair
-    ├── ecr.tf                     4 ECR repos + scan-on-push + lifecycle policies
-    ├── iam.tf                     create_iam toggle, IAM roles + instance profiles + Batch service-linked role, existing_* fallbacks
+    ├── ecr.tf                     4 ECR repos (optional, create_ecr toggle) + scan-on-push + lifecycle policies
+    ├── iam.tf                     create_iam toggle, IAM roles + instance profiles + SSM policy + conditional ECR policies, existing_* fallbacks
     ├── lambda.tf                  Batch completion handler Lambda (placeholder logic), EventBridge rule/target, SQS dead-letter queue
     ├── outputs.tf                 EC2, RDS, ECR, Batch, and Lambda outputs
     ├── providers.tf               AWS provider config, default tags (incl. optional team/poc)
     ├── rds.tf                     RDS Postgres instance, DB subnet group, Secrets Manager secret (connection metadata)
     ├── security_groups.tf         EC2, RDS, Batch, Lambda security groups + VPC endpoint ingress rules
     ├── terraform.tf               version constraints (aws, archive), S3 backend block
-    ├── variables.tf               shared + foundation-input + app-specific variables, team, poc
+    ├── variables.tf               shared + foundation-input + container registry + app-specific variables
     ├── backend.hcl.example        remote state backend template
     ├── terraform.tfvars.example   input variable template
     └── .terraform.lock.hcl        provider version lock (generated, committed)
@@ -66,19 +68,20 @@ infra/terraform/
 Creates the S3 bucket that holds Terraform remote state for the other two stacks.
 Apply once per AWS account.
 
-Bootstrap is optional.
+Bootstrap is **optional**.
 If you have an existing S3 bucket for state storage, skip this stack and set `bucket` in foundation and app `backend.hcl` to that bucket name.
 
 ### Foundation
 
 Persistent infrastructure that survives an app stack destroy/recreate.
+**Optional** when using existing networking and storage - set both toggles to false, or skip this stack entirely and pass values directly to the app stack.
 
 Creates:
 - VPC with public subnets (NAT gateway placement only, no workloads) and private subnets (all workloads)
 - NAT gateway for private subnet internet access
 - VPC endpoints for S3, Secrets Manager, and Batch
 - VPC endpoint security group (app stack adds ingress rules when `vpce_security_group_id` is provided)
-- Prod and test S3 artifact buckets
+- Prod, test, and Dagster compute logs S3 buckets
 
 Networking and storage are each independently toggleable via `create_networking` and `create_storage`.
 
@@ -90,13 +93,15 @@ Creates:
 - EC2 orchestrator and optional worker instances (Ubuntu Noble, private subnet, IMDSv2, SSM-ready)
 - RDS Postgres with AWS-managed master password
 - AWS Batch GPU SPOT compute environment, job queue, nd + kwse job definitions
-- 4 ECR repos with scan-on-push and lifecycle policies
+- 4 ECR repos with scan-on-push and lifecycle policies (optional, gated by `create_ecr`)
 - Lambda batch-completion handler wired to EventBridge with SQS dead-letter queue
 - CloudWatch log groups
 - 6 IAM roles + 2 instance profiles (scoped to actual resource ARNs), optional SSM policy attachment
 - 4 security groups (EC2, RDS, Batch, Lambda) + conditional VPC endpoint ingress rules
 
 IAM is toggleable via `create_iam`.
+ECR is toggleable via `create_ecr` - set to `false` when using an external registry like GHCR.
+When `create_ecr = false`, image repositories are provided via `orchestrator_image_repo`, `build_model_image_repo`, `nd_image_repo`, and `kwse_image_repo`.
 Security groups are always created by this stack.
 
 ## Tags
@@ -118,8 +123,9 @@ Set `team` and `poc` in `terraform.tfvars` if required by your organization.
 | Toggle | Stack | Default | Controls | `existing_*` fallback variables required when false |
 |---|---|---|---|---|
 | `create_networking` | foundation | `true` | VPC, subnets, IGW, NAT gateway, VPC endpoints, VPC endpoints security group | `existing_vpc_id`, `existing_private_subnet_ids` (+ optionally `existing_vpce_security_group_id`) |
-| `create_storage` | foundation | `true` | Prod and test S3 artifact buckets | `existing_prod_bucket_name`, `existing_test_bucket_name` |
+| `create_storage` | foundation | `true` | Prod, test, and Dagster compute logs S3 buckets | `existing_prod_bucket_name`, `existing_test_bucket_name`, `existing_dagster_bucket_name` |
 | `create_iam` | app | `true` | 6 IAM roles + 2 instance profiles (EC2 orchestrator, Batch job/execution/instance, Spot Fleet, Lambda execution) | `existing_ec2_instance_profile_name`, `existing_batch_job_role_arn`, `existing_batch_execution_role_arn`, `existing_batch_instance_profile_arn`, `existing_spot_fleet_role_arn`, `existing_lambda_execution_role_arn`, `existing_batch_service_role_arn` |
+| `create_ecr` | app | `true` | 4 ECR repos (orchestrator, model_worker, nd, kwse) + lifecycle policies + ECR IAM policies | `orchestrator_image_repo`, `build_model_image_repo`, `nd_image_repo`, `kwse_image_repo` |
 | `create_batch_service_linked_role` | app | `true` | The account-global `AWSServiceRoleForBatch` service-linked role | none directly - see note below |
 
 `create_batch_service_linked_role` is a 3-way switch layered on top of `create_iam`.
@@ -129,6 +135,7 @@ Set `team` and `poc` in `terraform.tfvars` if required by your organization.
 ## Fresh deployment
 
 Set the AWS profile and confirm the account ID before touching any stack.
+Bootstrap and foundation are optional. If using existing networking and storage, skip to step 3 (App).
 
 ```bash
 export AWS_PROFILE=<your-profile>
@@ -178,13 +185,14 @@ cd ../app
 cp terraform.tfvars.example terraform.tfvars
 cp backend.hcl.example backend.hcl
 
-# pull foundation outputs (vpc_id, private_subnet_ids, prod_bucket_name,
-# test_bucket_name) into terraform.tfvars
-# vpce_security_group_id is optional - only needed if the VPC has interface endpoints
-terraform -chdir=../foundation output
+# If foundation was deployed, pull its outputs into terraform.tfvars:
+#   terraform -chdir=../foundation output
+# If using existing infra, get these existing values from your environment:
+#   vpc_id, private_subnet_ids, prod_bucket_name, test_bucket_name, dagster_s3_bucket
 
-# also set: ec2_ami_id, nd_image_tag, kwse_image_tag
+# also set: ec2_ami_id, dagster_s3_bucket, nd_image_tag, kwse_image_tag
 # optional: ssm_logging_policy_arn, ec2_ssh_public_key, allowed_admin_cidrs
+# when create_ecr = false: orchestrator_image_repo, build_model_image_repo, nd_image_repo, kwse_image_repo
 terraform init -backend-config=backend.hcl
 terraform plan
 terraform apply
@@ -194,12 +202,12 @@ If the account already has the Batch service-linked role from prior use, set `cr
 
 ## Enterprise mode
 
-Set every toggle to false: `create_networking`, `create_storage`, `create_iam`, `create_batch_service_linked_role`.
+Set every toggle to false: `create_networking`, `create_storage`, `create_iam`, `create_batch_service_linked_role`, `create_ecr`.
 Provide the matching `existing_*` values for each.
 Foundation then creates nothing and passes the existing VPC, subnets, endpoint security group, and buckets straight through its outputs.
 App creates no IAM roles or instance profiles either, resolving them from the `existing_*` ARNs instead.
-App still always creates its own security groups (EC2, RDS, Batch, Lambda), the EC2 instances, RDS, ECR repos, Batch resources, and Lambda.
-Only IAM and the resources gated by foundation's toggles can be skipped.
+App still always creates its own security groups (EC2, RDS, Batch, Lambda), the EC2 instances, RDS, Batch resources, and Lambda. ECR repos are conditional (`create_ecr`).
+IAM, ECR, and the resources gated by foundation's toggles can be skipped.
 
 ## Foundation outputs
 
@@ -210,6 +218,7 @@ Only IAM and the resources gated by foundation's toggles can be skipped.
 | `vpce_security_group_id` | VPC interface endpoints security group ID - created, or existing SG passed through |
 | `prod_bucket_name` | Prod artifact S3 bucket name - created, or existing name passed through |
 | `test_bucket_name` | Test artifact S3 bucket name - created, or existing name passed through |
+| `dagster_bucket_name` | Dagster compute logs S3 bucket name - created, or existing name passed through |
 
 ## App outputs
 
@@ -223,7 +232,7 @@ Only IAM and the resources gated by foundation's toggles can be skipped.
 | `rds_address` | RDS Postgres hostname |
 | `rds_secret_arn` | Secrets Manager secret ARN for connection metadata (no password) |
 | `rds_master_user_secret_arn` | AWS-managed secret ARN holding the RDS master password |
-| `ecr_repository_urls` | Map of the 4 ECR repository URLs (docker push targets) |
+| `image_repos` | Resolved image repositories (ECR URLs when create_ecr = true, external registry URLs when false) |
 | `batch_job_queue_name` | Batch job queue name (for the Dagster sensor) |
 | `batch_nd_job_definition_name` | ND scenario Batch job definition name |
 | `batch_kwse_job_definition_name` | KWSE scenario Batch job definition name |

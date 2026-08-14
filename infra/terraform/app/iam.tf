@@ -116,14 +116,18 @@ locals {
   prod_bucket_arn = "arn:${local.partition}:s3:::${var.prod_bucket_name}"
   test_bucket_arn = "arn:${local.partition}:s3:::${var.test_bucket_name}"
 
+  dagster_bucket_arn = "arn:${local.partition}:s3:::${var.dagster_s3_bucket}"
+
   artifact_bucket_arns_list = [
     local.prod_bucket_arn,
     local.test_bucket_arn,
+    local.dagster_bucket_arn,
   ]
 
   artifact_bucket_arns_objects = [
     "${local.prod_bucket_arn}/*",
     "${local.test_bucket_arn}/*",
+    "${local.dagster_bucket_arn}/*",
   ]
 
   ec2_log_group_arn   = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"

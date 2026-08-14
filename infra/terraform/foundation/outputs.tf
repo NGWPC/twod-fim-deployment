@@ -29,3 +29,8 @@ output "test_bucket_name" {
   description = "Test artifact S3 bucket name (created, or the existing bucket name passed in)"
   value       = var.create_storage ? aws_s3_bucket.test[0].bucket : var.existing_test_bucket_name
 }
+
+output "dagster_bucket_name" {
+  description = "Dagster compute logs S3 bucket name (created, or the existing bucket name passed in)"
+  value       = var.create_storage ? aws_s3_bucket.dagster[0].bucket : var.existing_dagster_bucket_name
+}
