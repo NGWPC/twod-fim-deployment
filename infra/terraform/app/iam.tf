@@ -169,31 +169,6 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ECRAuth"
-        Effect   = "Allow"
-        Action   = "ecr:GetAuthorizationToken"
-        Resource = "*"
-      },
-      {
-        Sid    = "ECRPullPush"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-        ]
-        Resource = [
-          aws_ecr_repository.orchestrator.arn,
-          aws_ecr_repository.model_worker.arn,
-          aws_ecr_repository.nd_scenario_worker.arn,
-          aws_ecr_repository.kwse_scenario_worker.arn,
-        ]
-      },
-      {
         Sid      = "S3List"
         Effect   = "Allow"
         Action   = "s3:ListBucket"
@@ -264,6 +239,43 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Effect   = "Allow"
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_db_instance.main.master_user_secret[0].secret_arn
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "ec2_orchestrator_ecr" {
+  count = var.create_iam && var.create_ecr ? 1 : 0
+  name  = "${var.project_name}-ec2-orchestrator-ecr"
+  role  = aws_iam_role.ec2_orchestrator[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ECRAuth"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRPullPush"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+        ]
+        Resource = [
+          aws_ecr_repository.orchestrator[0].arn,
+          aws_ecr_repository.model_worker[0].arn,
+          aws_ecr_repository.nd_scenario_worker[0].arn,
+          aws_ecr_repository.kwse_scenario_worker[0].arn,
+        ]
       },
     ]
   })
@@ -344,6 +356,27 @@ resource "aws_iam_role_policy" "batch_execution" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = local.batch_log_group_arn
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "batch_execution_ecr" {
+  count = var.create_iam && var.create_ecr ? 1 : 0
+  name  = "${var.project_name}-batch-execution-ecr"
+  role  = aws_iam_role.batch_execution[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
         Sid      = "ECRAuth"
         Effect   = "Allow"
         Action   = "ecr:GetAuthorizationToken"
@@ -358,18 +391,9 @@ resource "aws_iam_role_policy" "batch_execution" {
           "ecr:BatchGetImage",
         ]
         Resource = [
-          aws_ecr_repository.nd_scenario_worker.arn,
-          aws_ecr_repository.kwse_scenario_worker.arn,
+          aws_ecr_repository.nd_scenario_worker[0].arn,
+          aws_ecr_repository.kwse_scenario_worker[0].arn,
         ]
-      },
-      {
-        Sid    = "CloudWatchLogs"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-        ]
-        Resource = local.batch_log_group_arn
       },
     ]
   })

@@ -42,15 +42,15 @@ output "rds_master_user_secret_arn" {
   value       = aws_db_instance.main.master_user_secret[0].secret_arn
 }
 
-# --- ECR ---
+# --- Container images ---
 
-output "ecr_repository_urls" {
-  description = "ECR repository URLs (docker push targets)"
+output "image_repos" {
+  description = "Resolved image repositories (ECR URLs when create_ecr = true, external registry when false)"
   value = {
-    orchestrator         = aws_ecr_repository.orchestrator.repository_url
-    model_worker         = aws_ecr_repository.model_worker.repository_url
-    nd_scenario_worker   = aws_ecr_repository.nd_scenario_worker.repository_url
-    kwse_scenario_worker = aws_ecr_repository.kwse_scenario_worker.repository_url
+    orchestrator         = local.orchestrator_image_repo
+    build_model          = local.build_model_image_repo
+    nd_scenario_worker   = local.nd_image_repo
+    kwse_scenario_worker = local.kwse_image_repo
   }
 }
 

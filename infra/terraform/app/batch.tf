@@ -1,3 +1,10 @@
+locals {
+  orchestrator_image_repo = var.create_ecr ? aws_ecr_repository.orchestrator[0].repository_url : var.orchestrator_image_repo
+  build_model_image_repo  = var.create_ecr ? aws_ecr_repository.model_worker[0].repository_url : var.build_model_image_repo
+  nd_image_repo           = var.create_ecr ? aws_ecr_repository.nd_scenario_worker[0].repository_url : var.nd_image_repo
+  kwse_image_repo         = var.create_ecr ? aws_ecr_repository.kwse_scenario_worker[0].repository_url : var.kwse_image_repo
+}
+
 resource "aws_batch_compute_environment" "gpu" {
   name         = "${var.project_name}-gpu-${var.use_spot ? "spot" : "ec2"}"
   type         = "MANAGED"
@@ -74,7 +81,7 @@ resource "aws_batch_job_definition" "nd" {
   }
 
   container_properties = jsonencode({
-    image            = "${aws_ecr_repository.nd_scenario_worker.repository_url}:${var.nd_image_tag}"
+    image            = "${local.nd_image_repo}:${var.nd_image_tag}"
     jobRoleArn       = local.batch_job_role_arn
     executionRoleArn = local.batch_execution_role_arn
 
@@ -131,7 +138,7 @@ resource "aws_batch_job_definition" "kwse" {
   }
 
   container_properties = jsonencode({
-    image            = "${aws_ecr_repository.kwse_scenario_worker.repository_url}:${var.kwse_image_tag}"
+    image            = "${local.kwse_image_repo}:${var.kwse_image_tag}"
     jobRoleArn       = local.batch_job_role_arn
     executionRoleArn = local.batch_execution_role_arn
 

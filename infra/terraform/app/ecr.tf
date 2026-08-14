@@ -1,4 +1,5 @@
 resource "aws_ecr_repository" "orchestrator" {
+  count                = var.create_ecr ? 1 : 0
   name                 = "${var.project_name}-orchestrator"
   image_tag_mutability = var.ecr_image_tag_mutability
   force_delete         = var.ecr_force_delete
@@ -11,7 +12,8 @@ resource "aws_ecr_repository" "orchestrator" {
 }
 
 resource "aws_ecr_lifecycle_policy" "orchestrator" {
-  repository = aws_ecr_repository.orchestrator.name
+  count      = var.create_ecr ? 1 : 0
+  repository = aws_ecr_repository.orchestrator[0].name
 
   policy = jsonencode({
     rules = [{
@@ -30,6 +32,7 @@ resource "aws_ecr_lifecycle_policy" "orchestrator" {
 }
 
 resource "aws_ecr_repository" "model_worker" {
+  count                = var.create_ecr ? 1 : 0
   name                 = "${var.project_name}-model-worker"
   image_tag_mutability = var.ecr_image_tag_mutability
   force_delete         = var.ecr_force_delete
@@ -42,7 +45,8 @@ resource "aws_ecr_repository" "model_worker" {
 }
 
 resource "aws_ecr_lifecycle_policy" "model_worker" {
-  repository = aws_ecr_repository.model_worker.name
+  count      = var.create_ecr ? 1 : 0
+  repository = aws_ecr_repository.model_worker[0].name
 
   policy = jsonencode({
     rules = [{
@@ -61,6 +65,7 @@ resource "aws_ecr_lifecycle_policy" "model_worker" {
 }
 
 resource "aws_ecr_repository" "nd_scenario_worker" {
+  count                = var.create_ecr ? 1 : 0
   name                 = "${var.project_name}-nd-scenario-worker"
   image_tag_mutability = var.ecr_image_tag_mutability
   force_delete         = var.ecr_force_delete
@@ -73,7 +78,8 @@ resource "aws_ecr_repository" "nd_scenario_worker" {
 }
 
 resource "aws_ecr_lifecycle_policy" "nd_scenario_worker" {
-  repository = aws_ecr_repository.nd_scenario_worker.name
+  count      = var.create_ecr ? 1 : 0
+  repository = aws_ecr_repository.nd_scenario_worker[0].name
 
   policy = jsonencode({
     rules = [{
@@ -92,6 +98,7 @@ resource "aws_ecr_lifecycle_policy" "nd_scenario_worker" {
 }
 
 resource "aws_ecr_repository" "kwse_scenario_worker" {
+  count                = var.create_ecr ? 1 : 0
   name                 = "${var.project_name}-kwse-scenario-worker"
   image_tag_mutability = var.ecr_image_tag_mutability
   force_delete         = var.ecr_force_delete
@@ -104,7 +111,8 @@ resource "aws_ecr_repository" "kwse_scenario_worker" {
 }
 
 resource "aws_ecr_lifecycle_policy" "kwse_scenario_worker" {
-  repository = aws_ecr_repository.kwse_scenario_worker.name
+  count      = var.create_ecr ? 1 : 0
+  repository = aws_ecr_repository.kwse_scenario_worker[0].name
 
   policy = jsonencode({
     rules = [{
