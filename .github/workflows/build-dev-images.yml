@@ -1,13 +1,11 @@
-name: Publish orchestrator image
+name: Build and Publish Dev Images
 
 on:
   push:
     branches: [main]
     paths:
       - "orchestrator/**"
-      - ".github/workflows/publish-orchestrator.yaml"
-    tags:
-      - "v*"
+      - ".github/workflows/build-dev-images.yml"
   workflow_dispatch:
 
 # If two pushes land in quick succession, cancel the older run so the dev
@@ -23,7 +21,8 @@ env:
 permissions: {}
 
 jobs:
-  build-and-push:
+  build:
+    name: Build orchestrator
     runs-on: ubuntu-latest
 
     permissions:
@@ -52,7 +51,6 @@ jobs:
           tags: |
             type=sha,prefix=sha-,format=short
             type=raw,value=dev,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
