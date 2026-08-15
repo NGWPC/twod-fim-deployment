@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS reach_network(
     is_headwater boolean NOT NULL DEFAULT FALSE, -- no upstream modeling reach
     is_terminal boolean NOT NULL DEFAULT FALSE, -- no downstream modeling reach
     -- Why this reach has no modeling downstream. Drives nothing structurally but
-    -- records intent and lets the cascade/QC distinguish a true outlet from a
-    -- network break at a lake (DR-037 ALT-B) or coast (DR-038).
+    -- records intent and lets the gap calculation / QC distinguish a true outlet
+    -- from a network break at a lake (DR-037 ALT-B) or coast (DR-038).
     terminal_reason text CONSTRAINT reach_network_terminal_reason_chk CHECK (terminal_reason IS NULL OR terminal_reason
 	IN ('outlet', 'lake', 'coast')),
     -- Lake adjacency tags (DR-007.3). Independent flags: a short reach between two

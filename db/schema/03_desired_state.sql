@@ -1,10 +1,14 @@
 -- 03_desired_state.sql
 CREATE TABLE IF NOT EXISTS desired_state(
     reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
-    q_lower_bound integer NOT NULL, -- cms (whole-number flows only)
-    q_upper_bound integer NOT NULL, -- cms (whole-number flows only)
+    -- Every field below is nullable on purpose: NULL = "use the default source",
+    -- a value = authored intent (guide.md, Key Design Decisions). A column DEFAULT
+    -- would erase that distinction by making an unauthored field look authored,
+    -- so this table carries no defaults except the DB-owned revision.
+    q_lower_bound integer, -- cms (whole-number flows only)
+    q_upper_bound integer, -- cms (whole-number flows only)
     initial_dq_step_for_nd integer, -- cms
-    solver text DEFAULT 'lisflood',
+    solver text,
     CONSTRAINT desired_state_solver_chk CHECK (solver IS NULL OR solver IN ('lisflood', 'sfincs', 'triton')),
     model_domain geometry(polygon, 5070),
     -- override system TBD
@@ -15,7 +19,7 @@ CREATE TABLE IF NOT EXISTS desired_state(
     ld_ds_z_delta double precision, -- m
     q_set integer[],
     kwse_upper_bound double precision, -- m
-    revision integer NOT NULL DEFAULT 0, -- field autoincrement
+    revision integer NOT NULL DEFAULT 0, -- DB owned; stamped from a global sequence by 09_triggers.sql
     CONSTRAINT desired_state_flow_bounds_chk CHECK (q_lower_bound IS NULL OR q_upper_bound IS NULL OR q_lower_bound < q_upper_bound),
     CONSTRAINT desired_state_kwse_bounds_chk CHECK (kwse_upper_bound IS NULL OR kwse_upper_bound > 0),
     CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_q_mean_stage_delta IS NULL OR ld_q_mean_stage_delta > 0) AND
@@ -25,9 +29,9 @@ CREATE TABLE IF NOT EXISTS desired_state(
 
 COMMENT ON TABLE desired_state IS 'Authored intent, one row per reach. NULL field = use default source; non-NULL = authored. Preserved at all cost.';
 
-COMMENT ON COLUMN desired_state.q_lower_bound IS 'Lower discharge bound for the library (cms).';
+COMMENT ON COLUMN desired_state.q_lower_bound IS 'Lower discharge bound for the library (cms); NULL = system default.';
 
-COMMENT ON COLUMN desired_state.q_upper_bound IS 'Upper discharge bound for the library (cms).';
+COMMENT ON COLUMN desired_state.q_upper_bound IS 'Upper discharge bound for the library (cms); NULL = system default.';
 
 COMMENT ON COLUMN desired_state.initial_dq_step_for_nd IS 'Initial discharge step for the normal-depth adaptive sweep (cms); NULL = default.';
 
@@ -49,4 +53,4 @@ COMMENT ON COLUMN desired_state.q_set IS 'Explicitly authored library discharges
 
 COMMENT ON COLUMN desired_state.kwse_upper_bound IS 'Authored upper KWSE bound (m); lower bound is floored by normal-depth WSEL (DR-032). NULL = system computes.';
 
-COMMENT ON COLUMN desired_state.revision IS 'DB owned, auto incremented by the BEFORE UPDATE trigger (09_triggers.sql).';
+COMMENT ON COLUMN desired_state.revision IS 'DB owned. Stamped on INSERT and on any real UPDATE from a global sequence (09_triggers.sql), so it is monotonic and never reused, even if a row is deleted and re-created.';
