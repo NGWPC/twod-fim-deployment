@@ -20,6 +20,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY_DIR = Path(__file__).resolve().parent
+ENV_FILE = REPO_ROOT / ".env"
+
+
+def read_env(path: Path) -> dict[str, str]:
+    if not path.exists():
+        sys.exit(f".env not found at {path}\nCreate it from example.cloud.env before running.")
+    env = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        if key and value:
+            env[key.strip()] = value.strip()
+    return env
 
 
 def ensure_psql() -> None:
@@ -31,16 +46,11 @@ def ensure_psql() -> None:
     print("  postgresql-client installed.")
 
 
-def fetch_master_password() -> str:
-    tf_dir = REPO_ROOT / "infra" / "terraform" / "app"
-    result = subprocess.run(
-        ["terraform", f"-chdir={tf_dir}", "output", "-raw", "rds_master_user_secret_arn"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        sys.exit("Could not get rds_master_user_secret_arn from terraform output. Is the infra up?")
+def fetch_master_password(env: dict[str, str]) -> str:
+    secret_arn = env.get("RDS_SECRET_ARN") or os.environ.get("RDS_SECRET_ARN")
+    if not secret_arn:
+        sys.exit("RDS_SECRET_ARN must be set in .env. Get it from: terraform output -raw rds_master_user_secret_arn")
 
-    secret_arn = result.stdout.strip()
     result = subprocess.run(
         ["aws", "secretsmanager", "get-secret-value",
          "--secret-id", secret_arn,
@@ -61,7 +71,8 @@ def main() -> None:
         ensure_psql()
 
         print("\nFetching RDS master password from Secrets Manager...")
-        master_password = fetch_master_password()
+        env = read_env(ENV_FILE)
+        master_password = fetch_master_password(env)
         print("  Master password retrieved.")
 
         env = dict(os.environ, PGPASSWORD=master_password)
