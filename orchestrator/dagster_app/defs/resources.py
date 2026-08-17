@@ -1,9 +1,9 @@
 import os
 
 import dagster as dg
-from orchestrator.config import settings
-from orchestrator.state_store import StateStore
-from orchestrator.workers import ContainerRunner, LocalDockerRunner
+from recon.config import settings
+from recon.state_store import StateStore
+from recon.workers import ContainerRunner, LocalDockerRunner
 
 
 class StateStoreResource(dg.ConfigurableResource):

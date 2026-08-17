@@ -67,7 +67,7 @@ services:
       DAGSTER_HOME: /opt/dagster
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: [ "dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-m", "orchestrator.definitions" ]
+    command: [ "dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-m", "dagster_app.definitions" ]
     ports:
       - "3000:3000"
     healthcheck:
