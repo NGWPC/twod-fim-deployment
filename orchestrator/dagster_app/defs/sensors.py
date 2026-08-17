@@ -1,7 +1,7 @@
 import dagster as dg
 
-from orchestrator.defs.assets import process_build_model, reaches_partitions
-from orchestrator.defs.resources import StateStoreResource
+from dagster_app.defs.assets import process_build_model, reaches_partitions
+from dagster_app.defs.resources import StateStoreResource
 
 
 @dg.sensor(

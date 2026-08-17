@@ -14,10 +14,9 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
-COPY src/ src/
+COPY recon/ recon/
+COPY dagster_app/ dagster_app/
 RUN uv sync --frozen --no-editable
-
-COPY scripts/ scripts/
 
 COPY dagster.yaml /opt/dagster/dagster.yaml
 COPY workspace.yaml /app/workspace.yaml
@@ -28,4 +27,4 @@ EXPOSE 4000
 HEALTHCHECK --timeout=1s --start-period=3s --interval=3s --retries=20 \
     CMD ["dagster", "api", "grpc-health-check", "-p", "4000"]
 
-CMD ["dagster", "code-server", "start", "-h", "0.0.0.0", "-p", "4000", "-m", "orchestrator.definitions"]
+CMD ["dagster", "code-server", "start", "-h", "0.0.0.0", "-p", "4000", "-m", "dagster_app.definitions"]

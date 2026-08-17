@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 class Settings(BaseSettings):
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     artifacts_s3_bucket: str = "twod-fim-artifacts"
     major_version: int = 1
     aws_endpoint_url: str | None = None
-    build_model_image: str = "twod-fim-jobs:build_model"
+    build_model_image: str = "ghcr.io/ngwpc/twod-fim-jobs/build_model:dev"
     docker_network: str = "twodfim"
     docker_platform: str | None = None
     build_model_timeout: int = 3600

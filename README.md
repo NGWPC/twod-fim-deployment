@@ -19,7 +19,11 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ├── orchestrator/           #  the self contained dagster project
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── src/orchestrator/
+│   ├── recon/             	# tooling agnostic pkg for reconciliation loop
+│   ├── dagster_app/       	# dagster specific code
+│   ├── notebooks/
+│   ├── scripts/
+│   ├── testdata/
 │   └── tests/
 ├── db/                     # schema, triggers, seeds, migrate.sh
 ├── infra/terraform/        # modules + envs/dev

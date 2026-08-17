@@ -1,8 +1,8 @@
 import dagster as dg
 
-from orchestrator.config import settings
-from orchestrator.defs.resources import RunnerResource, StateStoreResource
-from orchestrator.reconciliation import run_and_update
+from recon.config import settings
+from dagster_app.defs.resources import RunnerResource, StateStoreResource
+from recon.reconciliation import run_and_update
 
 reaches_partitions = dg.DynamicPartitionsDefinition(name="reaches")
 

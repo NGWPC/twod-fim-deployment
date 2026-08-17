@@ -1,7 +1,7 @@
 import psycopg
 from psycopg.rows import dict_row
 
-from orchestrator.config import settings
+from recon.config import settings
 
 
 class StateStore:
