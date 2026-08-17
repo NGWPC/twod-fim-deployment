@@ -27,13 +27,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+packages = ["recon", "dagster_app"]
 force-include = { "pyproject.toml" = "pyproject.toml" }
 
 [tool.dg]
 directory_type = "project"
 
 [tool.dg.project]
-root_module = "orchestrator"
+root_module = "dagster_app"
 registry_modules = [
-    "orchestrator.components.*",
+    "dagster_app.components.*",
 ]
