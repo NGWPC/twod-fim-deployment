@@ -5,9 +5,9 @@ Orchestrates the common steps (psql install, master password fetch)
 then calls init_db.py and deploy.py.
 
 Usage:
-  python deploy/setup.py                    # init db + deploy
-  python deploy/setup.py --reset            # clean slate + deploy
-  python deploy/setup.py --skip-db          # redeploy without touching DB
+  python3 deploy/setup.py                    # init db + deploy
+  python3 deploy/setup.py --reset            # clean slate + deploy
+  python3 deploy/setup.py --skip-db          # redeploy without touching DB
 """
 
 import argparse

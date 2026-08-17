@@ -40,7 +40,9 @@ aws ssm start-session --target <instance-id> --profile sandbox
 
 ```bash
 # On EC2:
-cd /home/ssm-user/twod-fim-deployment
+cd /home/ssm-user
+git clone https://github.com/NGWPC/twod-fim-deployment.git
+cd twod-fim-deployment
 
 # One-time: create .env
 cp example.cloud.env .env
@@ -48,6 +50,14 @@ cp example.cloud.env .env
 
 # Run everything:
 python3 deploy/setup.py
+```
+
+### Update to latest code
+
+```bash
+cd /home/ssm-user/twod-fim-deployment
+git pull
+python3 deploy/setup.py --skip-db
 ```
 
 ### Clean slate (reset databases + redeploy)
