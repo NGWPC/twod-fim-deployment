@@ -71,7 +71,28 @@ SELECT
     rn.reach_to_id AS downstream_reach_id,
     rn.is_headwater,
     rn.is_terminal,
-    COALESCE(p.phase, 'new') AS phase,
+    -- The single place a reach's state is named. reach_processing stores only
+    -- halted; everything else here is read off the columns that already say it,
+    -- so there is no second answer able to disagree with the first. Order is
+    -- precedence: halted outranks all, a job in flight outranks a retry wait.
+    CASE WHEN p.reach_id IS NULL THEN
+        'new'
+    WHEN p.halted THEN
+        'halted'
+    WHEN p.current_step IS NOT NULL THEN
+        'in_flight'
+    WHEN p.next_retry_at > now() THEN
+        'resting'
+    WHEN p.blocked_on_reach_id IS NOT NULL THEN
+        'waiting_downstream'
+    WHEN d.revision IS NOT NULL
+        AND p.applied_revision >= d.revision THEN
+        'finished'
+    ELSE
+        'due'
+    END AS state,
+    p.halted,
+    p.halted_at,
     p.blocked_on_reach_id,
     p.current_step,
     p.current_step_started_at,
@@ -92,8 +113,6 @@ SELECT
     p.consecutive_failures,
     p.last_error,
     p.next_retry_at,
-    p.claimed_by,
-    p.claim_expires_at,
     p.last_checked_at,
     p.check_requested_at
 FROM
