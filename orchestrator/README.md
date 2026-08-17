@@ -83,7 +83,7 @@ uv run python scripts/smoke_check.py
 ```
 
 Options:
-- `--gpkg /path/to/network.gpkg` - use a custom GeoPackage (default: `scripts/data/reach_network.gpkg`)
+- `--gpkg /path/to/network.gpkg` - use a custom GeoPackage (default: `testdata/network.gpkg`)
 - `--seed-only` - seed the DB and exit without waiting for reconciliation
 
 ## Env vars

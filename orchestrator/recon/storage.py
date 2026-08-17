@@ -6,7 +6,7 @@ Points to MinIO locally (via AWS_ENDPOINT_URL), real S3 in production.
 
 import boto3
 
-from orchestrator.config import settings
+from recon.config import settings
 
 
 def get_s3_client():
