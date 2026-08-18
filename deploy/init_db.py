@@ -160,7 +160,7 @@ def grant_permissions(endpoint: str, twodfim_user: str) -> None:
 def find_schema_dir() -> Path:
     candidates = [
         REPO_ROOT / "db" / "schema",
-        Path("/tmp/twod-fim-deployment/db/schema"),
+        Path("/opt/twod-fim-deployment/db/schema"),
     ]
     for candidate in candidates:
         if candidate.exists() and (candidate / "00_extensions.sql").exists():
