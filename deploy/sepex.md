@@ -109,138 +109,41 @@ exit
 aws ssm start-session --target <sepex-instance-id> --profile sandbox
 ```
 
-## 4. Create SEPEX database on RDS
+## 4. Deploy SEPEX
 
-From the SEPEX EC2 instance:
-
-Wait for user-data to finish (step 3) before running apt-get.
+From the SEPEX EC2 instance, clone the twod-fim-deployment repo and run the setup script.
+The script handles: database creation, repo clone, configuration, build, and startup.
 
 ```bash
-sudo apt-get install -y postgresql-client
+cd /home/ssm-user
+sudo git clone -b feature/cloud-deploy https://github.com/NGWPC/twod-fim-deployment.git /opt/twod-fim-deployment
+sudo chown -R ssm-user:ssm-user /opt/twod-fim-deployment
 
-# Fetch master password
-export PGPASSWORD=$(aws secretsmanager get-secret-value \
-  --secret-id <rds-master-user-secret-arn> \
-  --query 'SecretString' --output text | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['password'])")
-
-# Create database and user
-psql -h <rds-address> -U twodfim_admin -d postgres <<'SQL'
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sepex_app') THEN
-    CREATE USER sepex_app WITH PASSWORD '<choose-a-password>';
-  END IF;
-END $$;
-CREATE DATABASE sepex OWNER sepex_app;
-SQL
-
-# PG 16: transfer public schema ownership so sepex_app can create tables
-psql -h <rds-address> -U twodfim_admin -d sepex -c \
-  "ALTER SCHEMA public OWNER TO sepex_app;"
+python3 /opt/twod-fim-deployment/deploy/setup_sepex.py \
+  --rds-address <rds-address> \
+  --rds-secret-arn <rds-master-user-secret-arn> \
+  --sepex-password <choose-a-password> \
+  --s3-bucket <artifacts-bucket-name>
 ```
 
-## 5. Clone and configure SEPEX
+| Argument | Source |
+|---|---|
+| `--rds-address` | `terraform output -raw rds_address` |
+| `--rds-secret-arn` | `terraform output -raw rds_master_user_secret_arn` |
+| `--sepex-password` | User-chosen password for the `sepex_app` database user |
+| `--s3-bucket` | `prod_bucket_name` or `test_bucket_name` from `terraform.tfvars` |
+| `--repo-url` | SEPEX repo (default: `https://github.com/Dewberry/sepex.git`) |
+| `--install-dir` | Install path (default: `/opt/sepex`) |
+| `--reset` | Drop and recreate the sepex database |
+| `--skip-db` | Skip database setup, only redeploy |
+
+The password is automatically URL-encoded in the connection string.
+
+## 5. Verify
 
 ```bash
-sudo git clone https://github.com/Dewberry/sepex.git /opt/sepex
-sudo chown -R ssm-user:ssm-user /opt/sepex
+# Check service (from SEPEX instance)
 cd /opt/sepex
-```
-
-Create a cloud compose file (api only, no minio/postgres since we use RDS and S3):
-
-```bash
-docker network create process_api_net 2>/dev/null || true
-
-cat > docker-compose.cloud.yaml << 'EOF'
-services:
-  api:
-    build:
-      context: ./api
-    container_name: sepex-api
-    ports:
-      - '80:5050'
-    env_file:
-      - .env
-    volumes:
-      - ./api/plugins:/app/plugins
-      - ./.data/api:/.data
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - process_api_net
-
-networks:
-  process_api_net:
-    external: true
-EOF
-```
-
-Create `.env` for cloud (not based on `example.env` - too many local-only vars):
-
-```bash
-cat > .env << 'EOF'
-# --- Core
-REPO_URL='https://github.com/Dewberry/sepex'
-API_NAME='sepex'
-API_PORT='5050'
-
-# --- File & Logging
-LOG_LEVEL='INFO'
-LOG_FILE='/.data/logs/api.jsonl'
-TMP_JOB_LOGS_DIR='/.data/tmp/job_logs'
-
-# --- Database (RDS)
-DB_SERVICE='postgres'
-POSTGRES_CONN_STRING='postgres://sepex_app:<password>@<rds-address>:5432/sepex?sslmode=require'
-
-# --- Policies
-EXPIRY_DAYS='7'
-
-# --- Storage (S3, credentials via instance profile)
-STORAGE_SERVICE='aws-s3'
-STORAGE_BUCKET='<artifacts-bucket-name>'
-STORAGE_METADATA_PREFIX='metadata'
-STORAGE_RESULTS_PREFIX='results'
-STORAGE_LOGS_PREFIX='logs'
-
-# --- AWS
-AWS_REGION='us-east-1'
-BATCH_LOG_STREAM_GROUP='/aws/batch/job'
-
-# --- Auth (disabled for testing)
-AUTH_SERVICE=''
-AUTH_LEVEL='0'
-
-# --- Plugins
-PLUGINS_LOAD_DIR=''
-PLUGINS_DIR='/.data/plugins'
-
-# --- Queue Resource Limits
-MAX_LOCAL_CPUS=''
-MAX_LOCAL_MEMORY_MB=''
-EOF
-```
-
-Fill in `<password>`, `<rds-address>`, and `<artifacts-bucket-name>` with actual values.
-If the password contains special characters (`!`, `@`, `[`, `)`, etc.), URL-encode it:
-
-```bash
-python3 -c "from urllib.parse import quote; print(quote('<password>', safe=''))"
-```
-
-## 6. Build and start SEPEX
-
-Build SEPEX image from source on EC2:
-
-```bash
-cd /opt/sepex
-docker compose -f docker-compose.cloud.yaml build
-docker compose -f docker-compose.cloud.yaml up -d
-```
-
-## 7. Verify
-
-```bash
-# Check service
 docker compose -f docker-compose.cloud.yaml ps
 
 # Test API (from SEPEX instance)

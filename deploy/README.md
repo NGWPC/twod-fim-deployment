@@ -21,6 +21,7 @@ Scripts for deploying the Dagster orchestrator and pipeline databases on EC2.
 | `setup.py` | One-command setup: installs psql, fetches master password, initializes databases, deploys services |
 | `init_db.py` | Database only: creates users, databases, schema, permissions |
 | `deploy.py` | Services only: pulls images, starts three Dagster services (code-server, webserver, daemon) |
+| `setup_sepex.py` | SEPEX deployment: database, clone, configure, build, start (see [sepex.md](sepex.md)) |
 
 ## Common workflows
 
