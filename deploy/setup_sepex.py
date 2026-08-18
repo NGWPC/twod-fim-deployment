@@ -224,7 +224,7 @@ def build_and_start(install_dir):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         result = subprocess.run(
-            ["curl", "-sf", "http://localhost/api"],
+            ["curl", "-sf", "http://localhost/"],
             capture_output=True,
         )
         if result.returncode == 0:

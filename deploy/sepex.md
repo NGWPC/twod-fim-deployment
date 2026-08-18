@@ -147,10 +147,10 @@ cd /opt/sepex
 docker compose -f docker-compose.cloud.yaml ps
 
 # Test API (from SEPEX instance)
-curl http://localhost/api/processes
+curl http://localhost/
 
 # Test from orchestrator EC2 (via SEPEX private IP)
-curl http://<sepex-private-ip>/api/processes
+curl http://<sepex-private-ip>/
 ```
 
 ## Cleanup
