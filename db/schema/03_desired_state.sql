@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS desired_state(
     ld_ds_z_delta double precision, -- m
     q_set integer[],
     kwse_upper_bound double precision, -- m
-    revision integer NOT NULL DEFAULT 0, -- DB owned; stamped from a global sequence by 09_triggers.sql
+    revision integer NOT NULL DEFAULT 0, -- DB owned; per-reach counter set by 09_triggers.sql
     CONSTRAINT desired_state_flow_bounds_chk CHECK (q_lower_bound IS NULL OR q_upper_bound IS NULL OR q_lower_bound < q_upper_bound),
     CONSTRAINT desired_state_kwse_bounds_chk CHECK (kwse_upper_bound IS NULL OR kwse_upper_bound > 0),
     CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_q_mean_stage_delta IS NULL OR ld_q_mean_stage_delta > 0) AND
@@ -53,4 +53,4 @@ COMMENT ON COLUMN desired_state.q_set IS 'Explicitly authored library discharges
 
 COMMENT ON COLUMN desired_state.kwse_upper_bound IS 'Authored upper KWSE bound (m); lower bound is floored by normal-depth WSEL (DR-032). NULL = system computes.';
 
-COMMENT ON COLUMN desired_state.revision IS 'DB owned. Stamped on INSERT and on any real UPDATE from a global sequence (09_triggers.sql), so it is monotonic and never reused, even if a row is deleted and re-created.';
+COMMENT ON COLUMN desired_state.revision IS 'DB owned, per reach: 0 on INSERT, +1 on any real UPDATE (09_triggers.sql). Counts how many times this reach''s intent has changed.';

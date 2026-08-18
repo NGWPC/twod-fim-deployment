@@ -1,42 +1,70 @@
 -- 09_triggers.sql
--- desired_state.revision is the loop's only signal that intent moved. The whole
--- candidate query rests on `applied_revision < revision`, so revision must never
--- go backwards for a reach. A per-row counter starting at 0 does go backwards:
--- delete a desired_state row and re-insert it and revision returns to 0, while
--- reach_processing.applied_revision (a separate table, untouched by that delete)
--- still holds the old higher number — and the reach silently stops being picked
--- up. Drawing from one global sequence makes every new value larger than every
--- value ever issued, so that hole closes.
-CREATE SEQUENCE IF NOT EXISTS desired_state_revision_seq AS integer START 1;
-
-COMMENT ON SEQUENCE desired_state_revision_seq IS 'Global source of desired_state.revision values; monotonic across rows so a revision can never be reused or regress.';
-
-CREATE OR REPLACE FUNCTION bump_desired_state_revision()
+-- desired_state.revision counts how many times a reach's intent has changed. It
+-- is per reach and DB owned: the application never writes it.
+--
+-- The loop's candidate query rests on `applied_revision < revision`, so the one
+-- thing that must never happen is revision going backwards while a stale
+-- applied_revision survives. That can only occur one way — a desired_state row
+-- being deleted and re-created, restarting at 0, while reach_processing (a
+-- different table, untouched by that delete) still holds a high number. The
+-- reach would then look permanently satisfied and never be checked again.
+--
+-- The delete trigger below closes that, which is why the counter can be a plain
+-- per-row one rather than a global sequence.
+CREATE OR REPLACE FUNCTION set_desired_state_revision()
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    -- Authoritative; ignores any value the caller set.
-    NEW.revision := nextval('desired_state_revision_seq');
+    -- Authoritative; ignores whatever the caller supplied.
+    IF TG_OP = 'INSERT' THEN
+        NEW.revision := 0;
+    ELSE
+        NEW.revision := OLD.revision + 1;
+    END IF;
     RETURN NEW;
 END;
 $$;
 
--- INSERT is stamped too, so a re-created row starts above whatever
--- applied_revision an older incarnation of that reach left behind.
 DROP TRIGGER IF EXISTS desired_state_set_revision ON desired_state;
 
 CREATE TRIGGER desired_state_set_revision
     BEFORE INSERT ON desired_state
     FOR EACH ROW
-    EXECUTE FUNCTION bump_desired_state_revision();
+    EXECUTE FUNCTION set_desired_state_revision();
 
 DROP TRIGGER IF EXISTS desired_state_bump_revision ON desired_state;
 
 CREATE TRIGGER desired_state_bump_revision
     BEFORE UPDATE ON desired_state
     FOR EACH ROW
-    WHEN (OLD.* IS DISTINCT FROM NEW.*) -- skip true no-op updates
-    EXECUTE FUNCTION bump_desired_state_revision();
+    WHEN (OLD.* IS DISTINCT FROM NEW.*) -- a rewrite with identical values is not a change
+    EXECUTE FUNCTION set_desired_state_revision();
 
-COMMENT ON FUNCTION bump_desired_state_revision() IS 'BEFORE INSERT/UPDATE on desired_state: revision := nextval(desired_state_revision_seq) (DB-owned, monotonic).';
+-- Deleting intent retracts what was achieved against it. Without this, a
+-- re-created row starts at revision 0 while applied_revision still claims a
+-- higher one, and the reach is never looked at again.
+CREATE OR REPLACE FUNCTION forget_applied_revision()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    UPDATE reach_processing
+    SET applied_revision = -1
+    WHERE reach_id = OLD.reach_id;
+    RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS desired_state_forget_applied ON desired_state;
+
+CREATE TRIGGER desired_state_forget_applied
+    AFTER DELETE ON desired_state
+    FOR EACH ROW
+    EXECUTE FUNCTION forget_applied_revision();
+
+DROP SEQUENCE IF EXISTS desired_state_revision_seq;
+
+COMMENT ON FUNCTION set_desired_state_revision() IS 'BEFORE INSERT/UPDATE on desired_state: revision starts at 0 and increments per reach on any real change.';
+
+COMMENT ON FUNCTION forget_applied_revision() IS 'AFTER DELETE on desired_state: clears applied_revision, so a re-created row starting at 0 is not shadowed by a stale claim.';
