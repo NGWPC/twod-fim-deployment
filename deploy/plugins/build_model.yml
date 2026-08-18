@@ -1,0 +1,40 @@
+info:
+  version: '0.1.0'
+  id: buildModel
+  title: Build Model
+  description: Build a 2D FIM hydraulic model for a reach
+  jobControlOptions:
+    - async-execute
+  outputTransmission:
+    - reference
+
+host:
+  type: docker
+  image: ghcr.io/ngwpc/twod-fim-jobs/build_model:dev
+
+command: []
+
+config:
+  maxResources:
+    cpus: 1
+    memory: 4096
+
+inputs:
+  - id: reach_id
+    title: reach_id
+    description: Reach identifier
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+outputs:
+  - id: plugin_results
+    title: plugin_results
+    description: Build result with identity_hash, model_id, and build_model_version
+    output:
+      transmissionMode:
+        - value
