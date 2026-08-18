@@ -20,6 +20,7 @@ dev = [
     "geopandas>=1.1.4",
     "matplotlib>=3.10",
     "ipykernel>=7.3.0",
+    "pytest>=8.0",
 ]
 
 [build-system]

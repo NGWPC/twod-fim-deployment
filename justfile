@@ -9,3 +9,4 @@ down:
 # Wipe all data (delete container-owned db files via a root container first)
 wipe: down
     -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/db
+    -docker run --rm -v /home/ert/dev/git-repos/fim/2d-fim/twod-fim-deployment/.data/:/data alpine rm -rf /data/minio
