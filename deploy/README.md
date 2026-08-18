@@ -149,8 +149,8 @@ Automation -> toggle `reconciliation_sensor` ON.
 
 ```bash
 # Check DB state:
-psql -h <rds-endpoint> -U twodfim_app -d twodfim -c \
-  "SELECT reach_id, model_id, reconciled FROM twodfim.current_state_realized;"
+psql -h <rds-address> -U twodfim_app -d twodfim -c \
+  "SELECT reach_id, identity_hash, model_id, processing FROM twodfim.current_state;"
 
 # Check S3 artifacts:
 aws s3 ls s3://<artifacts-bucket>/v1/ --recursive
