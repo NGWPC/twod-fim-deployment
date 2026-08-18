@@ -87,13 +87,13 @@ variable "existing_vpc_id" {
 }
 
 variable "existing_vpce_security_group_id" {
-  description = "Existing VPC interface endpoints security group ID (required when create_networking = false)"
+  description = "Existing VPC interface endpoints security group ID (optional when create_networking = false, only needed if the VPC has interface endpoints)"
   type        = string
   default     = ""
 
   validation {
-    condition     = var.create_networking || can(regex("^sg-", var.existing_vpce_security_group_id))
-    error_message = "existing_vpce_security_group_id is required (and must start with 'sg-') when create_networking = false."
+    condition     = var.create_networking || var.existing_vpce_security_group_id == "" || can(regex("^sg-", var.existing_vpce_security_group_id))
+    error_message = "existing_vpce_security_group_id must start with 'sg-' when provided."
   }
 }
 

@@ -50,6 +50,7 @@ infra/terraform/
     ├── ecr.tf                     4 ECR repos (optional, create_ecr toggle) + scan-on-push + lifecycle policies
     ├── iam.tf                     create_iam toggle, IAM roles + instance profiles + SSM policy + conditional ECR policies, existing_* fallbacks
     ├── lambda.tf                  Batch completion handler Lambda (placeholder logic), EventBridge rule/target, SQS dead-letter queue
+    ├── lambda_placeholder.zip     placeholder archive for Lambda function deployment
     ├── outputs.tf                 EC2, RDS, ECR, Batch, and Lambda outputs
     ├── providers.tf               AWS provider config, default tags (incl. optional team/poc)
     ├── rds.tf                     RDS Postgres instance, DB subnet group, Secrets Manager secret (connection metadata)
@@ -166,7 +167,7 @@ rm terraform.tfstate terraform.tfstate.backup
 ### 2. Foundation
 
 ```bash
-cd ../foundation
+cd infra/terraform/foundation
 cp terraform.tfvars.example terraform.tfvars
 cp backend.hcl.example backend.hcl
 # edit both: account ID, state bucket name
@@ -181,7 +182,7 @@ Only `allowed_account_id` is required; everything else has a default.
 ### 3. App
 
 ```bash
-cd ../app
+cd infra/terraform/app
 cp terraform.tfvars.example terraform.tfvars
 cp backend.hcl.example backend.hcl
 
@@ -190,7 +191,7 @@ cp backend.hcl.example backend.hcl
 # If using existing infra, get these existing values from your environment:
 #   vpc_id, private_subnet_ids, prod_bucket_name, test_bucket_name, dagster_s3_bucket
 
-# also set: ec2_ami_id, dagster_s3_bucket, nd_image_tag, kwse_image_tag
+# also set: ec2_ami_id, nd_image_tag, kwse_image_tag
 # optional: ssm_logging_policy_arn, ec2_ssh_public_key, allowed_admin_cidrs
 # when create_ecr = false: orchestrator_image_repo, build_model_image_repo, nd_image_repo, kwse_image_repo
 terraform init -backend-config=backend.hcl
@@ -200,13 +201,19 @@ terraform apply
 
 If the account already has the Batch service-linked role from prior use, set `create_batch_service_linked_role = false` instead of importing it.
 
-After `terraform apply`, set up databases and deploy services using the scripts in `deploy/`:
+After `terraform apply`, deploy the orchestrator on EC2.
+See `deploy/README.md` for full instructions (clone, .env setup, workflows).
+The quick version:
 
 ```bash
-# On EC2 (via SSM), from the cloned repo with .env created from example.cloud.env:
-python deploy/init_db.py          # create databases, users, schema
-python deploy/deploy.py           # pull images, start Dagster services
-python deploy/init_db.py --reset  # clean slate (drop + recreate)
+# On EC2 (via SSM):
+sudo git clone https://github.com/NGWPC/twod-fim-deployment.git /opt/twod-fim-deployment
+sudo chown -R ssm-user:ssm-user /opt/twod-fim-deployment
+cd /opt/twod-fim-deployment
+cp example.cloud.env .env
+# Edit .env with terraform output values, passwords, and image tags
+python3 deploy/setup.py            # one-command: init databases + deploy services
+python3 deploy/setup.py --reset    # clean slate (drop + recreate + deploy)
 ```
 
 ## Enterprise mode
