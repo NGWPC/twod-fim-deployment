@@ -1,7 +1,12 @@
-"""Load a reach network from a GeoPackage and seed the DB.
+"""Parse a reach network out of a GeoPackage.
 
-Shared by smoke_check.py and the notebook.
-Requires geopandas (dev dependency).
+Parsing only — it touches no database. Writing the rows is the caller's job,
+which keeps geopandas (a dev dependency, absent from the job image) out of
+anything the loop imports.
+
+Dev scaffolding: the real producer of the modelling network is the
+modify_network job in twod-fim-jobs, and this stands in until its output feeds
+a load step directly.
 """
 
 import sys
@@ -9,8 +14,6 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-
-from recon.state_store import StateStore
 
 
 def load_network(gpkg_path: Path) -> list[dict]:
@@ -104,23 +107,3 @@ def load_network(gpkg_path: Path) -> list[dict]:
         visit(r["reach_id"])
 
     return ordered
-
-
-def seed(store: StateStore, network: list[dict]) -> None:
-    """Insert reaches and desired_state from a loaded network."""
-    for r in network:
-        store.insert_reach(
-            reach_id=r["reach_id"],
-            reach_to_id=r["reach_to_id"],
-            is_terminal=r["is_terminal"],
-            is_headwater=r["is_headwater"],
-            terminal_reason=r.get("terminal_reason"),
-            lake_inlet=r.get("lake_inlet", False),
-            lake_outlet=r.get("lake_outlet", False),
-            is_trimmed=r.get("is_trimmed", False),
-            geom=r["geom"],
-            total_da_sqkm=r["total_da_sqkm"],
-            stream_order=r["stream_order"],
-            slope=r["slope"],
-        )
-        store.upsert_desired(reach_id=r["reach_id"])

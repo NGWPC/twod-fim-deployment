@@ -1,5 +1,13 @@
 -- 08_views.sql
 -- Per guide.md, what can be derived is not stored.
+--
+-- Views are dropped and recreated rather than replaced, so this file has to
+-- drop them in dependency order: reach_status reads reach_realized_runs, and
+-- dropping the latter first fails on any database where the former already
+-- exists. On a fresh boot the order is irrelevant; on a re-run it is the
+-- difference between working and not.
+DROP VIEW IF EXISTS reach_status;
+
 -- ---------------------------------------------------------------------------
 -- reach_realized_runs: what the ledger says has actually been realized.
 -- ---------------------------------------------------------------------------
@@ -74,8 +82,16 @@ SELECT
     -- The single place a reach's state is named. reach_processing stores only
     -- halted; everything else here is read off the columns that already say it,
     -- so there is no second answer able to disagree with the first. Order is
-    -- precedence: halted outranks all, a job in flight outranks a retry wait.
-    CASE WHEN p.reach_id IS NULL THEN
+    -- precedence: no intent outranks everything, then halted, then a job in
+    -- flight over a retry wait.
+    CASE WHEN d.reach_id IS NULL THEN
+        -- In the network, but nobody has asked for anything here. The loop will
+        -- never look at it: the candidate query starts FROM desired_state, so a
+        -- reach without intent cannot be a candidate. Named separately from
+        -- 'new' because 'new' means "not looked at yet" and this means "never
+        -- will be" — a distinction anyone watching this view needs.
+        'no_intent'
+    WHEN p.reach_id IS NULL THEN
         'new'
     WHEN p.halted THEN
         'halted'

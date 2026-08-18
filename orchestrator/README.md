@@ -7,15 +7,56 @@ upstream).
 Design references: [`twod-fim-knowledge-base/system-design/`](https://github.com/NGWPC/twod-fim-knowledge-base/tree/main/system-design)
 (`guide.md`, `triggers-and-propagation.md`).
 
+## Layout
+
+| | |
+|---|---|
+| `recon/` | the reconciliation loop. Imports no Dagster, ever — the notebooks, a script and (later) a sensor all call the same code |
+| `dagster_app/` | Dagster wiring only. **Does not currently load — see below** |
+| `notebooks/` | how the loop works, by running it |
+| `scripts/` | host-side dev tooling; not shipped in the image |
+
+Start reading at [`recon/gap.py`](recon/gap.py) — it is pure, short, and is the
+decision the rest of the package exists to serve — then `recon/check.py`, which
+is `reconciliation-loop.md`'s "what one check does" in code.
+
+### Dagster needs rewiring
+
+`dagster_app/` still calls `recon.state_store` and `recon.reconciliation`, which
+have been deleted. Resolving definitions fails with
+`ModuleNotFoundError: No module named 'recon.state_store'`.
+
+Whoever picks this up needs four calls:
+
+| Need | Call |
+|---|---|
+| which reaches need a check | `queue.due_reaches()` |
+| check one reach | `check.run_check(reach_id, runner)` |
+| hear back about submitted jobs | `jobs.status_pass(runner)` |
+| a runner | `workers.LocalDockerRunner` (any `ContainerRunner`) |
+
+Three constraints that change how the sensor should be written:
+
+- **Do not use `run_key` dedup as the double-submission guard.** The in-flight
+  marker in the database is the guard, and it holds against notebooks and
+  scripts too, which `run_key` cannot.
+- **Do not configure Dagster retries.** Retries are loop-owned
+  (`consecutive_failures`, `next_retry_at`, `halted`). Two retry mechanisms
+  fight; the old arrangement left exhausted reaches stale with nothing
+  recording why.
+- **A check never waits for its job.** It submits and returns in milliseconds;
+  the result is picked up by a later check. An asset that blocks is the shape
+  this design removed.
+
 ## Key schema contracts
 
 See [`db/schema/`](../db/schema/) for full definitions.
 
 - `current_state.model_id` is `GENERATED ALWAYS` from `identity_hash _ domain_code` — never written directly ([`04_current_state.sql`](../db/schema/04_current_state.sql))
-- `desired_state.revision` is auto-incremented by a `BEFORE UPDATE` trigger — the app never writes it ([`09_triggers.sql`](../db/schema/09_triggers.sql))
-- `runs` table has a composite FK to `current_state(reach_id, identity_hash)` — old runs are cleared before identity changes ([`05_runs.sql`](../db/schema/05_runs.sql))
-- `processing` flag is reserved for the future cascade coordinator (build -> nd -> kwse); individual workers do not manage it ([`04_current_state.sql`](../db/schema/04_current_state.sql))
-- Double-submission guard: Dagster `run_key` dedup (primary), not the processing flag
+- `desired_state.revision` is DB-owned and per reach: 0 on insert, +1 on any real change ([`09_triggers.sql`](../db/schema/09_triggers.sql))
+- Work tracking lives in `reach_processing`, which stores only `halted`; every other state is derived by the `reach_status` view ([`07_reach_processing.sql`](../db/schema/07_reach_processing.sql))
+- `applied_revision` is set only when the gap is empty, never per step, and is retracted the moment a gap reappears
+- Nothing is recorded that storage has not been seen to hold; a job's return value is not evidence
 
 ## Prerequisites
 

@@ -23,13 +23,27 @@ class Settings(BaseSettings):
     build_model_timeout: int = 3600
     docker_data_dir: str | None = None
     lulc_source: str | None = None
+    # Hostname the database answers to from inside a job container. Jobs run as
+    # siblings on the compose network, where the host's "localhost" is their own
+    # container, so they cannot use the same connection string the loop does.
+    postgres_host_for_jobs: str = "db"
 
     @computed_field
     @property
     def pipeline_db_connection_string(self) -> str:
+        """How the loop reaches the database."""
         return (
             f"postgresql://{quote_plus(self.postgres_user)}:{quote_plus(self.postgres_password)}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @computed_field
+    @property
+    def job_db_connection_string(self) -> str:
+        """How a job container reaches the database. Handed to jobs, never used here."""
+        return (
+            f"postgresql://{quote_plus(self.postgres_user)}:{quote_plus(self.postgres_password)}"
+            f"@{self.postgres_host_for_jobs}:{self.postgres_port}/{self.postgres_db}"
         )
 
 
