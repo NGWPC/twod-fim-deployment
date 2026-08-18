@@ -1,0 +1,44 @@
+# --- Required ---
+
+allowed_account_id = "123456789012"
+
+# --- Networking (create_networking = true) ---
+# Uncomment to customize; defaults shown.
+
+# vpc_cidr             = "10.0.0.0/16"
+# public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+# private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
+# enable_nat_gateway   = true
+
+# --- Networking (create_networking = false) ---
+# Required when create_networking = false; provide existing subnet and VPC IDs.
+
+# create_networking                = false
+# existing_vpc_id                  = "vpc-xxxxxxxxx"
+# existing_private_subnet_ids      = ["subnet-aaa", "subnet-bbb"]
+# existing_vpce_security_group_id  = "sg-xxxxxxxxx"
+
+# --- Storage (create_storage = true) ---
+# Uncomment to customize; defaults shown.
+
+# prod_bucket_name    = ""   # default: {project_name}-prod-{account_id}
+# test_bucket_name    = ""   # default: {project_name}-test-{account_id}
+# dagster_bucket_name = ""   # default: {project_name}-dagster-{account_id}
+
+# --- Storage (create_storage = false) ---
+# Required when create_storage = false; provide existing S3 bucket names.
+
+# create_storage            = false
+# existing_prod_bucket_name    = "bucket-name-prod"
+# existing_test_bucket_name    = "bucket-name-test"
+# existing_dagster_bucket_name = "bucket-name-dagster"
+
+# --- Ownership tags (set if required by your org) ---
+# team = "your-team"
+# poc  = "your-name"
+
+# --- Project metadata ---
+# Uncomment to customize; defaults shown.
+
+# project_name = "twod-fim"
+# region       = "us-east-1"
