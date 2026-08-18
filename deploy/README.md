@@ -122,10 +122,13 @@ Open http://localhost:3000.
 
 ### Smoke check
 
-Seeds test data, triggers the reconciliation pipeline, verifies DB state and S3 artifacts.
+For testing only. Seeds a small test network, triggers the reconciliation pipeline, and verifies DB state and S3 artifacts.
 
 ```bash
-# On EC2, exec into the code-server container:
+# On EC2, copy scripts and test data into the running container:
+cd /opt/twod-fim-deployment
+docker cp orchestrator/scripts twodfim-code-server:/app/scripts
+docker cp orchestrator/testdata twodfim-code-server:/app/testdata
 docker exec -it twodfim-code-server bash
 
 # Inside the container:
