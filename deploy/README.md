@@ -8,7 +8,7 @@ Scripts for deploying the Dagster orchestrator and pipeline databases on EC2.
 - SSM access to the EC2 instance
 - Repo cloned on EC2 to a persistent location
 - `.env` created from `example.cloud.env` with:
-  - RDS endpoint (`POSTGRES_HOST`)
+  - RDS address (`POSTGRES_HOST`, `DAGSTER_PG_HOST` from `terraform output -raw rds_address`)
   - Application user passwords (`DAGSTER_PG_PASSWORD`, `POSTGRES_PASSWORD`)
   - RDS master secret ARN (`RDS_SECRET_ARN` from `terraform output -raw rds_master_user_secret_arn`)
   - S3 bucket names (`DAGSTER_S3_BUCKET`, `ARTIFACTS_S3_BUCKET`)
@@ -48,8 +48,10 @@ cd /opt/twod-fim-deployment
 cp example.cloud.env .env
 # Edit .env with real values
 
-# Run everything:
-python3 deploy/setup.py
+# Run everything (images default to .env values, or override via CLI):
+python3 deploy/setup.py \
+  --orchestrator-image ghcr.io/ngwpc/twod-fim-deployment/orchestrator:<tag> \
+  --build-model-image ghcr.io/ngwpc/twod-fim-jobs/build_model:<tag>
 ```
 
 ### Update to latest code
@@ -75,8 +77,14 @@ python3 deploy/setup.py --skip-db
 ### Update to a specific image version
 
 ```bash
+# Option 1: edit .env and redeploy
 # Edit ORCHESTRATOR_IMAGE or BUILD_MODEL_IMAGE in .env, then:
 python3 deploy/setup.py --skip-db
+
+# Option 2: override via CLI args (does not change .env)
+python3 deploy/setup.py --skip-db \
+  --orchestrator-image ghcr.io/ngwpc/twod-fim-deployment/orchestrator:sha-abc1234 \
+  --build-model-image ghcr.io/ngwpc/twod-fim-jobs/build_model:sha-def5678
 ```
 
 ### Standalone usage
@@ -103,8 +111,6 @@ docker compose -f docker-compose.cloud.yaml ps
 All three services (code-server, webserver, daemon) should show `running`.
 
 ### Dagster UI
-
-From Mac:
 
 ```bash
 aws ssm start-session --target <instance-id> \

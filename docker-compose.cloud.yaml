@@ -8,6 +8,7 @@ services:
       DAGSTER_HOME: /opt/dagster
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./orchestrator/dagster.yaml:/opt/dagster/dagster.yaml:ro
     network_mode: host
     healthcheck:
       test: ["CMD", "dagster", "api", "grpc-health-check", "-p", "4000"]
@@ -28,6 +29,7 @@ services:
       DAGSTER_HOME: /opt/dagster
     volumes:
       - ./orchestrator/workspace.yaml:/app/workspace.yaml:ro
+      - ./orchestrator/dagster.yaml:/opt/dagster/dagster.yaml:ro
     command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/app/workspace.yaml"]
     network_mode: host
 
@@ -43,5 +45,6 @@ services:
       DAGSTER_HOME: /opt/dagster
     volumes:
       - ./orchestrator/workspace.yaml:/app/workspace.yaml:ro
+      - ./orchestrator/dagster.yaml:/opt/dagster/dagster.yaml:ro
     command: ["dagster-daemon", "run", "-w", "/app/workspace.yaml"]
     network_mode: host

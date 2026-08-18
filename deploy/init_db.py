@@ -137,19 +137,8 @@ def apply_schema(endpoint: str, schema_dir: Path) -> None:
     print("Schema applied.")
 
 
-def grant_permissions(endpoint: str, dagster_user: str, twodfim_user: str) -> None:
+def grant_permissions(endpoint: str, twodfim_user: str) -> None:
     print("Granting permissions...")
-
-    dagster_grants = [
-        f"GRANT ALL ON SCHEMA public TO {dagster_user};",
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {dagster_user};",
-        f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {dagster_user};",
-    ]
-
-    for grant in dagster_grants:
-        psql(endpoint, DAGSTER_DB, grant)
-
-    print(f"  Permissions granted to {dagster_user}")
 
     twodfim_grants = [
         f"GRANT ALL ON SCHEMA public TO {twodfim_user};",
@@ -214,7 +203,7 @@ def main() -> None:
     create_users(endpoint, dagster_user, dagster_password, twodfim_user, twodfim_password)
     create_databases(endpoint, dagster_user, twodfim_user)
     apply_schema(endpoint, schema_dir)
-    grant_permissions(endpoint, dagster_user, twodfim_user)
+    grant_permissions(endpoint, twodfim_user)
 
     print("\nDone. Databases ready.")
 
