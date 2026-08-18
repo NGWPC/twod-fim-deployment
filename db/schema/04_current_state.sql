@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS current_state(
     reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     identity_hash char(8) CONSTRAINT current_state_identity_hash_chk CHECK (identity_hash IS NULL OR identity_hash ~ '^[0-9a-f]{8}$'),
-    domain_code text CONSTRAINT current_state_domain_code_chk CHECK (domain_code IS NULL OR domain_code ~ '^N-?(0|[1-9][0-9]*)S-?(0|[1-9][0-9]*)E-?(0|[1-9][0-9]*)W-?(0|[1-9][0-9]*)$'),
+    domain_code text CONSTRAINT current_state_domain_code_chk CHECK (domain_code IS NULL OR domain_code ~ '^N(0|[1-9][0-9]*)S(0|[1-9][0-9]*)E(0|[1-9][0-9]*)W(0|[1-9][0-9]*)$'),
     model_id text GENERATED ALWAYS AS ( CASE WHEN identity_hash IS NULL OR domain_code IS NULL THEN
         NULL
     ELSE
