@@ -1,3 +1,46 @@
+-- 01_reach_network.sql
+--
+-- The network as an input: the reaches, and the water bodies they drain into.
+-- All of it comes from the hydrofabric and the network-modification step; none
+-- of it is derived by the reconciler.
+--
+-- Defined in one file because reach_network references the polygon tables, and
+-- splitting them across files makes the load order depend on how the shell
+-- sorts filenames — which is locale-dependent, and put 00a before 00_ here.
+-- ---------------------------------------------------------------------------
+-- Water bodies and coastal zones the network drains into.
+--
+-- These are inputs, like reach_network: produced upstream by the hydrofabric and
+-- network-modification step, never derived by the reconciler.
+--
+-- They exist because a reach's downstream boundary condition needs a polygon
+-- saying where the outflow applies. For an ordinary reach that polygon is the
+-- inundated area of the reach below it. For a terminal reach there is no reach
+-- below, and the polygon comes from whatever the reach terminates into — a lake
+-- or the coast.
+--
+-- The hydraulic jobs take a path, not geometry, so the loader also writes each
+-- polygon to storage as GeoJSON. These rows are the record of what was loaded;
+-- the exported files are what the jobs read.
+CREATE TABLE IF NOT EXISTS lakes(
+    lake_id text PRIMARY KEY,
+    geom geometry(MultiPolygon, 5070) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS lakes_geom_gix ON lakes USING GIST(geom);
+
+COMMENT ON TABLE lakes IS 'Water bodies the network drains into. A reach terminating at a lake uses its polygon as the outflow area for the downstream boundary condition.';
+
+CREATE TABLE IF NOT EXISTS coasts(
+    coast_id text PRIMARY KEY,
+    geom geometry(MultiPolygon, 5070) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS coasts_geom_gix ON coasts USING GIST(geom);
+
+COMMENT ON TABLE coasts IS 'Coastal zones the network drains into. Same role as lakes for reaches terminating at the coast.';
+
+-- ---------------------------------------------------------------------------
 -- reach_network: the modeling (operational) network after network modification
 -- Deferred:
 -- merged_reaches   modeling-reach <- source-reach merge traceback
@@ -26,12 +69,31 @@ CREATE TABLE IF NOT EXISTS reach_network(
     is_trimmed boolean NOT NULL DEFAULT FALSE,
     total_da_sqkm double precision,
     stream_order integer,
+    length_km double precision,
+    -- Reach centerline slope. Still required because build_model reads it
+    -- (REACH_FIELDS in twod-fim-jobs) and records it as the model's
+    -- properties.slope, which becomes the normal-depth boundary condition. The
+    -- hydrofabric no longer supplies it, so the loader writes a placeholder;
+    -- this column goes when the job stops asking for it.
     slope double precision,
+    -- What this reach terminates into, when it terminates. The polygon behind
+    -- one of these is the outflow area for the downstream boundary condition —
+    -- an ordinary reach uses the inundated area of the reach below it, a
+    -- terminal reach has no reach below and uses this instead.
+    lake_to_id text REFERENCES lakes(lake_id),
+    coast_to_id text REFERENCES coasts(coast_id),
     -- Modeling reach centerline, EPSG:5070
     geom geometry(LineString, 5070) NOT NULL,
     -- A terminal reach has no in-scope downstream link, and carries a reason.
     CONSTRAINT reach_network_terminal_link_chk CHECK (NOT is_terminal OR reach_to_id IS NULL),
-    CONSTRAINT reach_network_terminal_reason_presence_chk CHECK (is_terminal =(terminal_reason IS NOT NULL))
+    CONSTRAINT reach_network_terminal_reason_presence_chk CHECK (is_terminal =(terminal_reason IS NOT NULL)),
+    -- A reach that terminates at a lake or coast must say which one, or nothing
+    -- downstream of it can ever be run: the outflow polygon would have no
+    -- source, and the failure would surface at submit time rather than load
+    -- time. ('outlet' terminals have no polygon source at all yet — see the
+    -- note in reconciliation-loop.md.)
+    CONSTRAINT reach_network_lake_terminal_chk CHECK (terminal_reason IS DISTINCT FROM 'lake' OR lake_to_id IS NOT NULL),
+    CONSTRAINT reach_network_coast_terminal_chk CHECK (terminal_reason IS DISTINCT FROM 'coast' OR coast_to_id IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS reach_network_reach_to_id_idx ON reach_network(reach_to_id);
