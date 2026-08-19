@@ -97,6 +97,15 @@ PLUGINS_DIR='/.data/plugins'
 # --- Queue Resource Limits
 MAX_LOCAL_CPUS=''
 MAX_LOCAL_MEMORY_MB=''
+
+# --- Docker networking (host = containers use EC2 network, can access instance profile credentials)
+DOCKER_NETWORK='host'
+
+# --- build_model container env vars (BUILDMODEL_ prefix stripped before passing to container)
+BUILDMODEL_AWS_ENDPOINT_URL='https://s3.us-east-1.amazonaws.com'
+BUILDMODEL_AWS_REQUEST_PAYER='requester'
+BUILDMODEL_ARTIFACTS_S3_BUCKET='{s3_bucket}'
+BUILDMODEL_MAJOR_VERSION='1'
 """
 
 

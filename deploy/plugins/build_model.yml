@@ -36,6 +36,39 @@ inputs:
     minOccurs: 1
     maxOccurs: 1
 
+  - id: db_uri
+    title: db_uri
+    description: Database connection string for the twodfim pipeline database
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: base_output_path
+    title: base_output_path
+    description: S3 path prefix for model artifacts
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: lulc_source
+    title: lulc_source
+    description: Connection string for the LULC source dataset
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
 outputs:
   - id: plugin_results
     title: plugin_results
