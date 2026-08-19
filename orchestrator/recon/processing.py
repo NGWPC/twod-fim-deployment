@@ -4,12 +4,12 @@ Every write to `reach_processing` that is not a check request goes through
 here, so the rules about when a marker may be cleared or a revision recorded
 live in one place.
 
-Two of these writes are conditional, and that is the whole reason the loop can
-run without marking reaches as taken. `finish` records a revision only if the
-snapshot it came from is still the current one; `clear_step` clears a marker
-only if it still refers to the job that was polled. Both are compare-and-set,
-so a decision made against state that has since moved simply does not take
-effect, rather than overwriting something newer.
+Work only: whether intent is satisfied lives in the materialized_* tables,
+written by observe, so a proof can never outlive the thing it proves.
+
+clear_step stays conditional on the job reference still matching, so a slow
+status pass cannot wipe a marker belonging to a newer submission — a decision
+made against state that has since moved simply does not take effect.
 """
 
 import psycopg
@@ -107,63 +107,10 @@ def clear_step(
     return bool(db.query(sql + " RETURNING reach_id", params, conn=conn))
 
 
-def finish(
-    reach_id: int, revision: int, *, conn: psycopg.Connection | None = None
-) -> bool:
-    """Record that the gap was empty at this revision. Returns whether it took.
-
-    Only ever called when there is no gap — never per step — so this column
-    means "everything desired at this revision exists", not "some work
-    happened".
-
-    The write is conditional on the revision still being current. A check reads
-    desired_state, spends time observing storage, and only then records; if
-    intent moved during that window, recording the older revision would claim a
-    reach is satisfied at a revision whose changes it never saw, and nothing
-    would look at it again.
-    """
-    rows = db.query(
-        """
-        INSERT INTO reach_processing (reach_id, applied_revision, consecutive_failures,
-                                      next_retry_at, last_error, blocked_on_reach_id)
-        SELECT %s, %s, 0, NULL, NULL, NULL
-        FROM desired_state d WHERE d.reach_id = %s AND d.revision = %s
-        ON CONFLICT (reach_id) DO UPDATE SET
-            applied_revision = EXCLUDED.applied_revision,
-            consecutive_failures = 0,
-            next_retry_at = NULL,
-            last_error = NULL,
-            blocked_on_reach_id = NULL
-        RETURNING reach_id
-        """,
-        (reach_id, revision, reach_id, revision),
-        conn=conn,
-    )
-    return bool(rows)
-
-
-def mark_unsatisfied(reach_id: int, *, conn: psycopg.Connection | None = None) -> None:
-    """Retract a claim that this reach is satisfied.
-
-    applied_revision means "the gap was empty at this revision". The moment a
-    check finds a gap, that is no longer true — the model may have been deleted,
-    or work may simply not be finished — and leaving the old value there makes
-    reach_status report a reach as caught up while it is being rebuilt.
-
-    Called on every decision that is not NoGap, so the claim is only ever as old
-    as the last check that found nothing missing.
-    """
-    db.query(
-        "UPDATE reach_processing SET applied_revision = -1 WHERE reach_id = %s AND applied_revision <> -1",
-        (reach_id,),
-        conn=conn,
-    )
-
-
 def wait_on(
-    reach_id: int, downstream_reach_id: int, *, conn: psycopg.Connection | None = None
+    reach_id: int, downstream_reach_id: int | None, *, conn: psycopg.Connection | None = None
 ) -> None:
-    """Record which reach this one is waiting for.
+    """Record which reach this one is waiting for; None clears it.
 
     Purely so a viewer can draw the wait graph without recomputing every gap.
     The waiting reach stays a check candidate regardless; the downstream reach

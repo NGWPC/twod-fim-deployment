@@ -1,4 +1,56 @@
 -- 03_desired_state.sql
+--
+-- Intent, in two tables. desired_state holds what is authored for one reach;
+-- desired_state_defaults holds what everything falls back to. Effective intent
+-- is COALESCE(desired_state.x, desired_state_defaults.x) — which is what
+-- guide.md's "NULL means use the default source" has always implied, finally
+-- given somewhere to resolve against.
+--
+-- This matters beyond tidiness: the reconciler predicts a model's identity hash
+-- from these values to work out where its artifacts should live. Values it
+-- cannot read are values it cannot predict, and until now six of the seven
+-- identity inputs lived in the job image's defaults where nothing could see
+-- them.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS desired_state_defaults(
+    -- Exactly one row. The CHECK is what makes that true rather than hoped for.
+    id smallint PRIMARY KEY DEFAULT 1 CONSTRAINT desired_state_defaults_singleton_chk CHECK (id = 1),
+    -- ------------------------------------------------------------------
+    -- Model identity inputs. These seven values (with reach_geom_hash, which
+    -- comes from reach_network.geom) are hashed to identity_hash, which decides
+    -- the model's address in storage. Change any of them and every reach wants
+    -- a different model.
+    -- ------------------------------------------------------------------
+    sdr_commit text NOT NULL,
+    grid_resolution double precision NOT NULL,
+    epsg_code integer NOT NULL,
+    dem_source text NOT NULL,
+    lulc_source text NOT NULL,
+    lulc_lookup jsonb NOT NULL,
+    -- ------------------------------------------------------------------
+    -- Defaults for everything desired_state can author per reach.
+    -- ------------------------------------------------------------------
+    solver text NOT NULL DEFAULT 'lisflood' CONSTRAINT desired_state_defaults_solver_chk CHECK (solver IN ('lisflood', 'sfincs', 'triton')),
+    q_lower_bound integer,
+    q_upper_bound integer,
+    initial_dq_step_for_nd integer,
+    ld_q_mean_stage_delta double precision,
+    ld_q_max_stage_delta double precision,
+    ld_q_max_extent_prcnt_delta double precision,
+    ld_ds_z_delta double precision,
+    kwse_upper_bound double precision,
+    revision integer NOT NULL DEFAULT 0 -- DB owned; see 09_triggers.sql
+);
+
+COMMENT ON TABLE desired_state_defaults IS 'One row. What every reach falls back to for any field it has not authored. Holds the model identity inputs, so the reconciler can predict where a model belongs.';
+
+COMMENT ON COLUMN desired_state_defaults.sdr_commit IS 'Methodology version pin. Part of model identity: changing it means every reach wants a new model.';
+
+COMMENT ON COLUMN desired_state_defaults.lulc_lookup IS 'Land-cover to roughness mapping. Hashed into model identity, so an edit here invalidates every model.';
+
+COMMENT ON COLUMN desired_state_defaults.revision IS 'DB owned. Changing any default bumps this AND every reach revision (09_triggers.sql), because every reach effective intent changed.';
+
+-- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS desired_state(
     reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     -- Every field below is nullable on purpose: NULL = "use the default source",
@@ -10,6 +62,15 @@ CREATE TABLE IF NOT EXISTS desired_state(
     initial_dq_step_for_nd integer, -- cms
     solver text,
     CONSTRAINT desired_state_solver_chk CHECK (solver IS NULL OR solver IN ('lisflood', 'sfincs', 'triton')),
+    -- Identity inputs, overridable per reach. Rarely authored — a reach needing
+    -- a different DEM source or resolution than the rest of the network — but
+    -- the loop resolves them the same way as everything else, so a one-off does
+    -- not need special handling anywhere.
+    grid_resolution double precision,
+    epsg_code integer,
+    dem_source text,
+    lulc_source text,
+    lulc_lookup jsonb,
     model_domain geometry(polygon, 5070),
     -- override system TBD
     override_id bigint,

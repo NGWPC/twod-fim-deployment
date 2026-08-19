@@ -1,76 +1,28 @@
 -- 08_views.sql
 -- Per guide.md, what can be derived is not stored.
 --
--- Views are dropped and recreated rather than replaced, so this file has to
--- drop them in dependency order: reach_status reads reach_realized_runs, and
--- dropping the latter first fails on any database where the former already
--- exists. On a fresh boot the order is irrelevant; on a re-run it is the
--- difference between working and not.
+-- Views are dropped and recreated rather than replaced, so this file drops them
+-- in dependency order — dependents first. On a fresh boot the order is
+-- irrelevant; on a re-run against a live database it is the difference between
+-- working and not.
 DROP VIEW IF EXISTS reach_status;
-
--- ---------------------------------------------------------------------------
--- reach_realized_runs: what the ledger says has actually been realized.
--- ---------------------------------------------------------------------------
--- q_set / n_discharges: distinct library discharges for THIS reach (DR-030).
--- max_kwse         : highest known-WSE actually run on THIS reach (nd runs have
---                    kwse NULL and so are ignored by max()).
--- ds_r_max_us_wse  : the DOWNSTREAM reach's upstream WSEL (us_wse) max, which
---                    bounds this reach's KWSE library. NULL at terminals or
---                    until the downstream reach has runs.
--- Since it is a view, we drop it first and then create it.
-DROP VIEW IF EXISTS current_state_realized;
-
+-- reach_realized_runs and stale_kwse_runs are gone. The first computed
+-- aggregates from per-scenario rows; those aggregates are now stored by observe
+-- in the materialized_* tables, so there is nothing to compute. The second
+-- looked for KWSE runs whose source run had been deleted; staleness is no
+-- longer detected that way — a KWSE library's bounds are recomputed from what
+-- the downstream reach currently materializes, so a downstream change fails the
+-- span check with no provenance involved.
 DROP VIEW IF EXISTS reach_realized_runs;
 
-CREATE VIEW reach_realized_runs AS
-SELECT
-    r.reach_id,
-    array_agg(DISTINCT r.q_cms ORDER BY r.q_cms) AS q_set,
-    count(DISTINCT r.q_cms) AS n_discharges,
-    count(*) FILTER (WHERE r.bc_type = 'nd') AS nd_done,
-    count(*) FILTER (WHERE r.bc_type = 'kwse') AS kwse_done,
-    max(r.kwse) AS max_kwse,
-    (
-        SELECT
-            max(d.us_wse)
-        FROM
-            runs d
-        WHERE
-            d.reach_id = rn.reach_to_id) AS ds_r_max_us_wse
-FROM
-    runs r
-    JOIN reach_network rn ON rn.reach_id = r.reach_id
-GROUP BY
-    r.reach_id,
-    rn.reach_to_id;
-
-COMMENT ON VIEW reach_realized_runs IS 'What the runs ledger has realized per reach: discharges, counts by BC type, KWSE ceiling, and the downstream bound on this reach KWSE library.';
-
--- ---------------------------------------------------------------------------
--- stale_kwse_runs: results that exist but are no longer valid.
--- ---------------------------------------------------------------------------
--- Staleness is derived, not propagated. A kwse run records the exact downstream
--- run that supplied its BC; when the scanner removes that downstream run the
--- pointer goes NULL and the run shows up here. Nothing walks the network.
 DROP VIEW IF EXISTS stale_kwse_runs;
-
-CREATE VIEW stale_kwse_runs AS
-SELECT
-    r.*
-FROM
-    runs r
-WHERE
-    r.bc_type = 'kwse'
-    AND r.kwse_transfer_run_row_id IS NULL;
-
-COMMENT ON VIEW stale_kwse_runs IS 'KWSE runs whose source downstream run no longer exists; the gap calculation must redo these.';
 
 -- ---------------------------------------------------------------------------
 -- reach_status: one row per reach, everything a status viewer needs.
 -- ---------------------------------------------------------------------------
--- Joins intent (desired_state), what exists (current_state, runs), and what the
--- system is doing (reach_processing) so a dashboard is a single SELECT. History
--- and live feeds come from reach_activity instead.
+-- Joins intent (desired_state), what has been materialized (materialized_models),
+-- and what the system is doing (reach_processing), so a dashboard is a single
+-- SELECT. History and live feeds come from reach_activity instead.
 DROP VIEW IF EXISTS reach_status;
 
 CREATE VIEW reach_status AS
@@ -91,8 +43,6 @@ SELECT
         -- 'new' because 'new' means "not looked at yet" and this means "never
         -- will be" — a distinction anyone watching this view needs.
         'no_intent'
-    WHEN p.reach_id IS NULL THEN
-        'new'
     WHEN p.halted THEN
         'halted'
     WHEN p.current_step IS NOT NULL THEN
@@ -101,9 +51,21 @@ SELECT
         'resting'
     WHEN p.blocked_on_reach_id IS NOT NULL THEN
         'waiting_downstream'
-    WHEN d.revision IS NOT NULL
-        AND p.applied_revision >= d.revision THEN
+    WHEN mm.applied_revision >= d.revision THEN
+        -- Model intent satisfied at the current revision. This will become the
+        -- conjunction of all three claims once the run gap calculation exists —
+        -- each step carries its own revision, and a reach is finished only when
+        -- every one of them is current.
+        --
+        -- This outranks 'new' deliberately: a reach whose model is materialized
+        -- and current is finished whether or not the loop has ever looked at
+        -- it. That is the ordinary case after a database is rebuilt against a
+        -- populated bucket, and calling it 'new' would suggest work is pending
+        -- when there is none.
         'finished'
+    WHEN p.reach_id IS NULL THEN
+        -- Never looked at, and nothing materialized to say otherwise.
+        'new'
     ELSE
         'due'
     END AS state,
@@ -114,18 +76,22 @@ SELECT
     p.current_step_started_at,
     now() - p.current_step_started_at AS current_step_elapsed,
     p.current_step_ref,
-    cs.model_id,
-    cs.identity_hash,
-    cs.confirmed_at AS model_confirmed_at,
+    mm.model_id,
+    mm.identity_hash,
+    mm.domain_code,
+    mm.confirmed_at AS model_confirmed_at,
     d.revision AS desired_revision,
-    COALESCE(p.applied_revision, - 1) AS applied_revision,
-    -- TRUE when what we want has moved past what we have achieved.
-    (d.revision IS NOT NULL
-        AND COALESCE(p.applied_revision, - 1) < d.revision) AS has_gap,
-    COALESCE(rr.nd_done, 0) AS nd_done,
-    p.nd_expected,
-    COALESCE(rr.kwse_done, 0) AS kwse_done,
-    p.kwse_expected,
+    COALESCE(mm.applied_revision, - 1) AS model_applied_revision,
+    -- TRUE when intent has moved past what has been materialized. An absent
+    -- materialization row reads as -1, so "never built" and "built against
+    -- older intent" answer the same way, which is what the loop wants.
+    (d.reach_id IS NOT NULL
+        AND COALESCE(mm.applied_revision, - 1) < d.revision) AS has_gap,
+    -- Presence of a run row IS the proof that step is materialized, so these
+    -- are booleans rather than counts of anything.
+    (nd.reach_id IS NOT NULL) AS nd_materialized,
+    cardinality(nd.q_set) AS nd_discharges,
+    (kw.reach_id IS NOT NULL) AS kwse_materialized,
     p.consecutive_failures,
     p.last_error,
     p.next_retry_at,
@@ -134,8 +100,9 @@ SELECT
 FROM
     reach_network rn
     LEFT JOIN desired_state d ON d.reach_id = rn.reach_id
-    LEFT JOIN current_state cs ON cs.reach_id = rn.reach_id
+    LEFT JOIN materialized_models mm ON mm.reach_id = rn.reach_id
     LEFT JOIN reach_processing p ON p.reach_id = rn.reach_id
-    LEFT JOIN reach_realized_runs rr ON rr.reach_id = rn.reach_id;
+    LEFT JOIN materialized_nd_runs nd ON nd.reach_id = rn.reach_id
+    LEFT JOIN materialized_kwse_runs kw ON kw.reach_id = rn.reach_id;
 
 COMMENT ON VIEW reach_status IS 'One row per reach joining intent, what exists, and current work status. Backs the status viewer.';

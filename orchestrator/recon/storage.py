@@ -51,20 +51,23 @@ def model_artifact_path(reach_id: int, model_id: str) -> str:
 MANIFEST_FILENAME = "model_manifest.json"
 
 
-def list_subfolders(path: str) -> list[str]:
+def list_subfolders(path: str, prefix: str = "") -> list[str]:
     """Immediate child "folder" names under an s3:// prefix.
 
-    One LIST rather than one HEAD per candidate, which is what keeps observing a
-    reach cheap enough to do on every check.
+    `prefix` narrows to children whose name starts with it — with a predicted
+    identity hash this makes observation a lookup at a known address rather
+    than a scan of candidates.
     """
-    bucket, prefix = parse_s3_path(path)
-    prefix = prefix + "/" if prefix else ""
+    bucket, base = parse_s3_path(path)
+    dir_prefix = base + "/" if base else ""
     s3 = get_s3_client()
     names = []
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+    for page in paginator.paginate(Bucket=bucket, Prefix=dir_prefix + prefix, Delimiter="/"):
         for entry in page.get("CommonPrefixes", []):
-            names.append(entry["Prefix"][len(prefix):].rstrip("/"))
+            # Slice off the directory, not the narrowing prefix: callers get
+            # the child's full name either way.
+            names.append(entry["Prefix"][len(dir_prefix):].rstrip("/"))
     return names
 
 

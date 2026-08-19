@@ -66,11 +66,13 @@ def table_counts(*, conn: psycopg.Connection | None = None) -> list[Row]:
     return query(
         """
         SELECT 'reach_network' AS table_name, count(*) AS rows FROM reach_network
-        UNION ALL SELECT 'desired_state',    count(*) FROM desired_state
-        UNION ALL SELECT 'current_state',    count(*) FROM current_state
-        UNION ALL SELECT 'runs',             count(*) FROM runs
-        UNION ALL SELECT 'reach_processing', count(*) FROM reach_processing
-        UNION ALL SELECT 'reach_activity',   count(*) FROM reach_activity
+        UNION ALL SELECT 'desired_state_defaults', count(*) FROM desired_state_defaults
+        UNION ALL SELECT 'desired_state',          count(*) FROM desired_state
+        UNION ALL SELECT 'materialized_models',    count(*) FROM materialized_models
+        UNION ALL SELECT 'materialized_nd_runs',   count(*) FROM materialized_nd_runs
+        UNION ALL SELECT 'materialized_kwse_runs', count(*) FROM materialized_kwse_runs
+        UNION ALL SELECT 'reach_processing',       count(*) FROM reach_processing
+        UNION ALL SELECT 'reach_activity',         count(*) FROM reach_activity
         ORDER BY table_name
         """,
         conn=conn,

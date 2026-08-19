@@ -52,7 +52,7 @@ Three constraints that change how the sensor should be written:
 
 See [`db/schema/`](../db/schema/) for full definitions.
 
-- `current_state.model_id` is `GENERATED ALWAYS` from `identity_hash _ domain_code` — never written directly ([`04_current_state.sql`](../db/schema/04_current_state.sql))
+- `materialized_models.model_id` is `GENERATED ALWAYS` from `identity_hash _ domain_code` — never written directly ([`04_materialized_models.sql`](../db/schema/04_materialized_models.sql))
 - `desired_state.revision` is DB-owned and per reach: 0 on insert, +1 on any real change ([`09_triggers.sql`](../db/schema/09_triggers.sql))
 - Work tracking lives in `reach_processing`, which stores only `halted`; every other state is derived by the `reach_status` view ([`07_reach_processing.sql`](../db/schema/07_reach_processing.sql))
 - `applied_revision` is set only when the gap is empty, never per step, and is retracted the moment a gap reappears

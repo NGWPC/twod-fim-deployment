@@ -9,7 +9,11 @@
 -- separate from current_state (04) and runs (05). Those two describe what
 -- exists; these two describe what the system is doing.
 -- ---------------------------------------------------------------------------
--- reach_processing: where each reach currently stands
+-- reach_processing: what the loop is DOING to each reach
+--
+-- Work only. Whether intent has been satisfied is not recorded here — it lives
+-- in the materialized_* tables, beside the thing it makes a claim about, so
+-- that removing a materialization removes the claim in the same statement.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS reach_processing(
     reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
@@ -29,9 +33,6 @@ CREATE TABLE IF NOT EXISTS reach_processing(
     -- the gap. Such a reach stays a check candidate: the downstream reach asks
     -- for a check here when it finishes, and the sweep finds it regardless.
     blocked_on_reach_id bigint REFERENCES reach_network(reach_id) ON DELETE SET NULL,
-    -- Highest desired_state.revision FULLY satisfied (gap empty at that revision).
-    -- Set only when the gap is empty, never per step.
-    applied_revision integer NOT NULL DEFAULT - 1,
     -- ------------------------------------------------------------------
     -- The job in flight (NULL when none is). A check submits a job, records it
     -- here, and ends — it does NOT wait. A later check reads
@@ -50,15 +51,6 @@ CREATE TABLE IF NOT EXISTS reach_processing(
     -- decides a job is dead reads started_at, and it must be there whenever a
     -- step is in flight.
     CONSTRAINT reach_processing_step_pair_chk CHECK ((current_step IS NULL) = (current_step_started_at IS NULL)),
-    -- ------------------------------------------------------------------
-    -- Expected scenario counts, so a viewer can show "12 of 20" without
-    -- rerunning the gap calculation. Only the expected side is stored: it is an
-    -- output of the gap calculation and cannot be recovered from any other
-    -- table. The done side IS derivable (count rows in runs) and so, per
-    -- guide.md, is not stored — reach_status computes it.
-    -- ------------------------------------------------------------------
-    nd_expected integer,
-    kwse_expected integer,
     -- ------------------------------------------------------------------
     -- Check scheduling. Asking for a check = set check_requested_at to now().
     -- A check is due when check_requested_at > last_checked_at. Because it is a
@@ -97,15 +89,13 @@ CREATE INDEX IF NOT EXISTS reach_processing_blocked_on_idx ON reach_processing(b
 WHERE
     blocked_on_reach_id IS NOT NULL;
 
-COMMENT ON TABLE reach_processing IS 'Current work status per reach: what is in flight, retries, expected counts. The reconciler''s own notes; not rebuildable from storage. Stores no status beyond halted — reach_status derives the rest.';
+COMMENT ON TABLE reach_processing IS 'What the loop is doing to each reach: the job in flight, retries, halted. The reconciler''s own notes; not rebuildable from storage. Holds nothing about whether intent is satisfied — that lives in the materialized_* tables.';
 
 COMMENT ON COLUMN reach_processing.halted IS 'Failed too many times; excluded from the candidate query until a person clears it. The only stored status, because it is the only one not derivable.';
 
 COMMENT ON COLUMN reach_processing.halted_at IS 'When the reach was parked, so ops can see how long it has been waiting on a person.';
 
 COMMENT ON COLUMN reach_processing.blocked_on_reach_id IS 'Reach whose results are needed before this reach can continue; non-NULL is what "waiting downstream" means.';
-
-COMMENT ON COLUMN reach_processing.applied_revision IS 'Highest desired_state.revision fully satisfied. Set only when the gap is empty; -1 = never.';
 
 COMMENT ON COLUMN reach_processing.current_step IS 'Job in flight; NULL when none is. Written when a check submits, cleared by the job status pass or by the check that observes the output. It is what tells a later check that work is already underway.';
 
@@ -114,10 +104,6 @@ COMMENT ON COLUMN reach_processing.current_step_started_at IS 'When the in-fligh
 COMMENT ON COLUMN reach_processing.current_step_ref IS 'External execution id for the running step, so a viewer can link to its logs.';
 
 COMMENT ON COLUMN reach_processing.current_step_revision IS 'desired_state.revision the running step targets; if desired_state moves past it the step is superseded.';
-
-COMMENT ON COLUMN reach_processing.nd_expected IS 'Scenario points the last gap calculation expected for nd; done side is counted from runs.';
-
-COMMENT ON COLUMN reach_processing.kwse_expected IS 'Scenario points the last gap calculation expected for kwse; done side is counted from runs.';
 
 COMMENT ON COLUMN reach_processing.check_requested_at IS 'Set to now() to ask for a check. Due when greater than last_checked_at. Many requests collapse into one check.';
 

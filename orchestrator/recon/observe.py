@@ -1,110 +1,93 @@
-"""Look at storage, and make current_state say what is really there.
+"""Look where intent says this reach's model should be, and record what is true.
 
-The first step of every check, and the only way anything is ever recorded. A
-job's return value is not evidence: a job can report success and leave nothing
-behind, and a file can vanish with no job involved at all. So the loop believes
-its eyes.
+Intent implies an identity (identity.py); the identity implies an address; this
+module looks at that address. A lookup, not a search: a model built from other
+inputs may sit in the bucket beside it, and it is a previous intent's leftovers,
+not this reach's state — nothing here sorts candidates or picks a newest.
 
-Because it is the only writer of what exists, one function decides what
-"exists" means, and recording a finished job and noticing a deletion are the
-same code running in two directions. See reconciliation-loop.md, "Tracking
-Storage Changes and Staleness".
+The materialized_models row this writes is PROOF that model intent is
+materialized, stamped with the revision it proves. Finding nothing at the
+address deletes the row, which retracts the proof in the same statement — this
+is the only writer of that table, so recording a finished job and noticing a
+deletion are one mechanism seen from two sides.
 
-A model counts as existing when its manifest is present. build_model writes
-that file last, so a half-written model has artifacts but no manifest, and is
-correctly invisible.
+A model counts as existing when its manifest is present and sound. build_model
+writes model_manifest.json last, so a half-written build has artifacts but no
+manifest and is correctly invisible; a manifest that fails verification
+(belongs to another reach, or its identity does not hash to what it claims) is
+treated as absent and reported, never adopted.
 """
 
-import re
+import logging
 
 import psycopg
 
-from recon import db, storage
+from recon import db, identity, intent, storage
 
-MODEL_ID_RE = re.compile(
-    r"^(?P<identity_hash>[0-9a-f]{8})_(?P<domain_code>N\d+S\d+E\d+W\d+)$"
-)
-
-
-def _models_in_storage(reach_id: int) -> list[dict]:
-    """Every complete model in storage for this reach, newest last.
-
-    Folder names are parsed rather than opened: the paths are self-documenting
-    by design (guide.md), so the name is a fact, not a guess. The manifest is
-    still read, because it carries what the path cannot: twod_fim_version, which
-    is the provenance a selective rollback needs, and created_at, which orders
-    rebuilds.
-    """
-    base = storage.model_base_path(reach_id)
-    found = []
-    for name in storage.list_subfolders(base):
-        parsed = MODEL_ID_RE.match(name)
-        if parsed is None:
-            continue  # not a model folder; leave whatever it is alone
-        manifest = storage.read_json(f"{base}/{name}/{storage.MANIFEST_FILENAME}")
-        if manifest is None:
-            continue  # build never finished; the model does not exist yet
-        found.append(
-            {
-                "model_id": name,
-                "identity_hash": parsed["identity_hash"],
-                "domain_code": parsed["domain_code"],
-                "build_model_version": manifest.get("twod_fim_version"),
-                "created_at": manifest.get("created_at") or "",
-            }
-        )
-    found.sort(key=lambda m: m["created_at"])
-    return found
+logger = logging.getLogger(__name__)
 
 
 def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
-    """Reconcile current_state for one reach against storage.
+    """Reconcile materialized_models for one reach against storage.
 
-    Returns what was seen and what changed, so a caller can log it and a
-    notebook can show it.
-
-    When several models exist — a rebuild under a new identity, say — the newest
-    by build time is the one recorded. current_state holds one model per reach,
-    so it can only name one; the others stay in storage until a lifecycle policy
-    or a person removes them.
+    Returns what happened, for the check to log and a notebook to show:
+      predicted   the identity hash intent implies (None if no intent)
+      found       the model_id adopted, or None
+      changed     whether the table was altered
+      refused     verification problems, when a manifest was found but not trusted
     """
-    models = _models_in_storage(reach_id)
-    before = db.one(
-        "SELECT identity_hash, domain_code, model_id FROM current_state WHERE reach_id = %s",
-        (reach_id,),
-        conn=conn,
-    )
+    wanted = intent.effective(reach_id, conn=conn)
+    if wanted is None:
+        # No intent, nothing to be materialized; retract any stale proof.
+        removed = bool(db.query(
+            "DELETE FROM materialized_models WHERE reach_id = %s RETURNING reach_id",
+            (reach_id,), conn=conn))
+        return {"reach_id": reach_id, "predicted": None, "found": None,
+                "changed": removed, "note": "no effective intent"}
 
-    if not models:
-        # Nothing there. If we previously said there was, that is a deletion,
-        # and the gap it opens is what rebuilds the model.
-        removed = bool(
-            db.query(
-                "DELETE FROM current_state WHERE reach_id = %s RETURNING reach_id",
-                (reach_id,),
-                conn=conn,
-            )
-        )
-        return {"reach_id": reach_id, "model": None, "changed": removed,
+    _, predicted = identity.model_identity(wanted)
+    base = storage.model_base_path(reach_id)
+
+    found_model_id, refused = None, []
+    for name in storage.list_subfolders(base, prefix=f"{predicted}_"):
+        manifest = storage.read_json(f"{base}/{name}/{storage.MANIFEST_FILENAME}")
+        if manifest is None:
+            continue  # build not finished; the manifest is written last
+        problems = identity.verify_manifest(manifest, reach_id, predicted)
+        if problems:
+            refused.append({"folder": name, "problems": problems})
+            logger.warning("refused manifest at %s/%s: %s", base, name, problems)
+            continue
+        found_model_id = name
+        break
+
+    before = db.one("SELECT model_id, applied_revision FROM materialized_models WHERE reach_id = %s",
+                    (reach_id,), conn=conn)
+
+    if found_model_id is None:
+        removed = bool(db.query(
+            "DELETE FROM materialized_models WHERE reach_id = %s RETURNING reach_id",
+            (reach_id,), conn=conn))
+        return {"reach_id": reach_id, "predicted": predicted, "found": None,
+                "changed": removed, "refused": refused,
                 "was": before["model_id"] if before else None}
 
-    newest = models[-1]
+    identity_hash, _, domain_code = found_model_id.partition("_")
     db.query(
         """
-        INSERT INTO current_state (reach_id, identity_hash, domain_code,
-                                   build_model_version, confirmed_at)
+        INSERT INTO materialized_models (reach_id, identity_hash, domain_code, applied_revision, confirmed_at)
         VALUES (%s, %s, %s, %s, now())
         ON CONFLICT (reach_id) DO UPDATE SET
             identity_hash = EXCLUDED.identity_hash,
             domain_code = EXCLUDED.domain_code,
-            build_model_version = EXCLUDED.build_model_version,
+            applied_revision = EXCLUDED.applied_revision,
             confirmed_at = now()
         """,
-        (reach_id, newest["identity_hash"], newest["domain_code"],
-         newest["build_model_version"]),
+        (reach_id, identity_hash, domain_code, wanted["revision"]),
         conn=conn,
     )
-    changed = before is None or before["model_id"] != newest["model_id"]
-    return {"reach_id": reach_id, "model": newest["model_id"], "changed": changed,
-            "was": before["model_id"] if before else None,
-            "others_in_storage": [m["model_id"] for m in models[:-1]]}
+    changed = before is None or before["model_id"] != found_model_id \
+        or before["applied_revision"] != wanted["revision"]
+    return {"reach_id": reach_id, "predicted": predicted, "found": found_model_id,
+            "changed": changed, "refused": refused,
+            "was": before["model_id"] if before else None}

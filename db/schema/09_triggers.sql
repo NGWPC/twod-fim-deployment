@@ -63,6 +63,42 @@ CREATE TRIGGER desired_state_forget_applied
     FOR EACH ROW
     EXECUTE FUNCTION forget_applied_revision();
 
+-- Changing a default changes every reach's effective intent, because effective
+-- intent is COALESCE(desired_state.x, desired_state_defaults.x). So every reach
+-- revision moves. That is not a convenience — it is the same statement, said
+-- about every row it applies to.
+--
+-- One mechanism rather than two: the loop compares one revision per reach and
+-- never has to reason about a second, global counter running alongside it. The
+-- cost is a bulk UPDATE, paid only when a deployment-wide value changes, which
+-- is exactly the moment a full re-check is wanted anyway.
+CREATE OR REPLACE FUNCTION bump_all_reach_revisions()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.revision := OLD.revision + 1;
+    -- Touch every reach. Incrementing revision is what makes each row DISTINCT
+    -- from its old self, which is what lets desired_state's own BEFORE UPDATE
+    -- trigger fire; that trigger then computes the same value authoritatively.
+    -- A no-op touch (SET reach_id = reach_id) would be suppressed by that
+    -- trigger's WHEN (OLD.* IS DISTINCT FROM NEW.*) guard and bump nothing.
+    UPDATE desired_state
+    SET revision = revision + 1;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS desired_state_defaults_bump_all ON desired_state_defaults;
+
+CREATE TRIGGER desired_state_defaults_bump_all
+    BEFORE UPDATE ON desired_state_defaults
+    FOR EACH ROW
+    WHEN (OLD.* IS DISTINCT FROM NEW.*)
+    EXECUTE FUNCTION bump_all_reach_revisions();
+
+COMMENT ON FUNCTION bump_all_reach_revisions() IS 'BEFORE UPDATE on desired_state_defaults: every reach effective intent changed, so every reach revision moves.';
+
 DROP SEQUENCE IF EXISTS desired_state_revision_seq;
 
 COMMENT ON FUNCTION set_desired_state_revision() IS 'BEFORE INSERT/UPDATE on desired_state: revision starts at 0 and increments per reach on any real change.';
