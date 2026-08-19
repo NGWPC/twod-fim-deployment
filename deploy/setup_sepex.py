@@ -205,7 +205,10 @@ def write_config(install_dir, rds_address, sepex_password, s3_bucket, repo_url):
         db_name=SEPEX_DB,
         s3_bucket=s3_bucket,
     )
+    # The .env contains the DB password in POSTGRES_CONN_STRING because SEPEX
+    # reads it as a single connection string. File permissions restrict access.
     env_path = install_dir / ".env"
+    env_path.touch(mode=0o600, exist_ok=True)
     env_path.write_text(env_content)
     print(f"  Wrote {env_path}")
 
