@@ -3,6 +3,32 @@
 Manual deployment of SEPEX alongside the twod-fim orchestrator.
 SEPEX is not managed by Terraform - it runs on a separate EC2 instance with its own security group.
 
+## Rebuilding after terraform destroy
+
+SEPEX depends on Terraform-managed resources (RDS, security groups, Batch job definitions).
+A `terraform destroy` + `apply` cycle recreates these with new IDs and addresses, which breaks SEPEX:
+
+- RDS is destroyed - the `sepex` database and connection string are gone
+- Orchestrator, Lambda, and RDS security groups get new IDs - SEPEX SG rules become stale
+- Batch job definitions and queues are recreated - plugin references may break
+
+**Destroy SEPEX first, then follow this guide from scratch after `terraform apply`:**
+
+```bash
+# 1. Terminate the SEPEX instance
+aws ec2 terminate-instances --instance-ids <sepex-instance-id> --profile sandbox
+
+# 2. Delete the SEPEX security group (wait for instance to terminate)
+aws ec2 delete-security-group --group-id <sepex-sg-id> --profile sandbox
+
+# 3. Terraform rebuild
+cd infra/terraform/app
+terraform destroy
+terraform apply
+
+# 4. Follow this guide from "Create security group" onward
+```
+
 ## Prerequisites
 
 - twod-fim app stack deployed (`terraform apply` on `infra/terraform/app/`)
@@ -10,6 +36,7 @@ SEPEX is not managed by Terraform - it runs on a separate EC2 instance with its 
 - Values from the orchestrator instance:
   - VPC ID, subnet ID, instance profile ARN
   - Orchestrator security group ID
+  - Lambda security group ID
   - RDS security group ID, RDS address
 - AMI ID from `ec2_ami_id` in `infra/terraform/app/terraform.tfvars`
 
@@ -28,6 +55,11 @@ aws ec2 describe-instances \
 # RDS security group:
 aws ec2 describe-security-groups \
   --filters 'Name=group-name,Values=twod-fim-rds*' \
+  --query 'SecurityGroups[0].GroupId' --output text --profile sandbox
+
+# Lambda security group (for Batch status callback):
+aws ec2 describe-security-groups \
+  --filters 'Name=group-name,Values=twod-fim-lambda*' \
   --query 'SecurityGroups[0].GroupId' --output text --profile sandbox
 ```
 
@@ -53,6 +85,13 @@ aws ec2 authorize-security-group-ingress \
   --source-group <orchestrator-sg-id> \
   --profile sandbox
 
+# Allow Lambda (Batch status callback) to reach SEPEX API (port 80)
+aws ec2 authorize-security-group-ingress \
+  --group-id <sepex-sg-id> \
+  --protocol tcp --port 80 \
+  --source-group <lambda-sg-id> \
+  --profile sandbox
+
 # Allow SEPEX to reach RDS (port 5432)
 aws ec2 authorize-security-group-ingress \
   --group-id <rds-sg-id> \
@@ -61,8 +100,8 @@ aws ec2 authorize-security-group-ingress \
   --profile sandbox
 ```
 
-Note: the RDS SG rule is added manually to a Terraform-managed SG.
-Running `terraform apply` on the app stack will remove it - re-add after each apply.
+Note: the RDS and Lambda SG rules reference Terraform-managed SGs.
+Running `terraform apply` on the app stack may recreate those SGs with new IDs - re-add these rules after each apply.
 
 ## 2. Launch EC2 instance
 
