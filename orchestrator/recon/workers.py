@@ -1,11 +1,12 @@
-"""Container runner for build_model.
+"""Container runners for the job images.
 
-The asset layer calls these -- swapping the runner implementation
-does not require changes to the orchestrator dispatch code.
+The loop calls these through the ContainerRunner protocol, so swapping the
+runner — local Docker now, AWS Batch or SEPEX later — changes nothing above it.
 """
 
 import json
 import logging
+import os
 import re
 import subprocess
 import uuid
@@ -15,7 +16,66 @@ from typing import Protocol
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from recon.config import settings
+
 logger = logging.getLogger(__name__)
+
+
+def job_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment every job container needs to reach this deployment.
+
+    Two S3 clients live inside these images and they are configured separately,
+    which is not obvious and costs an afternoon to discover:
+
+      boto3  reads AWS_ENDPOINT_URL. Used for copying artifacts in and out.
+      GDAL   ignores it entirely. run_nd_scenarios loads the inflow line,
+             centerline and outflow polygon with geopandas, which goes through
+             pyogrio to GDAL, so those reads need GDAL's own variables. Without
+             them GDAL resolves an s3:// path against real AWS and returns 403
+             — an authentication error whose real cause is the endpoint.
+
+    AWS_VIRTUAL_HOSTING=FALSE forces path-style addressing (MinIO does not serve
+    bucket-as-subdomain), and AWS_HTTPS=NO allows the plain-http endpoint.
+
+    Credentials are passed through from the environment when present, so the
+    same code works against real S3 with a role and no keys.
+
+    AWS_REQUEST_PAYER is deliberately NOT passed. It is only needed to read a
+    requester-pays source bucket — the /vsis3 land-cover mosaic the job images
+    default to — and sending it at an object store that does not implement
+    request payment can fail the reads that matter here. A deployment whose
+    dem_source or lulc_source lives in a requester-pays bucket should add it
+    through `extra` for build_model.
+    """
+    endpoint = settings.aws_endpoint_url_for_jobs
+    host = endpoint.split("://", 1)[-1]
+    env = {
+        "AWS_ENDPOINT_URL": endpoint,
+        "AWS_S3_ENDPOINT": host,
+        "AWS_VIRTUAL_HOSTING": "FALSE",
+        "AWS_HTTPS": "NO" if endpoint.startswith("http://") else "YES",
+    }
+    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+                "AWS_REGION", "AWS_DEFAULT_REGION"):
+        if os.environ.get(key):
+            env[key] = os.environ[key]
+    return {**env, **(extra or {})}
+
+
+def reach_of(payload: dict) -> str:
+    """The reach a payload is for, whichever job's payload it is.
+
+    build_model takes a reach id outright; run_nd_scenarios only ever sees
+    paths. Both are addresses the loop built, so the reach is recoverable
+    either way — and it belongs in the container name, because "which reach is
+    this?" is the first question anyone asks of a running job.
+    """
+    if payload.get("reach_id") is not None:
+        return str(payload["reach_id"])
+    path = payload.get("model_manifest_path", "")
+    if "/reach=" in path:
+        return path.split("/reach=")[1].split("/")[0]
+    return "unknown"
 
 IDENTITY_HASH_RE = re.compile(r"^[0-9a-f]{8}$")
 DOMAIN_CODE_RE = re.compile(r"^N(0|[1-9][0-9]*)S(0|[1-9][0-9]*)E(0|[1-9][0-9]*)W(0|[1-9][0-9]*)$")
@@ -98,17 +158,24 @@ class LocalDockerRunner:
 
     def __init__(
         self,
-        image: str,
+        image: str | None = None,
+        images: dict[str, str] | None = None,
         network: str = "twodfim",
         env_vars: dict[str, str] | None = None,
         timeout: int = 3600,
         platform: str | None = None,
         volumes: list[str] | None = None,
     ):
-        self.image = image
+        self.image = image or settings.build_model_image
         # One image per job: the job name is baked into each image's ENTRYPOINT
         # (twod_fim_jobs <job>), so only the payload is passed at run time.
-        self.images = {"build_model": image}
+        # `images` overrides per step, for trying a candidate build of one job
+        # without disturbing the rest.
+        self.images = {
+            "build_model": self.image,
+            "run_nd_scenarios": settings.run_nd_scenarios_image,
+            **(images or {}),
+        }
         self.network = network
         self.env_vars = env_vars or {}
         self.timeout = timeout
@@ -203,15 +270,15 @@ class LocalDockerRunner:
         if image is None:
             raise ValueError(f"no image configured for job {job!r}")
 
-        name = f"{job.replace('_', '-')}-{payload.get('reach_id', 'unknown')}-{uuid.uuid4().hex[:8]}"
+        name = f"{job.replace('_', '-')}-{reach_of(payload)}-{uuid.uuid4().hex[:8]}"
         cmd = ["docker", "run", "-d", *self._run_args(name), image,
                json.dumps(payload, separators=(",", ":"))]
 
-        logger.info("Submitting %s for reach %s", job, payload.get("reach_id"))
+        logger.info("Submitting %s for reach %s", job, reach_of(payload))
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             raise RuntimeError(f"could not start {job} for reach "
-                               f"{payload.get('reach_id')}: {proc.stderr[-2000:]}")
+                               f"{reach_of(payload)}: {proc.stderr[-2000:]}")
         return proc.stdout.strip()
 
     def poll(self, ref: str) -> JobStatus:

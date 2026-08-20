@@ -66,6 +66,8 @@ def table_counts(*, conn: psycopg.Connection | None = None) -> list[Row]:
     return query(
         """
         SELECT 'reach_network' AS table_name, count(*) AS rows FROM reach_network
+        UNION ALL SELECT 'lakes',                 count(*) FROM lakes
+        UNION ALL SELECT 'coasts',                count(*) FROM coasts
         UNION ALL SELECT 'desired_state_defaults', count(*) FROM desired_state_defaults
         UNION ALL SELECT 'desired_state',          count(*) FROM desired_state
         UNION ALL SELECT 'materialized_models',    count(*) FROM materialized_models

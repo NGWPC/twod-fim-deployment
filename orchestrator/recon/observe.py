@@ -18,6 +18,7 @@ manifest and is correctly invisible; a manifest that fails verification
 treated as absent and reported, never adopted.
 """
 
+import json
 import logging
 
 import psycopg
@@ -91,3 +92,120 @@ def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> d
     return {"reach_id": reach_id, "predicted": predicted, "found": found_model_id,
             "changed": changed, "refused": refused,
             "was": before["model_id"] if before else None}
+
+
+def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
+    """Reconcile materialized_nd_runs for one reach against storage.
+
+    Half lookup, half listing, and the split is the point. Intent fixes the
+    address down to the slope — model identity, run identity, `nd=<slope>` —
+    so getting there is a prediction. What discharges live under it is not
+    intent's to say: the adaptive step algorithm decides which are hydraulically
+    distinct enough to keep, so the loop reads the q set back and judges it.
+
+    Judged how: the library must SPAN the authored discharge range. Density
+    (the `ld_q_*` deltas guide.md also calls for) is not checked, because the
+    job does not take those deltas as inputs at all — it uses thresholds
+    compiled into its image, so there is nothing for the loop to hold it to yet.
+    Checking span alone is the honest subset; tightening it is a one-line change
+    here once the job accepts the deltas.
+
+    Anything short of a whole, verified library writes no row. A row is proof,
+    and proof of a partial library is not a smaller proof — it is none.
+
+    Returns what happened, for the check to log and a notebook to show.
+    """
+    out: dict = {"reach_id": reach_id, "step": "nd", "found": None, "changed": False}
+    before = db.one("SELECT run_identity_hash, q_set, applied_revision FROM materialized_nd_runs"
+                    " WHERE reach_id = %s", (reach_id,), conn=conn)
+
+    def retract(note: str) -> dict:
+        removed = bool(db.query(
+            "DELETE FROM materialized_nd_runs WHERE reach_id = %s RETURNING reach_id",
+            (reach_id,), conn=conn))
+        return {**out, "changed": removed, "note": note}
+
+    wanted = intent.effective(reach_id, conn=conn)
+    if wanted is None:
+        return retract("no effective intent")
+
+    # Runs are addressed under the model they were run against, so a reach
+    # whose model intent is not itself materialized has nowhere to look. The
+    # model rung will be the gap in that case anyway.
+    _, predicted_model = identity.model_identity(wanted)
+    model = db.one("SELECT identity_hash, model_id FROM materialized_models WHERE reach_id = %s",
+                   (reach_id,), conn=conn)
+    if model is None:
+        return retract("no materialized model")
+    if model["identity_hash"] != predicted_model:
+        return retract(f"materialized model {model['identity_hash']} is not the "
+                       f"{predicted_model} intent now implies")
+
+    _, run_hash = identity.run_identity(wanted)
+    slope = intent.boundary_slope(reach_id, conn=conn)
+    if slope is None:
+        return retract("no downstream boundary slope, so no library address to look at")
+    library = storage.nd_library_path(reach_id, model["identity_hash"], run_hash, slope)
+    out.update({"predicted": run_hash, "library": library})
+
+    discharges = sorted(
+        q for q in (identity.parse_q_folder(n) for n in storage.list_subfolders(library))
+        if q is not None
+    )
+    if not discharges:
+        return retract("no scenarios in library")
+
+    lower, upper = wanted["q_lower_bound"], wanted["q_upper_bound"]
+    if lower is None or upper is None:
+        return retract("discharge range is unauthored, so nothing can satisfy it")
+    if min(discharges) > lower or max(discharges) < upper:
+        return retract(f"library spans {min(discharges)}-{max(discharges)}, "
+                       f"intent asks for {lower}-{upper}")
+
+    # Every scenario must be readable and sound before any of them counts. The
+    # job publishes the max-q run last, so a library caught mid-publish usually
+    # fails the span check above and never reaches this loop.
+    curve, refused = [], []
+    for q in discharges:
+        path = f"{library}/{identity.q_folder(q)}/{storage.SCENARIO_MANIFEST_FILENAME}"
+        manifest = storage.read_json(path)
+        if manifest is None:
+            return {**retract(f"scenario q={q} has no manifest yet"), "refused": refused}
+        problems = identity.verify_scenario_manifest(
+            manifest, reach_id, run_hash, model["model_id"], q)
+        if problems:
+            refused.append({"q": q, "problems": problems})
+            logger.warning("refused scenario manifest at %s: %s", path, problems)
+            return {**retract(f"scenario q={q} refused"), "refused": refused}
+        curve.append({"q": q, "wse": float(manifest["properties"]["nominal_wse"])})
+
+    # The values the reach ABOVE will need, at this reach's upstream end. One
+    # ND run per discharge, so the minimum WSE at a discharge is simply that
+    # run's — the curve gains other members only when KWSE runs join it.
+    us_wse_max = max(point["wse"] for point in curve)
+
+    db.query(
+        """
+        INSERT INTO materialized_nd_runs
+            (reach_id, model_identity_hash, run_identity_hash, q_set,
+             us_wse_max, us_min_wse_curve, applied_revision, confirmed_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+        ON CONFLICT (reach_id) DO UPDATE SET
+            model_identity_hash = EXCLUDED.model_identity_hash,
+            run_identity_hash   = EXCLUDED.run_identity_hash,
+            q_set               = EXCLUDED.q_set,
+            us_wse_max          = EXCLUDED.us_wse_max,
+            us_min_wse_curve    = EXCLUDED.us_min_wse_curve,
+            applied_revision    = EXCLUDED.applied_revision,
+            confirmed_at        = now()
+        """,
+        (reach_id, model["identity_hash"], run_hash, discharges,
+         us_wse_max, json.dumps(curve), wanted["revision"]),
+        conn=conn,
+    )
+    changed = (before is None
+               or before["run_identity_hash"] != run_hash
+               or list(before["q_set"]) != discharges
+               or before["applied_revision"] != wanted["revision"])
+    return {**out, "found": f"{len(discharges)} scenarios", "q_set": discharges,
+            "us_wse_max": us_wse_max, "changed": changed, "refused": refused}

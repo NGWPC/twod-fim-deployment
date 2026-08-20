@@ -44,6 +44,16 @@ LAKES_LAYER = "lakes_polygons"
 # `nd=` path component. Placeholder until the job stops asking.
 PLACEHOLDER_SLOPE = 0.001
 
+# Placeholder discharge intent, and the same caveat as the slope above: these
+# are inputs run_nd_scenarios REQUIRES, and nothing in the network implies them.
+# A real deployment authors them per reach — a 12 km2 headwater and a 2,600 km2
+# trunk do not share a flood range — either in desired_state, or here once a
+# regional regression exists. The range is kept deliberately narrow so a test
+# sweep finishes: every discharge in it is one full hydraulic simulation.
+PLACEHOLDER_Q_LOWER = 10
+PLACEHOLDER_Q_UPPER = 100
+PLACEHOLDER_DQ_STEP = 10
+
 # Mirrors what the deployed job images bake in (twod_fim_jobs/consts.py). The
 # loop predicts artifact addresses from these, so they must match the images or
 # nothing it builds will be found where it looked.
@@ -173,10 +183,12 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
         conn.execute(
             """INSERT INTO desired_state_defaults
                    (sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
-                    lulc_lookup, solver, solver_version)
-               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s)""",
+                    lulc_lookup, solver, solver_version,
+                    q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
+               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (SDR_COMMIT, DEM_SOURCE, LULC_SOURCE, json.dumps(LULC_LOOKUP),
-             SOLVER, SOLVER_VERSION))
+             SOLVER, SOLVER_VERSION,
+             PLACEHOLDER_Q_LOWER, PLACEHOLDER_Q_UPPER, PLACEHOLDER_DQ_STEP))
 
         for lake in lakes:
             conn.execute("INSERT INTO lakes (lake_id, geom) VALUES (%s, ST_GeomFromText(%s, 5070))",

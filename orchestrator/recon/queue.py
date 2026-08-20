@@ -20,8 +20,12 @@ from recon import db
 # noticed at all. Suppressing resubmission is the gap calculation's job, not
 # this query's.
 # "Intent moved" is judged against the materialized proofs, which is where the
-# satisfied revision lives now. This milestone judges the model proof only; the
-# nd and kwse proofs join the OR as their steps arrive. A reach waiting on its
+# satisfied revision lives now. Model and nd are judged here; kwse joins the OR
+# when that step arrives. Note what including a step costs: a reach stays due
+# until that step is proved, so every reach still climbing the ladder is
+# re-checked each sweep. That is the documented design — a blocked reach stays a
+# candidate — and it is what lets a reach move the moment its downstream
+# neighbour catches up, without anything polling. A reach waiting on its
 # downstream neighbour stays due by design — each sweep re-checks it, the gap
 # says waiting, and the moment downstream catches up the same query is what
 # lets it through.
@@ -30,14 +34,17 @@ _DUE = """
         d.reach_id,
         d.revision,
         p.reach_id IS NULL                             AS never_checked,
-        COALESCE(mm.applied_revision, -1) < d.revision AS intent_moved,
+        (COALESCE(mm.applied_revision,  -1) < d.revision
+         OR COALESCE(mnd.applied_revision, -1) < d.revision) AS intent_moved,
         COALESCE(p.check_requested_at > p.last_checked_at, FALSE) AS was_asked,
         p.current_step
     FROM desired_state d
     LEFT JOIN reach_processing p USING (reach_id)
-    LEFT JOIN materialized_models mm USING (reach_id)
+    LEFT JOIN materialized_models   mm  USING (reach_id)
+    LEFT JOIN materialized_nd_runs   mnd USING (reach_id)
     WHERE (p.reach_id IS NULL
-           OR COALESCE(mm.applied_revision, -1) < d.revision
+           OR COALESCE(mm.applied_revision,  -1) < d.revision
+           OR COALESCE(mnd.applied_revision, -1) < d.revision
            OR p.check_requested_at > p.last_checked_at)
       AND NOT COALESCE(p.halted, FALSE)
       AND (p.next_retry_at IS NULL OR p.next_retry_at <= now())

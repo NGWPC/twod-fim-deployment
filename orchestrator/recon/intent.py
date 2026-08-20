@@ -20,6 +20,10 @@ _EFFECTIVE = """
         d.revision,
         rn.reach_to_id,
         rn.is_terminal,
+        rn.terminal_reason,
+        rn.lake_to_id,
+        rn.coast_to_id,
+        rn.slope,
         ST_AsBinary(rn.geom) AS geom_wkb,
         f.sdr_commit,
         COALESCE(d.grid_resolution, f.grid_resolution) AS grid_resolution,
@@ -28,8 +32,10 @@ _EFFECTIVE = """
         COALESCE(d.lulc_source,     f.lulc_source)     AS lulc_source,
         COALESCE(d.lulc_lookup,     f.lulc_lookup)     AS lulc_lookup,
         COALESCE(d.solver,          f.solver)          AS solver,
+        COALESCE(d.solver_version,  f.solver_version)  AS solver_version,
         COALESCE(d.q_lower_bound,   f.q_lower_bound)   AS q_lower_bound,
-        COALESCE(d.q_upper_bound,   f.q_upper_bound)   AS q_upper_bound
+        COALESCE(d.q_upper_bound,   f.q_upper_bound)   AS q_upper_bound,
+        COALESCE(d.initial_dq_step_for_nd, f.initial_dq_step_for_nd) AS initial_dq_step_for_nd
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
     CROSS JOIN desired_state_defaults f
@@ -46,6 +52,31 @@ def effective(reach_id: int, *, conn: psycopg.Connection | None = None) -> db.Ro
     fallback row has not been seeded, so no reach can resolve its intent).
     """
     return db.one(_EFFECTIVE, (reach_id,), conn=conn)
+
+
+# The slope a reach's normal-depth runs are performed at. It is NOT the reach's
+# own slope: the downstream boundary condition is a statement about what the
+# reach drains into, so a non-terminal takes its downstream neighbour's
+# centerline slope (DR-039 ALT-D, selected via ALT-F). A terminal has no
+# downstream and falls back to its own.
+#
+# This has to live in one place because the slope names the scenario folder —
+# `nd=<slope>` — so the value used when SUBMITTING and the value used when
+# OBSERVING must agree, or the loop looks somewhere the job never wrote. It is
+# also why finding a downstream reach's library needs that reach's boundary
+# slope, not its own.
+_BOUNDARY_SLOPE = """
+    SELECT CASE WHEN rn.is_terminal THEN rn.slope ELSE ds.slope END AS slope
+    FROM reach_network rn
+    LEFT JOIN reach_network ds ON ds.reach_id = rn.reach_to_id
+    WHERE rn.reach_id = %s
+"""
+
+
+def boundary_slope(reach_id: int, *, conn: psycopg.Connection | None = None) -> float | None:
+    """The normal-depth slope this reach's runs use, or None if unknowable."""
+    row = db.one(_BOUNDARY_SLOPE, (reach_id,), conn=conn)
+    return float(row["slope"]) if row and row["slope"] is not None else None
 
 
 def defaults_missing(*, conn: psycopg.Connection | None = None) -> bool:

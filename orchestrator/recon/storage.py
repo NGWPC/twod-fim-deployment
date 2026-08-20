@@ -49,6 +49,42 @@ def model_artifact_path(reach_id: int, model_id: str) -> str:
 
 
 MANIFEST_FILENAME = "model_manifest.json"
+SCENARIO_MANIFEST_FILENAME = "scenario_manifest.json"
+INUNDATED_AREA_FILENAME = "inundated_area.geojson"
+STL_FILENAME = "stl.geojson"
+
+
+def results_base_path(reach_id: int, model_identity_hash: str) -> str:
+    """Where a reach's runs live, for one model recipe.
+
+    Runs are filed under the model IDENTITY hash, not the model id — the domain
+    code is the model's realization, and widening a domain must not orphan every
+    run of that reach. This is the `model_results_base_path` the run jobs take,
+    and they append `<run_identity_hash>/<scenario point>/` to it themselves.
+    """
+    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
+            f"/results/reach={reach_id}/{model_identity_hash}")
+
+
+def nd_library_path(
+    reach_id: int, model_identity_hash: str, run_identity_hash: str, ds_slope: float
+) -> str:
+    """The folder holding one normal-depth library: every q run at one slope."""
+    from recon.identity import nd_scenario_prefix
+
+    return (f"{results_base_path(reach_id, model_identity_hash)}"
+            f"/{run_identity_hash}/{nd_scenario_prefix(ds_slope)}")
+
+
+def boundary_polygon_path(kind: str, feature_id: str) -> str:
+    """Where a lake or coast outflow polygon is published by the seeder.
+
+    A terminal reach's normal-depth boundary is the water body it drains into,
+    so the polygon is a property of that body and is shared by every reach
+    ending in it — hence `shared/`, written once rather than per reach.
+    """
+    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
+            f"/shared/{kind}s/{feature_id}.geojson")
 
 
 def list_subfolders(path: str, prefix: str = "") -> list[str]:

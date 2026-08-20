@@ -13,7 +13,7 @@ DOWNSTREAM, because results transfer upstream along the network:
   model   needs downstream's model AND nd materialized — this reach's geometry
           uses the downstream max-q STL
   nd      needs this model, and downstream's nd — the outflow polygon is the
-          downstream max-q polygon                           (next milestone)
+          downstream max-q polygon
   kwse    needs this model and nd, and all three downstream; terminal reaches
           have no downstream and get no KWSE at all          (next milestone)
 
@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 BUILD_MODEL = "build_model"
+RUN_ND = "run_nd_scenarios"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,11 @@ class Snapshot:
     ds_model_ok: bool = False
     ds_nd_ok: bool = False
     ds_kwse_ok: bool = False
+    # Whether a terminal reach names the water body it drains into. Read only
+    # when is_terminal: a terminal's normal-depth boundary is that body's
+    # polygon, and one that names none (a clip edge, an unclassified outlet)
+    # has no boundary and never will until someone authors one.
+    has_outflow_polygon: bool = False
     # Job already submitted for this reach and not yet accounted for.
     in_flight_step: str | None = None
 
@@ -83,13 +89,28 @@ class WaitingDownstream:
 
 
 @dataclass(frozen=True)
+class AwaitingInputs:
+    """Something is needed, and no job can produce it — data is missing.
+
+    Named for who it waits on, because that is the only thing distinguishing it
+    from WaitingDownstream: that one resolves itself as the wave moves upstream,
+    this one resolves when a person authors the missing data. Reporting it beats
+    submitting a job that must fail, which would burn the retry budget and end at
+    halted with a misleading error.
+    """
+
+    step: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class RunStep:
     """Something is needed and nothing stands in the way. Submit this job."""
 
     step: str
 
 
-Decision = NoGap | InFlight | WaitingDownstream | RunStep
+Decision = NoGap | InFlight | WaitingDownstream | AwaitingInputs | RunStep
 
 
 def _model_rung(s: Snapshot) -> Decision | None:
@@ -108,6 +129,28 @@ def _model_rung(s: Snapshot) -> Decision | None:
     return RunStep(step=BUILD_MODEL)
 
 
+def _nd_rung(s: Snapshot) -> Decision | None:
+    """The normal-depth library, which needs a boundary to drain through.
+
+    A non-terminal reach uses the downstream reach's max-q inundation polygon,
+    so it waits for that library to be proved. A terminal reach drains into a
+    lake or the coast and uses that body's polygon — and one with no body named
+    has nothing to drain through at all.
+    """
+    if s.nd_ok:
+        return None
+    if s.in_flight_step is not None:
+        return InFlight(step=s.in_flight_step)
+    if s.is_terminal:
+        if not s.has_outflow_polygon:
+            return AwaitingInputs(
+                step=RUN_ND, reason="terminal reach names no lake or coast to drain into")
+        return RunStep(step=RUN_ND)
+    if not s.ds_nd_ok:
+        return WaitingDownstream(reach_id=s.downstream_reach_id, step=RUN_ND)
+    return RunStep(step=RUN_ND)
+
+
 def calculate(snapshot: Snapshot) -> Decision:
     """What, if anything, should happen to this reach now.
 
@@ -120,11 +163,10 @@ def calculate(snapshot: Snapshot) -> Decision:
     if decision is not None:
         return decision
 
-    # -- seam: the nd rung attaches here (next milestone) ------------------
-    # if not snapshot.nd_ok:
-    #     startable when terminal or ds_nd_ok; the outflow polygon comes from
-    #     the downstream nd library's max-q run
-    #
+    decision = _nd_rung(snapshot)
+    if decision is not None:
+        return decision
+
     # -- seam: the kwse rung attaches after nd -----------------------------
     # if not snapshot.is_terminal and not snapshot.kwse_ok:
     #     needs nd_ok here plus ds_model_ok, ds_nd_ok, ds_kwse_ok; bounds per

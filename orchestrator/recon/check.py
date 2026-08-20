@@ -16,7 +16,8 @@ from typing import Any
 
 import psycopg
 
-from recon import activity, db, gap, intent, observe, processing, queue, storage
+from recon import (activity, db, gap, identity, intent, observe, processing,
+                   queue, storage)
 from recon.config import settings
 from recon.workers import ContainerRunner
 
@@ -51,6 +52,7 @@ _SNAPSHOT = """
         d.revision,
         rn.is_terminal,
         rn.reach_to_id AS downstream_reach_id,
+        (rn.lake_to_id IS NOT NULL OR rn.coast_to_id IS NOT NULL) AS has_outflow_polygon,
         COALESCE(mm.applied_revision  >= d.revision,  FALSE) AS model_ok,
         COALESCE(mnd.applied_revision >= d.revision,  FALSE) AS nd_ok,
         COALESCE(mkw.applied_revision >= d.revision,  FALSE) AS kwse_ok,
@@ -94,6 +96,7 @@ def load_snapshot(
         ds_model_ok=row["ds_model_ok"],
         ds_nd_ok=row["ds_nd_ok"],
         ds_kwse_ok=row["ds_kwse_ok"],
+        has_outflow_polygon=row["has_outflow_polygon"],
         in_flight_step=row["current_step"],
     )
 
@@ -124,10 +127,111 @@ def _build_model_payload(reach_id: int) -> dict:
     }
 
 
+def _nd_boundary(reach_id: int, wanted: dict) -> dict:
+    """The downstream boundary condition for a normal-depth run: where it is
+    applied, and at what slope.
+
+    Both halves come from the SAME place, which is the point — the boundary is
+    a statement about what this reach drains INTO, never about the reach
+    itself. Which place depends on the terminal/non-terminal split the whole
+    ladder turns on:
+
+      non-terminal  the downstream reach's inundated area at the HIGHEST
+                    discharge of its library (the largest wetted footprint it
+                    produces, so it bounds every scenario this reach will run),
+                    at the DOWNSTREAM reach's centerline slope
+                    — DR-039 ALT-D, selected via ALT-F
+      terminal      the lake or coast it drains into, published once per water
+                    body and shared by every reach ending there
+                    — DR-006 ALT-E
+
+    The downstream address is read from that reach's proof rather than
+    predicted, because the discharge in it is emergent: the adaptive step
+    algorithm chose it, and only that reach's materialization knows what it was.
+    """
+    if wanted["is_terminal"]:
+        for kind in ("lake", "coast"):
+            feature_id = wanted[f"{kind}_to_id"]
+            if feature_id is not None:
+                # DR-006 ALT-E asks for a FREEFALL here — water leaving the
+                # domain without resistance, so it does not pool in the
+                # transition zone — and the job can only express that as a
+                # slope. No steep value has been decided, so this passes the
+                # reach's own slope and is knowingly wrong for a terminal:
+                # a flat slope behaves like a nearly closed boundary, which is
+                # what ALT-B was rejected for.
+                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id),
+                        "ds_slope": intent.boundary_slope(reach_id)}
+        raise RuntimeError(
+            f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
+            "lake or coast, so it has no outflow boundary")
+
+    downstream = wanted["reach_to_id"]
+    proof = db.one(
+        "SELECT model_identity_hash, run_identity_hash, q_set FROM materialized_nd_runs"
+        " WHERE reach_id = %s", (downstream,))
+    if proof is None:
+        raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
+    max_q = max(proof["q_set"])
+    # Two different slopes, and confusing them puts the loop in the wrong
+    # folder. The downstream reach's library sits at ITS boundary slope, which
+    # is its own downstream neighbour's. The slope THIS run is performed at is
+    # the downstream reach's centerline slope.
+    library = storage.nd_library_path(
+        downstream, proof["model_identity_hash"], proof["run_identity_hash"],
+        intent.boundary_slope(downstream))
+    return {
+        "outflow_area_polygon_path":
+            f"{library}/{identity.q_folder(max_q)}/{storage.INUNDATED_AREA_FILENAME}",
+        "ds_slope": intent.boundary_slope(reach_id),
+    }
+
+
+def _run_nd_payload(reach_id: int) -> dict:
+    """What run_nd_scenarios needs to produce the library intent asks for.
+
+    The discharge range is authored intent passed straight through. The step is
+    only a STARTING increment — the job grows and shrinks it as the reach's
+    response curve demands — which is why the loop cannot predict the resulting
+    discharges and reads them back instead.
+    """
+    wanted = intent.effective(reach_id)
+    if wanted is None:
+        raise RuntimeError(f"no effective intent for reach {reach_id}")
+    model = db.one("SELECT identity_hash, model_id FROM materialized_models WHERE reach_id = %s",
+                   (reach_id,))
+    if model is None:
+        raise RuntimeError(f"reach {reach_id} has no materialized model to run against")
+    for field in ("q_lower_bound", "q_upper_bound", "initial_dq_step_for_nd"):
+        if wanted[field] is None:
+            raise RuntimeError(f"reach {reach_id} has no {field}; nd cannot be submitted")
+    return {
+        "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
+        "model_results_base_path": storage.results_base_path(reach_id, model["identity_hash"]),
+        "min_upstream_inflow": float(wanted["q_lower_bound"]),
+        "max_upstream_inflow": float(wanted["q_upper_bound"]),
+        "delta_upstream_inflow": float(wanted["initial_dq_step_for_nd"]),
+        **_nd_boundary(reach_id, wanted),
+        "volume_convergence_tolerance": settings.volume_convergence_tolerance,
+        "solver": wanted["solver"],
+    }
+
+
+PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
+
+
 def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
     """Check one reach, and act on what the gap turns out to be."""
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
+    seen_nd = observe.observe_nd_runs(reach_id)
+    # A change to this reach's nd proof changes what the reaches above it can
+    # do: it is their outflow boundary, so one appearing unblocks them and one
+    # being retracted invalidates work they may already have started. Told here
+    # rather than at submission because this is the moment it becomes true —
+    # and unlike submission, it also covers a library that has gone away.
+    if seen_nd.get("changed"):
+        queue.request_check_upstream(reach_id)
 
     snapshot = load_snapshot(reach_id)
     if snapshot is None:
@@ -136,9 +240,10 @@ def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
         return CheckResult(reach_id, -1, "skipped", seen, note=note)
 
     event = activity.begin(reach_id, "check", snapshot.revision,
-                           {"observed": seen.get("found"), "changed": seen.get("changed")})
+                           {"model": seen.get("found"), "nd": seen_nd.get("found")})
     decision = gap.calculate(snapshot)
-    result = CheckResult(reach_id, snapshot.revision, type(decision).__name__, seen)
+    result = CheckResult(reach_id, snapshot.revision, type(decision).__name__,
+                         {"model": seen, "nd": seen_nd})
 
     try:
         if isinstance(decision, gap.NoGap):
@@ -155,9 +260,15 @@ def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
             processing.wait_on(reach_id, decision.reach_id)
             result.note = f"{decision.step} waits on reach {decision.reach_id}"
 
+        elif isinstance(decision, gap.AwaitingInputs):
+            # Not a failure: nothing was attempted, so there is nothing to back
+            # off from. It simply stays here until the missing data is authored.
+            processing.wait_on(reach_id, None)
+            result.note = f"{decision.step} awaiting inputs: {decision.reason}"
+
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
-            ref = runner.submit(decision.step, _build_model_payload(reach_id))
+            ref = runner.submit(decision.step, PAYLOADS[decision.step](reach_id))
             processing.mark_in_flight(reach_id, decision.step, ref, snapshot.revision)
             # Ask to be looked at again, so the result gets noticed without
             # waiting for the next sweep.
@@ -174,7 +285,10 @@ def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
         logger.exception("check failed for reach %s", reach_id)
         return result
 
-    outcome = "blocked" if isinstance(decision, gap.WaitingDownstream) else "ok"
+    # One activity outcome for both kinds of not-proceeding; the decision name
+    # in the detail says which, and reach_status keeps them apart as states.
+    outcome = ("blocked" if isinstance(decision, (gap.WaitingDownstream, gap.AwaitingInputs))
+               else "ok")
     activity.end(event, outcome, {"decision": result.decision, "note": result.note})
     logger.info("%s", result)
     return result

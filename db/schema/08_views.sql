@@ -49,20 +49,41 @@ SELECT
         'in_flight'
     WHEN p.next_retry_at > now() THEN
         'resting'
-    WHEN p.blocked_on_reach_id IS NOT NULL THEN
-        'waiting_downstream'
-    WHEN mm.applied_revision >= d.revision THEN
-        -- Model intent satisfied at the current revision. This will become the
-        -- conjunction of all three claims once the run gap calculation exists —
-        -- each step carries its own revision, and a reach is finished only when
-        -- every one of them is current.
+    WHEN mm.applied_revision >= d.revision
+        AND nd.applied_revision >= d.revision THEN
+        -- Every implemented step satisfied at the current revision. Each step
+        -- carries its own revision and this is their conjunction, so a reach is
+        -- finished only when all of them are current. The kwse claim joins this
+        -- AND when that step is implemented.
         --
-        -- This outranks 'new' deliberately: a reach whose model is materialized
+        -- This outranks 'new' deliberately: a reach whose work is materialized
         -- and current is finished whether or not the loop has ever looked at
         -- it. That is the ordinary case after a database is rebuilt against a
         -- populated bucket, and calling it 'new' would suggest work is pending
-        -- when there is none.
+        -- when there is none. It outranks 'waiting_downstream' for the same
+        -- reason — a satisfied reach is satisfied even if a wait pointer from
+        -- an earlier rung was left behind.
         'finished'
+    WHEN rn.is_terminal
+        AND rn.lake_to_id IS NULL
+        AND rn.coast_to_id IS NULL
+        AND mm.applied_revision >= d.revision THEN
+        -- A terminal that names no water body has no normal-depth boundary to
+        -- drain through, and no job can produce one. Named for who it waits on,
+        -- because that is what separates it from 'waiting_downstream': that one
+        -- resolves itself as the wave arrives, this one only when a person
+        -- authors the missing data. Deliberately NOT called 'blocked' —
+        -- blocked_on_reach_id already means the other kind of waiting, and one
+        -- word covering both would be worse than useless to anyone reading it.
+        --
+        -- Gated on the model being proved so this mirrors the gap calculation,
+        -- which only reaches the nd rung once the model rung is satisfied.
+        -- Without that gate a fresh network would report reaches as awaiting
+        -- inputs while they still had a model to build — true of their nd step,
+        -- but misleading about whether the loop has work to do on them.
+        'awaiting_inputs'
+    WHEN p.blocked_on_reach_id IS NOT NULL THEN
+        'waiting_downstream'
     WHEN p.reach_id IS NULL THEN
         -- Never looked at, and nothing materialized to say otherwise.
         'new'
@@ -86,11 +107,16 @@ SELECT
     -- materialization row reads as -1, so "never built" and "built against
     -- older intent" answer the same way, which is what the loop wants.
     (d.reach_id IS NOT NULL
-        AND COALESCE(mm.applied_revision, - 1) < d.revision) AS has_gap,
+        AND (COALESCE(mm.applied_revision, - 1) < d.revision
+            OR COALESCE(nd.applied_revision, - 1) < d.revision)) AS has_gap,
     -- Presence of a run row IS the proof that step is materialized, so these
     -- are booleans rather than counts of anything.
     (nd.reach_id IS NOT NULL) AS nd_materialized,
+    COALESCE(nd.applied_revision, - 1) AS nd_applied_revision,
     cardinality(nd.q_set) AS nd_discharges,
+    nd.q_set AS nd_q_set,
+    nd.us_wse_max AS nd_us_wse_max,
+    nd.confirmed_at AS nd_confirmed_at,
     (kw.reach_id IS NOT NULL) AS kwse_materialized,
     p.consecutive_failures,
     p.last_error,
