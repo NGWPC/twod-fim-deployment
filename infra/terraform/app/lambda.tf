@@ -1,27 +1,24 @@
-data "archive_file" "lambda_placeholder" {
+data "archive_file" "batch_status_lambda" {
   type        = "zip"
-  output_path = "${path.module}/lambda_placeholder.zip"
-
-  source {
-    content  = <<-PYTHON
-      def lambda_handler(event, context):
-          print("Batch completion event received")
-          print(event)
-          return {"statusCode": 200}
-    PYTHON
-    filename = "handler.py"
-  }
+  source_dir  = "${path.module}/lambda_src"
+  output_path = "${path.module}/lambda_batch_status.zip"
 }
 
 resource "aws_lambda_function" "batch_handler" {
   function_name    = "${var.project_name}-batch-handler"
   role             = local.lambda_execution_role_arn
-  handler          = "handler.lambda_handler"
+  handler          = "lambda_function.lambda_handler"
   runtime          = "python3.12"
   timeout          = var.lambda_timeout
   memory_size      = var.lambda_memory_size
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  filename         = data.archive_file.batch_status_lambda.output_path
+  source_code_hash = data.archive_file.batch_status_lambda.output_base64sha256
+
+  environment {
+    variables = {
+      PROCESS_API_URL = var.sepex_api_url
+    }
+  }
 
   vpc_config {
     subnet_ids         = var.private_subnet_ids

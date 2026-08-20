@@ -334,6 +334,12 @@ variable "lambda_timeout" {
   }
 }
 
+variable "sepex_api_url" {
+  description = "SEPEX API base URL for the Batch status callback Lambda (e.g., http://<sepex-private-ip>). Empty disables the callback."
+  type        = string
+  default     = ""
+}
+
 # --- App-specific: RDS ---
 
 variable "rds_allocated_storage" {
