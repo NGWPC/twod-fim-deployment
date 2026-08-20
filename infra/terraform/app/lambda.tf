@@ -39,7 +39,7 @@ resource "aws_cloudwatch_event_rule" "batch_state_change" {
     source      = ["aws.batch"]
     detail-type = ["Batch Job State Change"]
     detail = {
-      status   = ["SUCCEEDED", "FAILED"]
+      status   = ["RUNNING", "SUCCEEDED", "FAILED"]
       jobQueue = [aws_batch_job_queue.scenarios.arn]
     }
   })
