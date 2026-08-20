@@ -211,6 +211,8 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Action = [
           "batch:DescribeJobs",
           "batch:DescribeJobDefinitions",
+          "batch:DescribeJobQueues",
+          "batch:DescribeComputeEnvironments",
           "batch:ListJobs",
         ]
         Resource = "*"
