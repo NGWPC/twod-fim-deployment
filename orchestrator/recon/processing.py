@@ -128,6 +128,22 @@ def wait_on(
     )
 
 
+# How much of a failure's output to keep. Kept from the END: this is a job's
+# log tail, and a log explains itself at the bottom — the traceback, the exit
+# reason, the last thing tried. Keeping the head instead stores the banner and
+# throws away the diagnosis, which is exactly what happened the first time two
+# reaches halted here.
+ERROR_KEEP_CHARS = 4000
+
+
+def _tail(error: str) -> str:
+    """The last ERROR_KEEP_CHARS of an error, marked if anything was dropped."""
+    if len(error) <= ERROR_KEEP_CHARS:
+        return error
+    return f"[... {len(error) - ERROR_KEEP_CHARS} earlier characters dropped ...]\n" + \
+        error[-ERROR_KEEP_CHARS:]
+
+
 def record_failure(
     reach_id: int, error: str, *, conn: psycopg.Connection | None = None
 ) -> db.Row:
@@ -163,7 +179,7 @@ def record_failure(
         """,
         {
             "reach": reach_id,
-            "error": error[:2000],
+            "error": _tail(error),
             "base": BACKOFF_BASE_SECONDS,
             "cap": BACKOFF_CAP_SECONDS,
             "halt_after": settings.halt_after_failures,
