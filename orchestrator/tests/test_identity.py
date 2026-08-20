@@ -115,3 +115,18 @@ def test_an_unknown_run_identity_dimension_is_refused():
     m["identity"] = {**m["identity"], "gpu_model": "A100"}
     problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100)
     assert any("unknown" in p for p in problems)
+
+
+def test_fractional_discharge_matches_its_rounded_folder():
+    """The adaptive stepper emits fractional discharges and the job rounds them
+    into the folder name. Truncating instead of rounding refused a valid
+    12-scenario library and cost a 2.5-hour re-run, so this is pinned."""
+    m = sound_scenario(inputs={"us_discharge": 1171.875})
+    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1172) == []
+
+
+def test_a_discharge_rounding_to_a_different_folder_is_still_refused():
+    """The guard must still catch a manifest in the wrong folder."""
+    m = sound_scenario(inputs={"us_discharge": 1171.875})
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1171)
+    assert any("us_discharge" in p for p in problems)

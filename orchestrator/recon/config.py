@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     build_model_image: str = "ghcr.io/ngwpc/twod-fim-jobs/build_model:dev"
     # One image per job: the job name is baked into each image's ENTRYPOINT, so
     # the runner picks an image by step rather than passing a command.
-    run_nd_scenarios_image: str = "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev"
+    run_nd_scenarios_image: str = (
+        "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev"
+    )
     docker_network: str = "twodfim"
     docker_platform: str | None = None
     build_model_timeout: int = 3600
@@ -33,6 +35,34 @@ class Settings(BaseSettings):
     # satisfy, so an unsent tolerance means every scenario runs the full
     # simulation length instead of stopping when the reach settles.
     volume_convergence_tolerance: float = 1e-3
+    # How far build_model buffers the bounding box around the reach geometry,
+    # in CRS units (m at EPSG:5070). The job's own default is 0, which leaves
+    # domains too tight for water to stay inside at higher discharges.
+    #
+    # NOTE this is a REALIZATION input, not an identity one: changing it moves
+    # the domain_code, never the identity hash. So a change here does not
+    # invalidate existing models — observe matches on the identity prefix and
+    # accepts whatever domain code it finds. Rebuild deliberately if you want a
+    # new buffer applied to models that already exist.
+    domain_buffer: float = 50.0
+    # Normal-depth slope for the downstream boundary, used until the hydrofabric
+    # supplies real slopes. Seeded into reach_network.slope, from where
+    # intent.boundary_slope reads it, so build_model and run_nd_scenarios agree.
+    default_ds_slope: float = 0.01
+    # Failures in a row before a reach is parked for a person. 1 means no
+    # retries at all, which is what you want while developing: a failure should
+    # stop and be looked at, not be retried five times over an hour.
+    halt_after_failures: int = 1
+    # Whether a normal-depth run continues when water reaches an invalid domain
+    # edge, rather than aborting the whole adaptive sweep. The job defaults to
+    # False, which is the safe production choice: water leaving through an edge
+    # it should not means the domain is too tight, and the results along that
+    # edge are not trustworthy.
+    #
+    # True while developing, so a library forms and the loop can be exercised
+    # end to end. Treat any library produced this way as provisional — the
+    # inundation is bounded by the domain rather than by the terrain.
+    allow_water_on_edges: bool = True
     docker_data_dir: str | None = None
     lulc_source: str | None = None
     # Hostname the database answers to from inside a job container. Jobs run as

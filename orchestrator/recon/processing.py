@@ -15,13 +15,14 @@ made against state that has since moved simply does not take effect.
 import psycopg
 
 from recon import db
+from recon.config import settings
 
 # How long a failing reach waits before being looked at again. Doubles each
 # consecutive failure up to the cap, then stops growing.
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_CAP_SECONDS = 3600
 # Consecutive failures after which a reach is parked for a person.
-HALT_AFTER_FAILURES = 5
+# Halt threshold lives in settings so it can be tightened while developing.
 
 
 def start_check(reach_id: int, *, conn: psycopg.Connection | None = None) -> None:
@@ -165,7 +166,7 @@ def record_failure(
             "error": error[:2000],
             "base": BACKOFF_BASE_SECONDS,
             "cap": BACKOFF_CAP_SECONDS,
-            "halt_after": HALT_AFTER_FAILURES,
+            "halt_after": settings.halt_after_failures,
         },
         conn=conn,
     )[0]

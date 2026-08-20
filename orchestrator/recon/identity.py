@@ -215,9 +215,15 @@ def verify_scenario_manifest(
     if manifest.get("model_id") != model_id:
         problems.append(f"manifest model_id {manifest.get('model_id')} != {model_id}")
 
+    # Compare through the job's own folder-naming function, never by casting.
+    # The adaptive stepper emits fractional discharges (1171.875), and the job
+    # ROUNDS them into the folder name (q=1172) while the manifest keeps full
+    # precision. int() truncates, so a cast here reads 1171 and refuses a
+    # perfectly good scenario. Formatting both sides the same way is the only
+    # comparison that cannot drift from what the job wrote.
     discharge = (manifest.get("inputs") or {}).get("us_discharge")
-    if discharge is None or int(float(discharge)) != q:
-        problems.append(f"manifest us_discharge {discharge} != folder q={q}")
+    if discharge is None or q_folder(float(discharge)) != q_folder(q):
+        problems.append(f"manifest us_discharge {discharge} is not in folder q={q}")
 
     ident = manifest.get("identity")
     if not isinstance(ident, dict):

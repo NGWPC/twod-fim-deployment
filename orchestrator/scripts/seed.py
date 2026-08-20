@@ -42,7 +42,7 @@ LAKES_LAYER = "lakes_polygons"
 # reach_network (REACH_FIELDS in twod-fim-jobs) and records it as the model's
 # properties.slope — which becomes the normal-depth boundary condition and the
 # `nd=` path component. Placeholder until the job stops asking.
-PLACEHOLDER_SLOPE = 0.001
+PLACEHOLDER_SLOPE = settings.default_ds_slope
 
 # Placeholder discharge intent, and the same caveat as the slope above: these
 # are inputs run_nd_scenarios REQUIRES, and nothing in the network implies them.
@@ -50,9 +50,9 @@ PLACEHOLDER_SLOPE = 0.001
 # trunk do not share a flood range — either in desired_state, or here once a
 # regional regression exists. The range is kept deliberately narrow so a test
 # sweep finishes: every discharge in it is one full hydraulic simulation.
-PLACEHOLDER_Q_LOWER = 10
-PLACEHOLDER_Q_UPPER = 100
-PLACEHOLDER_DQ_STEP = 10
+PLACEHOLDER_Q_LOWER = 1000
+PLACEHOLDER_Q_UPPER = 2000
+PLACEHOLDER_DQ_STEP = 500
 
 # Mirrors what the deployed job images bake in (twod_fim_jobs/consts.py). The
 # loop predicts artifact addresses from these, so they must match the images or

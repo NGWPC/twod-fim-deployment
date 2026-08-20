@@ -124,6 +124,7 @@ def _build_model_payload(reach_id: int) -> dict:
         "dem_source": wanted["dem_source"],
         "lulc_source": wanted["lulc_source"],
         "lulc_lookup": wanted["lulc_lookup"],
+        "domain_buffer": settings.domain_buffer,
     }
 
 
@@ -213,6 +214,7 @@ def _run_nd_payload(reach_id: int) -> dict:
         "delta_upstream_inflow": float(wanted["initial_dq_step_for_nd"]),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
+        "allow_water_on_edges": settings.allow_water_on_edges,
         "solver": wanted["solver"],
     }
 
