@@ -233,6 +233,12 @@ def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
     if seen_nd.get("changed"):
         queue.request_check_upstream(reach_id)
 
+    # Work landing is what ends a failure streak. Adoption — a step's proof that
+    # was not there before — is that signal; a retraction is not, which is why
+    # `found` is tested alongside `changed`.
+    if any(o.get("changed") and o.get("found") for o in (seen, seen_nd)):
+        processing.clear_failures(reach_id)
+
     snapshot = load_snapshot(reach_id)
     if snapshot is None:
         note = ("desired_state_defaults not seeded" if intent.defaults_missing()

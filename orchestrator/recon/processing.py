@@ -171,6 +171,31 @@ def record_failure(
     )[0]
 
 
+def clear_failures(reach_id: int, *, conn: psycopg.Connection | None = None) -> bool:
+    """Forget a failure streak because work has landed. Returns whether it had one.
+
+    "Consecutive" is only true if something ends the run, and success is the only
+    honest thing that can. Without this the counter is cumulative for the reach's
+    lifetime: four failures spread over a week, a success, then one more failure
+    would halt a reach whose failures were never consecutive.
+
+    Deliberately NOT reset on NoGap alone. A reach that failed to build, then
+    built, reports RunStep for its next rung rather than NoGap — so keying off
+    NoGap would let a streak survive a genuine success. What ends a streak is a
+    step's work landing, which is what an adoption is.
+
+    last_error is left alone: it remains a true record of the last thing that
+    went wrong, and reading it next to a zero counter says "this recovered".
+    """
+    return bool(db.query(
+        """
+        UPDATE reach_processing SET consecutive_failures = 0, next_retry_at = NULL
+        WHERE reach_id = %s AND (consecutive_failures > 0 OR next_retry_at IS NOT NULL)
+        RETURNING reach_id
+        """,
+        (reach_id,), conn=conn))
+
+
 def clear_halt(reach_id: int, *, conn: psycopg.Connection | None = None) -> None:
     """Un-park a reach, after a person has dealt with whatever was wrong.
 

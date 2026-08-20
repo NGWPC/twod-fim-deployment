@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS reach_processing(
     -- Failure handling, owned here so a reach can always be retried without a
     -- person editing the database.
     -- ------------------------------------------------------------------
+    -- Reset to 0 when a check adopts a materialization for this reach: work
+    -- landing is the only thing that honestly ends a streak, and without that
+    -- reset "consecutive" would mean "cumulative since someone last cleared a
+    -- halt by hand".
     consecutive_failures integer NOT NULL DEFAULT 0,
     next_retry_at timestamptz,
     last_error text
