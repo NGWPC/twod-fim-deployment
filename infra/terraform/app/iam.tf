@@ -210,6 +210,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Effect = "Allow"
         Action = [
           "batch:DescribeJobs",
+          "batch:DescribeJobDefinitions",
           "batch:ListJobs",
         ]
         Resource = "*"
