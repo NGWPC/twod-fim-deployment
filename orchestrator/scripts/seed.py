@@ -106,8 +106,8 @@ def load_network(gpkg_path: Path) -> list[dict]:
     return ordered
 
 
-def seed(store: StateStore, network: list[dict]) -> None:
-    """Insert reaches and desired_state from a loaded network."""
+def seed(store: StateStore, network: list[dict], *, include_desired_state: bool = True) -> None:
+    """Insert reaches and optionally desired_state from a loaded network."""
     for r in network:
         store.insert_reach(
             reach_id=r["reach_id"],
@@ -123,4 +123,5 @@ def seed(store: StateStore, network: list[dict]) -> None:
             stream_order=r["stream_order"],
             slope=r["slope"],
         )
-        store.upsert_desired(reach_id=r["reach_id"])
+        if include_desired_state:
+            store.upsert_desired(reach_id=r["reach_id"])

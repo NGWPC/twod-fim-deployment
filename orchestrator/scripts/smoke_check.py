@@ -71,6 +71,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Orchestrator smoke check")
     parser.add_argument("--gpkg", type=Path, default=DEFAULT_GPKG, help="Path to reach network GeoPackage")
     parser.add_argument("--seed-only", action="store_true", help="Seed the DB and exit without waiting")
+    parser.add_argument("--network-only", action="store_true", help="Seed reach_network only, skip desired_state")
     args = parser.parse_args()
 
     if not args.gpkg.exists():
@@ -94,7 +95,10 @@ def main() -> None:
     store = StateStore()
 
     print(f"\nSeeding {total} reaches...")
-    seed(store, network)
+    seed(store, network, include_desired_state=not args.network_only)
+    if args.network_only:
+        print(f"Done. {total} reaches in reach_network (desired_state skipped).")
+        return
     print(f"Done. {total} reaches in reach_network and desired_state.")
 
     if args.seed_only:
