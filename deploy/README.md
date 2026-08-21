@@ -136,7 +136,10 @@ docker exec -it twodfim-code-server bash
 pip install geopandas
 cd /app
 
-# Seed only (then watch in Dagster UI):
+# Seed network table only (for SEPEX testing without Dagster):
+python scripts/smoke_check.py --seed-only --network-only
+
+# Seed network + desired_state (then watch in Dagster UI):
 python scripts/smoke_check.py --seed-only
 
 # Full check (seed + wait for reconciliation + verify):
