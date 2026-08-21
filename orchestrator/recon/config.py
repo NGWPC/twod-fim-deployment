@@ -24,6 +24,14 @@ class Settings(BaseSettings):
         "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev"
     )
     docker_network: str = "twodfim"
+    # Value for docker run --gpus, e.g. "all" or "device=0". None passes the
+    # flag at all, which is right on a machine without a GPU: the run image is
+    # CUDA-capable but does not require one.
+    #
+    # Needs the NVIDIA Container Toolkit on the host — `nvidia-smi` working
+    # outside Docker is not enough, the daemon needs the runtime too. Check
+    # with: docker info | grep -i runtimes
+    docker_gpus: str | None = None
     docker_platform: str | None = None
     # When a normal-depth run is considered steady and may stop early: the
     # volume change over a save interval, normalized by inflow. DR-022 selects

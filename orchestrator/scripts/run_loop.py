@@ -54,11 +54,16 @@ def build_runner(args: argparse.Namespace) -> LocalDockerRunner:
     not require a GPU, and only an EMPTY string disables it (the job reads it
     as bool(os.environ.get(...)), so "false" and "0" are both truthy).
     """
+    # Two halves, and both are needed. USE_CUDA tells the job to put `cuda` in
+    # the solver's parameter file; --gpus lets the container see the device.
+    # Either without the other fails: no flag means the CUDA solver starts with
+    # no GPU, no USE_CUDA means the GPU sits idle while the CPU solver runs.
     extra = {} if args.gpu else {"USE_CUDA": ""}
     return LocalDockerRunner(
         network=settings.docker_network,
         env_vars=job_env(extra),
         platform=settings.docker_platform,
+        gpus=(args.gpus or "all") if args.gpu else None,
         volumes=[f"{settings.docker_data_dir}:/data:ro"] if settings.docker_data_dir else [])
 
 
@@ -96,7 +101,10 @@ def main() -> int:
     parser.add_argument("--forever", action="store_true",
                         help="keep going after the network settles")
     parser.add_argument("--gpu", action="store_true",
-                        help="leave CUDA enabled in the run image (default: CPU)")
+                        help="run the solver on a GPU: enables CUDA in the image "
+                             "and gives containers device access (default: CPU)")
+    parser.add_argument("--gpus", default=None, metavar="SPEC",
+                        help="which devices, for docker --gpus (default 'all' with --gpu)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="log every check, not just the ones that act")
     args = parser.parse_args()

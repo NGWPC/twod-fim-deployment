@@ -126,6 +126,7 @@ class LocalDockerRunner:
         env_vars: dict[str, str] | None = None,
         platform: str | None = None,
         volumes: list[str] | None = None,
+        gpus: str | None = None,
     ):
         self.image = image or settings.build_model_image
         # One image per job: the job name is baked into each image's ENTRYPOINT
@@ -141,10 +142,15 @@ class LocalDockerRunner:
         self.env_vars = env_vars or {}
         self.platform = platform
         self.volumes = volumes or []
+        # Without this the container cannot see the device, so a CUDA-enabled
+        # job fails at solver start rather than falling back to CPU.
+        self.gpus = gpus if gpus is not None else settings.docker_gpus
 
     def _run_args(self, name: str) -> list[str]:
         """Flags shared by every way of starting a container."""
         args = ["--name", name, "--network", self.network]
+        if self.gpus:
+            args.extend(["--gpus", self.gpus])
         if self.platform:
             args.extend(["--platform", self.platform])
         for vol in self.volumes:
