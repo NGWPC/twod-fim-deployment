@@ -78,7 +78,6 @@ Copy `example.env` to `.env` at the repo root:
 cp example.env .env
 ```
 
-`orchestrator/.env` is a symlink to `../.env` - one file serves both docker-compose and host-local orchestrator commands. Git preserves the symlink on clone. If deleted, recreate with `ln -s ../.env orchestrator/.env`.
 
 The compose `orchestrator` service overrides container-only values such as
 `POSTGRES_HOST`, `AWS_ENDPOINT_URL`, and `DAGSTER_HOME`.
