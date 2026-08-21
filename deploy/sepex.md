@@ -124,7 +124,7 @@ aws ssm start-session --target <sepex-instance-id> --profile sandbox
 ## 4. Deploy SEPEX
 
 From the SEPEX EC2 instance, clone the twod-fim-deployment repo and run the setup script.
-The script handles: database creation, repo clone, configuration, build, and startup.
+The script handles: database creation, image pull, configuration, and startup.
 
 ```bash
 cd /home/ssm-user
@@ -144,10 +144,10 @@ python3 /opt/twod-fim-deployment/deploy/setup_sepex.py \
 | `--rds-secret-arn` | `terraform output -raw rds_master_user_secret_arn` |
 | `--sepex-password` | User-chosen password for the `sepex_app` database user |
 | `--s3-bucket` | `prod_bucket_name` or `test_bucket_name` from `terraform.tfvars` |
-| `--repo-url` | SEPEX repo (default: `https://github.com/Dewberry/sepex.git`) |
+| `--image` | Container image (default: `ghcr.io/biplovbhandari/sepex:dev`) |
 | `--install-dir` | Install path (default: `/opt/sepex`) |
 | `--reset` | Drop and recreate the sepex database |
-| `--skip-db` | Skip database setup, only redeploy |
+| `--skip-db` | Skip database setup, only deploy |
 
 The password is automatically URL-encoded in the connection string.
 Record the chosen password - it is needed for redeployments without `--reset`.
