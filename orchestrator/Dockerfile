@@ -19,6 +19,7 @@ COPY dagster_app/ dagster_app/
 RUN uv sync --frozen --no-editable
 
 COPY dagster.yaml /opt/dagster/dagster.yaml
+COPY workspace.yaml /app/workspace.yaml
 ENV DAGSTER_HOME=/opt/dagster
 
 EXPOSE 4000

@@ -125,6 +125,7 @@ uv run python scripts/smoke_check.py
 Options:
 - `--gpkg /path/to/network.gpkg` - use a custom GeoPackage (default: `testdata/network.gpkg`)
 - `--seed-only` - seed the DB and exit without waiting for reconciliation
+- `--network-only` - seed reach_network table only, skip desired_state (for SEPEX testing without Dagster)
 
 ## Env vars
 

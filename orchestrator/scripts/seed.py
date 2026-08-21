@@ -28,7 +28,6 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-
 from recon import db, storage
 from recon.config import settings
 
@@ -62,9 +61,23 @@ SOLVER = "lisflood"
 SOLVER_VERSION = "8.1.0"  # LISFLOOD-FP version reported by the run image
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 LULC_SOURCE = "/data/Annual_NLCD_LndCov_2023_CU_C1V0.tif"
-LULC_LOOKUP = {"11": 0.04, "21": 0.04, "22": 0.1, "23": 0.08, "24": 0.15,
-               "31": 0.025, "41": 0.16, "42": 0.16, "43": 0.16, "52": 0.1,
-               "71": 0.035, "81": 0.03, "82": 0.035, "90": 0.12, "95": 0.07}
+LULC_LOOKUP = {
+    "11": 0.04,
+    "21": 0.04,
+    "22": 0.1,
+    "23": 0.08,
+    "24": 0.15,
+    "31": 0.025,
+    "41": 0.16,
+    "42": 0.16,
+    "43": 0.16,
+    "52": 0.1,
+    "71": 0.035,
+    "81": 0.03,
+    "82": 0.035,
+    "90": 0.12,
+    "95": 0.07,
+}
 
 
 def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
@@ -89,6 +102,7 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
     in_file = set(gdf["reach_id"].astype("int64"))
     rows, clipped = [], []
     for _, r in gdf.iterrows():
+
         def value(col, cast, fallback=None):
             if col not in known or pd.isna(r[col]):
                 return fallback
@@ -96,7 +110,9 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
 
         geom = r.geometry
         if geom.geom_type == "MultiLineString" and len(geom.geoms) == 1:
-            geom = geom.geoms[0]  # the column is LineString; a 1-part multi is the same line
+            geom = geom.geoms[
+                0
+            ]  # the column is LineString; a 1-part multi is the same line
 
         reach_id = int(r["reach_id"])
         reach_to_id = value("reach_to_id", int)
@@ -114,26 +130,30 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
             clipped.append((reach_id, reach_to_id))
             reach_to_id, is_terminal, terminal_reason = None, True, "outlet"
 
-        rows.append({
-            "reach_id": reach_id,
-            "reach_to_id": reach_to_id,
-            "is_terminal": is_terminal,
-            "is_headwater": bool(value("is_headwater", bool, False)),
-            "terminal_reason": terminal_reason,
-            "lake_to_id": value("lake_to_id", str),
-            "coast_to_id": value("coast_to_id", str),
-            "lake_inlet": bool(value("lake_inlet", bool, False)),
-            "lake_outlet": bool(value("lake_outlet", bool, False)),
-            "is_trimmed": bool(value("is_trimmed", bool, False)),
-            "total_da_sqkm": value("total_da_sqkm", float),
-            "stream_order": value("stream_order", int),
-            "length_km": value("length_km", float),
-            "slope": value("slope", float, PLACEHOLDER_SLOPE),
-            "geom": geom.wkt,
-        })
+        rows.append(
+            {
+                "reach_id": reach_id,
+                "reach_to_id": reach_to_id,
+                "is_terminal": is_terminal,
+                "is_headwater": bool(value("is_headwater", bool, False)),
+                "terminal_reason": terminal_reason,
+                "lake_to_id": value("lake_to_id", str),
+                "coast_to_id": value("coast_to_id", str),
+                "lake_inlet": bool(value("lake_inlet", bool, False)),
+                "lake_outlet": bool(value("lake_outlet", bool, False)),
+                "is_trimmed": bool(value("is_trimmed", bool, False)),
+                "total_da_sqkm": value("total_da_sqkm", float),
+                "stream_order": value("stream_order", int),
+                "length_km": value("length_km", float),
+                "slope": value("slope", float, PLACEHOLDER_SLOPE),
+                "geom": geom.wkt,
+            }
+        )
 
     if clipped:
-        print(f"  {len(clipped)} reach(es) point outside this file; treated as outlet terminals:")
+        print(
+            f"  {len(clipped)} reach(es) point outside this file; treated as outlet terminals:"
+        )
         for reach_id, missing in clipped:
             print(f"    {reach_id} -> {missing} (not in file)")
     return rows
@@ -146,8 +166,10 @@ def load_lakes(gpkg_path: Path, layer: str = LAKES_LAYER) -> list[dict]:
         sys.exit(f"{gpkg_path} layer {layer} has no lake_id column")
     if gdf.crs and gdf.crs.to_epsg() != 5070:
         gdf = gdf.to_crs(epsg=5070)
-    return [{"lake_id": str(r["lake_id"]), "geom": r.geometry, "wkt": r.geometry.wkt}
-            for _, r in gdf.iterrows()]
+    return [
+        {"lake_id": str(r["lake_id"]), "geom": r.geometry, "wkt": r.geometry.wkt}
+        for _, r in gdf.iterrows()
+    ]
 
 
 def lake_polygon_uri(lake_id: str) -> str:
@@ -156,8 +178,10 @@ def lake_polygon_uri(lake_id: str) -> str:
     Under `shared/` rather than a reach folder: one lake bounds many reaches, so
     it belongs to none of them.
     """
-    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-            f"/shared/lakes/{lake_id}.geojson")
+    return (
+        f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
+        f"/shared/lakes/{lake_id}.geojson"
+    )
 
 
 def export_lake_polygons(lakes: list[dict]) -> list[str]:
@@ -186,13 +210,24 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
                     lulc_lookup, solver, solver_version,
                     q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
                VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (SDR_COMMIT, DEM_SOURCE, LULC_SOURCE, json.dumps(LULC_LOOKUP),
-             SOLVER, SOLVER_VERSION,
-             PLACEHOLDER_Q_LOWER, PLACEHOLDER_Q_UPPER, PLACEHOLDER_DQ_STEP))
+            (
+                SDR_COMMIT,
+                DEM_SOURCE,
+                LULC_SOURCE,
+                json.dumps(LULC_LOOKUP),
+                SOLVER,
+                SOLVER_VERSION,
+                PLACEHOLDER_Q_LOWER,
+                PLACEHOLDER_Q_UPPER,
+                PLACEHOLDER_DQ_STEP,
+            ),
+        )
 
         for lake in lakes:
-            conn.execute("INSERT INTO lakes (lake_id, geom) VALUES (%s, ST_GeomFromText(%s, 5070))",
-                         (lake["lake_id"], lake["wkt"]))
+            conn.execute(
+                "INSERT INTO lakes (lake_id, geom) VALUES (%s, ST_GeomFromText(%s, 5070))",
+                (lake["lake_id"], lake["wkt"]),
+            )
 
         # One transaction, any order: the self FK is deferred to commit.
         for r in reaches:
@@ -204,10 +239,14 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
                    VALUES (%(reach_id)s, %(reach_to_id)s, %(is_terminal)s, %(is_headwater)s,
                            %(terminal_reason)s, %(lake_to_id)s, %(coast_to_id)s, %(lake_inlet)s,
                            %(lake_outlet)s, %(is_trimmed)s, %(total_da_sqkm)s, %(stream_order)s,
-                           %(length_km)s, %(slope)s, ST_GeomFromText(%(geom)s, 5070))""", r)
+                           %(length_km)s, %(slope)s, ST_GeomFromText(%(geom)s, 5070))""",
+                r,
+            )
 
         # Intent: every reach, everything defaulted.
-        conn.execute("INSERT INTO desired_state (reach_id) SELECT reach_id FROM reach_network")
+        conn.execute(
+            "INSERT INTO desired_state (reach_id) SELECT reach_id FROM reach_network"
+        )
 
     written = export_lake_polygons(lakes)
 
@@ -219,24 +258,37 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
                count(*) FILTER (WHERE terminal_reason = 'outlet') AS outlet_terminals
         FROM reach_network""")
     print(f"reaches         {summary['reaches']}")
-    print(f"terminals       {summary['terminals']} "
-          f"(lake {summary['lake_terminals']}, coast {summary['coast_terminals']}, "
-          f"outlet {summary['outlet_terminals']})")
+    print(
+        f"terminals       {summary['terminals']} "
+        f"(lake {summary['lake_terminals']}, coast {summary['coast_terminals']}, "
+        f"outlet {summary['outlet_terminals']})"
+    )
     print(f"lakes           {len(lakes)}")
     for uri in written:
         print(f"  exported      {uri}")
     if summary["outlet_terminals"]:
-        print("\nWARNING: outlet terminals have no boundary polygon source, so ND\n"
-              "         cannot be submitted for them. See reconciliation-loop.md.")
+        print(
+            "\nWARNING: outlet terminals have no boundary polygon source, so ND\n"
+            "         cannot be submitted for them. See reconciliation-loop.md."
+        )
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--network-gpkg", type=Path, default=DEFAULT_NETWORK_GPKG,
-                    help="modified network (modify_network output)")
-    ap.add_argument("--nhf-gpkg", type=Path, default=DEFAULT_NHF_GPKG,
-                    help="hydrofabric holding the lakes_polygons layer")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--network-gpkg",
+        type=Path,
+        default=DEFAULT_NETWORK_GPKG,
+        help="modified network (modify_network output)",
+    )
+    ap.add_argument(
+        "--nhf-gpkg",
+        type=Path,
+        default=DEFAULT_NHF_GPKG,
+        help="hydrofabric holding the lakes_polygons layer",
+    )
     args = ap.parse_args()
 
     for path in (args.network_gpkg, args.nhf_gpkg):
