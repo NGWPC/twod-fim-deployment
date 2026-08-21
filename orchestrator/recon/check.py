@@ -278,8 +278,16 @@ def _run_nd_payload(reach_id: int) -> dict:
 PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 
 
-def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
-    """Check one reach, and act on what the gap turns out to be."""
+def run_check(reach_id: int, runner: ContainerRunner, *,
+              may_submit: bool = True) -> CheckResult:
+    """Check one reach, and act on what the gap turns out to be.
+
+    `may_submit=False` runs the whole check but starts no new work: it still
+    observes storage, records proofs, and notes who it waits on. That is what a
+    caller at its concurrency limit wants — observation is how a FINISHED job
+    is noticed, so suppressing checks to hold the limit stops the loop from
+    seeing completed work. Only submission needs limiting.
+    """
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
     seen_nd = observe.observe_nd_runs(reach_id)
@@ -329,6 +337,12 @@ def run_check(reach_id: int, runner: ContainerRunner) -> CheckResult:
             # off from. It simply stays here until the missing data is authored.
             processing.wait_on(reach_id, None)
             result.note = f"{decision.step} awaiting inputs: {decision.reason}"
+
+        elif isinstance(decision, gap.RunStep) and not may_submit:
+            # Everything above still ran: the reach was observed and its proofs
+            # are current. Only starting the work is deferred.
+            processing.wait_on(reach_id, None)
+            result.decision, result.note = "Ready", f"{decision.step} ready, at capacity"
 
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)

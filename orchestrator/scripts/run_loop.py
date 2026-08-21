@@ -77,12 +77,13 @@ def one_pass(runner: LocalDockerRunner, max_in_flight: int) -> int:
 
     submitted = 0
     for row in queue.due_reaches():
-        # The cap is on jobs running at once. run_check submits as part of
-        # checking, so holding the line means stopping checking — nothing is
-        # lost, since while every slot is busy there is nothing new to observe.
-        if len(processing.in_flight()) >= max_in_flight:
-            break
-        result = check.run_check(row["reach_id"], runner)
+        # EVERY due reach is checked, every pass. The cap limits submissions
+        # only — never checking — because observation is how a finished job is
+        # noticed at all. Skipping checks to hold the cap means a library can
+        # sit complete in storage, unobserved, while the loop waits on an
+        # unrelated job; the reach then looks unbuilt and gets resubmitted.
+        at_cap = len(processing.in_flight()) >= max_in_flight
+        result = check.run_check(row["reach_id"], runner, may_submit=not at_cap)
         if result.submitted_ref:
             submitted += 1
             logging.info("%s", result)
