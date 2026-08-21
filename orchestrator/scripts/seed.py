@@ -152,7 +152,7 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
 
     if clipped:
         print(
-            f"  {len(clipped)} reach(es) point outside this file; treated as outlet terminals:"
+            f"  {len(clipped)} reach(es) point outside this network; treated as outlet terminals:"
         )
         for reach_id, missing in clipped:
             print(f"    {reach_id} -> {missing} (not in file)")

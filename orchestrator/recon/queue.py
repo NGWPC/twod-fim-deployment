@@ -36,7 +36,7 @@ _DUE = """
         p.reach_id IS NULL                             AS never_checked,
         (COALESCE(mm.applied_revision,  -1) < d.revision
          OR COALESCE(mnd.applied_revision, -1) < d.revision) AS intent_moved,
-        COALESCE(p.check_requested_at > p.last_checked_at, FALSE) AS was_asked,
+        COALESCE(p.check_requested_at > p.last_checked_at, FALSE) AS outstanding_check_request,
         p.current_step
     FROM desired_state d
     LEFT JOIN reach_processing p USING (reach_id)
@@ -57,9 +57,9 @@ def due_reaches(
 ) -> list[db.Row]:
     """Reaches that need a check now.
 
-    Each row carries why it is here — never_checked, intent_moved, was_asked —
-    because a queue that cannot explain itself is hard to trust, and the
-    notebook shows those columns directly.
+    Each row carries why it is here — never_checked, intent_moved,
+    outstanding_check_request — because a queue that cannot explain itself is
+    hard to trust, and the notebook shows those columns directly.
     """
     sql = _DUE + ("\n    LIMIT %s" if limit is not None else "")
     return db.query(sql, (limit,) if limit is not None else None, conn=conn)
