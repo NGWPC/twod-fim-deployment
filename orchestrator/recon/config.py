@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     )
     docker_network: str = "twodfim"
     docker_platform: str | None = None
-    build_model_timeout: int = 3600
     # When a normal-depth run is considered steady and may stop early: the
     # volume change over a save interval, normalized by inflow. DR-022 selects
     # volume convergence as the termination metric and DR-028 sets it to 1e-3.
@@ -64,7 +63,6 @@ class Settings(BaseSettings):
     # inundation is bounded by the domain rather than by the terrain.
     allow_water_on_edges: bool = True
     docker_data_dir: str | None = None
-    lulc_source: str | None = None
     # Hostname the database answers to from inside a job container. Jobs run as
     # siblings on the compose network, where the host's "localhost" is their own
     # container, so they cannot use the same connection string the loop does.
