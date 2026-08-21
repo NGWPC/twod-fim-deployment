@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg
+from shapely.geometry import shape
 
 from recon import (activity, db, gap, identity, intent, observe, processing,
                    queue, storage)
@@ -101,6 +102,69 @@ def load_snapshot(
     )
 
 
+def _downstream_max_q_dir(downstream: int) -> str:
+    """The downstream reach's scenario folder at its HIGHEST discharge.
+
+    Read from that reach's proof rather than predicted, because the discharge
+    is emergent: the adaptive step algorithm chose it, and only that reach's
+    materialization knows what it was. Two things upstream need this folder —
+    the inundated area that bounds an nd run, and the stage transfer line that
+    shapes a model domain — so it is derived once here.
+    """
+    proof = db.one(
+        "SELECT model_identity_hash, run_identity_hash, q_set FROM materialized_nd_runs"
+        " WHERE reach_id = %s", (downstream,))
+    if proof is None:
+        raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
+    library = storage.nd_library_path(
+        downstream, proof["model_identity_hash"], proof["run_identity_hash"],
+        intent.boundary_slope(downstream))
+    return f"{library}/{identity.q_folder(max(proof['q_set']))}"
+
+
+def _geojson_wkt(path: str) -> list[str]:
+    """Every geometry in a GeoJSON document, as WKT.
+
+    build_model takes geometries, not references, so this is the one place the
+    loop hands a job DATA rather than an address. WKT via shapely for the same
+    reason identity hashing goes through shapely: it is the representation the
+    job itself round-trips through geopandas.
+    """
+    doc = storage.read_json(path)
+    if doc is None:
+        raise RuntimeError(f"expected a geometry at {path}, found nothing")
+    if doc.get("type") == "FeatureCollection":
+        geoms = [f["geometry"] for f in doc.get("features", []) if f.get("geometry")]
+    elif doc.get("type") == "Feature":
+        geoms = [doc["geometry"]] if doc.get("geometry") else []
+    else:
+        geoms = [doc]
+    if not geoms:
+        raise RuntimeError(f"no geometry in {path}")
+    return [shape(g).wkt for g in geoms]
+
+
+def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
+    """Geometry the model domain must contain besides the reach itself.
+
+    A non-terminal reach's domain has to extend to where water is transferred
+    in from below, so it includes the DOWNSTREAM reach's stage transfer line at
+    its highest discharge — the largest footprint that transfer ever has. This
+    is what the model rung waits for: gap.py holds a reach until its downstream
+    neighbour's nd library is proved, and this is the reason it does.
+
+    Terminal reaches have nothing below them and pass none.
+
+    NOTE these geometries are NOT part of model identity. They move the domain,
+    so they change domain_code and not identity_hash — meaning a model built
+    without them still satisfies intent and will still be adopted. Changing
+    what is passed here does not trigger a rebuild by itself.
+    """
+    if wanted["is_terminal"]:
+        return []
+    return _geojson_wkt(f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}")
+
+
 def _build_model_payload(reach_id: int) -> dict:
     """What build_model needs, with every identity input pinned.
 
@@ -125,6 +189,7 @@ def _build_model_payload(reach_id: int) -> dict:
         "lulc_source": wanted["lulc_source"],
         "lulc_lookup": wanted["lulc_lookup"],
         "domain_buffer": settings.domain_buffer,
+        "other_geometries": _model_geometries(reach_id, wanted),
     }
 
 
@@ -168,22 +233,13 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
             "lake or coast, so it has no outflow boundary")
 
     downstream = wanted["reach_to_id"]
-    proof = db.one(
-        "SELECT model_identity_hash, run_identity_hash, q_set FROM materialized_nd_runs"
-        " WHERE reach_id = %s", (downstream,))
-    if proof is None:
-        raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
-    max_q = max(proof["q_set"])
     # Two different slopes, and confusing them puts the loop in the wrong
-    # folder. The downstream reach's library sits at ITS boundary slope, which
-    # is its own downstream neighbour's. The slope THIS run is performed at is
-    # the downstream reach's centerline slope.
-    library = storage.nd_library_path(
-        downstream, proof["model_identity_hash"], proof["run_identity_hash"],
-        intent.boundary_slope(downstream))
+    # folder. The downstream reach's library sits at ITS boundary slope (its own
+    # downstream neighbour's); the slope THIS run is performed at is the
+    # downstream reach's centerline slope.
     return {
         "outflow_area_polygon_path":
-            f"{library}/{identity.q_folder(max_q)}/{storage.INUNDATED_AREA_FILENAME}",
+            f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
         "ds_slope": intent.boundary_slope(reach_id),
     }
 
