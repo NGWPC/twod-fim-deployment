@@ -219,10 +219,16 @@ variable "ecr_image_tag_mutability" {
 
 # --- App-specific: CloudWatch ---
 
+variable "log_kms_key_arn" {
+  description = "KMS key ARN for CloudWatch log group encryption (set by org policy)"
+  type        = string
+  default     = ""
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log retention (days) for all log groups"
   type        = number
-  default     = 30
+  default     = 365
 
   validation {
     condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653, 0], var.log_retention_days)
@@ -332,6 +338,12 @@ variable "lambda_timeout" {
     condition     = var.lambda_timeout >= 1 && var.lambda_timeout <= 900
     error_message = "lambda_timeout must be 1-900 seconds (AWS limit)."
   }
+}
+
+variable "sepex_api_url" {
+  description = "SEPEX API base URL for the Batch status callback Lambda (e.g., http://<sepex-private-ip>). Empty disables the callback."
+  type        = string
+  default     = ""
 }
 
 # --- App-specific: RDS ---

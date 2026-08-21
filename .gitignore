@@ -30,6 +30,7 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 lambda_placeholder.zip
+lambda_batch_status.zip
 
 # Local deployment data
 /.data/

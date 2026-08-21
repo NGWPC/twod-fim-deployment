@@ -1,4 +1,21 @@
+# --- Network ---
+
+output "vpc_id" {
+  description = "VPC ID"
+  value       = var.vpc_id
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet IDs used for compute resources"
+  value       = var.private_subnet_ids
+}
+
 # --- EC2 ---
+
+output "ec2_ami_id" {
+  description = "AMI ID used for EC2 instances"
+  value       = var.ec2_ami_id
+}
 
 output "orchestrator_instance_id" {
   description = "EC2 orchestrator instance ID"
@@ -40,6 +57,42 @@ output "rds_secret_arn" {
 output "rds_master_user_secret_arn" {
   description = "AWS-managed Secrets Manager secret ARN holding the RDS master password (manage_master_user_password)"
   value       = aws_db_instance.main.master_user_secret[0].secret_arn
+}
+
+# --- Security Groups ---
+
+output "orchestrator_security_group_id" {
+  description = "Orchestrator EC2 security group ID"
+  value       = aws_security_group.ec2.id
+}
+
+output "lambda_security_group_id" {
+  description = "Lambda security group ID"
+  value       = aws_security_group.lambda.id
+}
+
+output "rds_security_group_id" {
+  description = "RDS security group ID"
+  value       = aws_security_group.rds.id
+}
+
+# --- IAM ---
+
+output "ec2_instance_profile_name" {
+  description = "EC2 orchestrator instance profile name (also used for SEPEX)"
+  value       = local.ec2_instance_profile_name
+}
+
+# --- S3 ---
+
+output "prod_bucket_name" {
+  description = "Production S3 bucket name"
+  value       = var.prod_bucket_name
+}
+
+output "test_bucket_name" {
+  description = "Test S3 bucket name"
+  value       = var.test_bucket_name
 }
 
 # --- Container images ---

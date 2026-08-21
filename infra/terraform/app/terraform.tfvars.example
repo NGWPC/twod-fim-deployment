@@ -85,4 +85,6 @@ kwse_image_tag = "sha-abc1234"       # git SHA or release tag
 # kwse_job_timeout_seconds        = 14400      # min 60s
 # lambda_timeout                  = 60         # 1-900s
 # lambda_memory_size              = 128        # 128-10240 MB
-# log_retention_days              = 30         # AWS-supported values: 1/3/5/7/14/30/60/90/120/150/180/365/...
+# sepex_api_url                   = ""         # http://<sepex-private-ip> (set after SEPEX is deployed)
+# log_retention_days              = 365        # AWS-supported values: 1/3/5/7/14/30/60/90/120/150/180/365/...
+# log_kms_key_arn                  = ""         # KMS key ARN for CloudWatch log encryption (set by org policy)

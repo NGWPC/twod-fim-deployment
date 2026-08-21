@@ -1,0 +1,78 @@
+info:
+  version: '0.1.0'
+  id: buildModel
+  title: Build Model
+  description: Build a 2D FIM hydraulic model for a reach
+  jobControlOptions:
+    - async-execute
+  outputTransmission:
+    - reference
+
+host:
+  type: docker
+  image: ghcr.io/ngwpc/twod-fim-jobs/build_model:dev
+
+command: []
+
+config:
+  maxResources:
+    cpus: 1
+    memory: 4096
+  envVars:
+    - BUILDMODEL_AWS_ENDPOINT_URL
+    - BUILDMODEL_AWS_REQUEST_PAYER
+    - BUILDMODEL_ARTIFACTS_S3_BUCKET
+    - BUILDMODEL_MAJOR_VERSION
+
+inputs:
+  - id: reach_id
+    title: reach_id
+    description: Reach identifier
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: db_uri
+    title: db_uri
+    description: Database connection string for the twodfim pipeline database
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: base_output_path
+    title: base_output_path
+    description: S3 path prefix for model artifacts
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: lulc_source
+    title: lulc_source
+    description: Connection string for the LULC source dataset
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+outputs:
+  - id: plugin_results
+    title: plugin_results
+    description: Build result with identity_hash, model_id, and build_model_version
+    output:
+      transmissionMode:
+        - value

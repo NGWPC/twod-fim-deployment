@@ -138,7 +138,8 @@ locals {
   # No resource-level ARN scoping exists for batch:SubmitJob/TerminateJob's job-instance
   # target (jobs aren't known until submission), so this scopes to the account/region at
   # least, rather than a bare "*".
-  batch_job_arn_pattern = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job/*"
+  batch_job_arn_pattern    = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job/*"
+  batch_job_def_arn_pattern = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job-definition/${var.project_name}-*"
 }
 
 # --- EC2 orchestrator role + instance profile ---
@@ -194,8 +195,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Action = "batch:SubmitJob"
         Resource = [
           aws_batch_job_queue.scenarios.arn,
-          aws_batch_job_definition.nd.arn,
-          aws_batch_job_definition.kwse.arn,
+          local.batch_job_def_arn_pattern,
           local.batch_job_arn_pattern,
         ]
       },
@@ -210,6 +210,9 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Effect = "Allow"
         Action = [
           "batch:DescribeJobs",
+          "batch:DescribeJobDefinitions",
+          "batch:DescribeJobQueues",
+          "batch:DescribeComputeEnvironments",
           "batch:ListJobs",
         ]
         Resource = "*"
