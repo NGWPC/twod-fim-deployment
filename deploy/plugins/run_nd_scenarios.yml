@@ -97,6 +97,39 @@ inputs:
     minOccurs: 1
     maxOccurs: 1
 
+  - id: volume_convergence_tolerance
+    title: volume_convergence_tolerance
+    description: Volume convergence threshold for adaptive stepping
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: allow_water_on_edges
+    title: allow_water_on_edges
+    description: Whether to allow water at domain edges
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: solver
+    title: solver
+    description: Solver name
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
 outputs:
   - id: plugin_results
     title: plugin_results

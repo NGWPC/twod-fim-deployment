@@ -1,13 +1,14 @@
 """Container runners for the job images.
 
 The loop calls these through the ContainerRunner protocol, so swapping the
-runner — local Docker now, AWS Batch or SEPEX later — changes nothing above it.
+runner -- local Docker now, SEPEX for cloud -- changes nothing above it.
 """
 
 import json
 import logging
 import os
 import subprocess
+import urllib.request
 import uuid
 
 from enum import Enum
@@ -212,3 +213,83 @@ class LocalDockerRunner:
     def reap(self, ref: str) -> None:
         """Remove a finished container. Never fails the caller."""
         subprocess.run(["docker", "rm", "-f", ref], capture_output=True, check=False)
+
+
+SEPEX_PROCESS_IDS = {
+    "build_model": "buildModel",
+    "run_nd_scenarios": "runNdScenarios",
+}
+
+SEPEX_STATUS_MAP = {
+    "accepted": JobStatus.QUEUED,
+    "running": JobStatus.RUNNING,
+    "successful": JobStatus.SUCCEEDED,
+    "failed": JobStatus.FAILED,
+    "dismissed": JobStatus.FAILED,
+}
+
+
+class SepexRunner:
+    """Runs jobs through the SEPEX API instead of local Docker.
+
+    SEPEX manages container execution (Docker for build_model, AWS Batch for
+    nd_scenarios) and tracks job status. The Lambda callback updates SEPEX
+    when Batch jobs complete, so poll() only reads SEPEX's view of the job.
+    """
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+
+    def _request(self, method: str, path: str,
+                 data: dict | None = None,
+                 headers: dict[str, str] | None = None,
+                 timeout: int = 30) -> dict | None:
+        url = f"{self.base_url}{path}"
+        body = json.dumps(data).encode() if data is not None else None
+        hdrs = {"Content-Type": "application/json", **(headers or {})}
+        req = urllib.request.Request(url, data=body, method=method, headers=hdrs)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+        except (urllib.error.URLError, TimeoutError):
+            return None
+
+    def submit(self, job: str, payload: dict) -> str:
+        process_id = SEPEX_PROCESS_IDS.get(job)
+        if process_id is None:
+            raise ValueError(f"no SEPEX process configured for job {job!r}")
+
+        logger.info("Submitting %s to SEPEX as %s for reach %s",
+                     job, process_id, reach_of(payload))
+        result = self._request(
+            "POST", f"/processes/{process_id}/execution",
+            data={"inputs": payload},
+            headers={"Prefer": "respond-async"},
+        )
+        if result is None:
+            raise RuntimeError(f"SEPEX unreachable submitting {job} for reach {reach_of(payload)}")
+        return result["jobID"]
+
+    def poll(self, ref: str) -> JobStatus:
+        result = self._request("GET", f"/jobs/{ref}")
+        if result is None:
+            return JobStatus.UNKNOWN
+        return SEPEX_STATUS_MAP.get(result.get("status", ""), JobStatus.UNKNOWN)
+
+    def logs(self, ref: str, tail: int = 50) -> str:
+        result = self._request("GET", f"/jobs/{ref}/logs")
+        if result is None:
+            return ""
+        if isinstance(result, list):
+            return "\n".join(str(entry) for entry in result[-tail:])
+        return str(result)
+
+    def reap(self, ref: str) -> None:
+        try:
+            self._request("DELETE", f"/jobs/{ref}")
+        except Exception:
+            pass

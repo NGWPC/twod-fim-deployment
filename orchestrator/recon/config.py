@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     # end to end. Treat any library produced this way as provisional — the
     # inundation is bounded by the domain rather than by the terrain.
     allow_water_on_edges: bool = True
+    sepex_url: str | None = None
     docker_data_dir: str | None = None
     # Hostname the database answers to from inside a job container. Jobs run as
     # siblings on the compose network, where the host's "localhost" is their own
