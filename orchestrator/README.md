@@ -33,7 +33,7 @@ Whoever picks this up needs four calls:
 | which reaches need a check | `queue.due_reaches()` |
 | check one reach | `check.run_check(reach_id, runner)` |
 | hear back about submitted jobs | `jobs.status_pass(runner)` |
-| a runner | `workers.LocalDockerRunner` (any `ContainerRunner`) |
+| a runner | `workers.LocalDockerRunner` or `workers.SepexRunner` (any `ContainerRunner`) |
 
 Three constraints that change how the sensor should be written:
 
@@ -144,6 +144,9 @@ Options:
 | `DAGSTER_S3_BUCKET` | dagster.yaml, docker-compose | Dagster compute logs bucket |
 | `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
 | `MAJOR_VERSION` | config.py | Artifact path versioning |
+| `SEPEX_URL` | config.py, reconcile.py | SEPEX API base URL; when set, uses `SepexRunner` instead of `LocalDockerRunner` |
+| `POSTGRES_HOST_FOR_JOBS` | config.py | DB host for job payloads; falls back to `POSTGRES_HOST` if unset |
+| `AWS_ENDPOINT_URL_FOR_JOBS` | config.py, workers.py | S3 endpoint for job containers; falls back to `AWS_ENDPOINT_URL` if unset |
 
 See `example.env` for additional optional variables (Docker platform, local raster overrides, AWS session tokens).
 
