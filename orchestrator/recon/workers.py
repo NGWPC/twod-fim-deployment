@@ -45,7 +45,7 @@ def job_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     dem_source or lulc_source lives in a requester-pays bucket should add it
     through `extra` for build_model.
     """
-    endpoint = settings.aws_endpoint_url_for_jobs
+    endpoint = settings.effective_aws_endpoint_url_for_jobs
     host = endpoint.split("://", 1)[-1]
     env = {
         "AWS_ENDPOINT_URL": endpoint,
