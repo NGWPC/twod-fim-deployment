@@ -149,7 +149,8 @@ def main() -> int:
     logging.getLogger("botocore").setLevel(logging.WARNING)
 
     runner = build_runner(args)
-    logging.info("images: %s", " ".join(sorted(set(runner.images.values()))))
+    if hasattr(runner, "images"):
+        logging.info("images: %s", " ".join(sorted(set(runner.images.values()))))
     logging.info(
         "database %s | storage s3://%s",
         settings.postgres_host,
