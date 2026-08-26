@@ -226,8 +226,7 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
                 # reach's own slope and is knowingly wrong for a terminal:
                 # a flat slope behaves like a nearly closed boundary, which is
                 # what ALT-B was rejected for.
-                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id),
-                        "ds_slope": intent.boundary_slope(reach_id)}
+                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id)}
         raise RuntimeError(
             f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
             "lake or coast, so it has no outflow boundary")
@@ -240,7 +239,6 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     return {
         "outflow_area_polygon_path":
             f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
-        "ds_slope": intent.boundary_slope(reach_id),
     }
 
 
@@ -271,7 +269,6 @@ def _run_nd_payload(reach_id: int) -> dict:
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
-        "solver": wanted["solver"],
     }
 
 
