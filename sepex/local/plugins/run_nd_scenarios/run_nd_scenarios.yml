@@ -1,0 +1,137 @@
+info:
+  version: '0.1.0'
+  id: runNdScenarios
+  title: Run ND Scenarios
+  description: Run normal-depth scenarios for a reach using adaptive discharge stepping
+  jobControlOptions:
+    - async-execute
+  outputTransmission:
+    - reference
+
+host:
+  type: docker
+  image: ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev
+
+command: []
+
+config:
+  envVars: []
+
+inputs:
+  - id: model_manifest_path
+    title: model_manifest_path
+    description: S3 path to the model manifest JSON from build_model
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: model_results_base_path
+    title: model_results_base_path
+    description: S3 path where scenario results will be saved
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: min_upstream_inflow
+    title: min_upstream_inflow
+    description: Minimum discharge in cms
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: max_upstream_inflow
+    title: max_upstream_inflow
+    description: Maximum discharge in cms
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: delta_upstream_inflow
+    title: delta_upstream_inflow
+    description: Discharge increment for adaptive step algorithm in cms
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: ds_slope
+    title: ds_slope
+    description: Downstream boundary condition slope in m/m
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: outflow_area_polygon_path
+    title: outflow_area_polygon_path
+    description: S3 path to the outflow area polygon
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: volume_convergence_tolerance
+    title: volume_convergence_tolerance
+    description: Volume convergence threshold for adaptive stepping
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: allow_water_on_edges
+    title: allow_water_on_edges
+    description: Whether to allow water at domain edges
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: solver
+    title: solver
+    description: Solver name
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+outputs:
+  - id: plugin_results
+    title: plugin_results
+    description: Scenario manifest paths and adaptive step comparison results
+    output:
+      transmissionMode:
+        - reference
