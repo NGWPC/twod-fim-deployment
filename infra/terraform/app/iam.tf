@@ -131,7 +131,8 @@ locals {
   ]
 
   ec2_log_group_arn   = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"
-  batch_log_group_arn = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/${var.project_name}:*"
+  batch_log_group_arn         = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/${var.project_name}:*"
+  batch_default_log_group_arn = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/job:*"
 
   rds_secret_name = "${var.project_name}/rds-credentials"
 
@@ -231,6 +232,12 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Effect   = "Allow"
         Action   = "logs:DescribeLogStreams"
         Resource = local.ec2_log_group_arn
+      },
+      {
+        Sid      = "BatchLogsRead"
+        Effect   = "Allow"
+        Action   = "logs:GetLogEvents"
+        Resource = local.batch_default_log_group_arn
       },
       {
         Sid      = "SecretsManagerDBCreds"
