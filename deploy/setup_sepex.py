@@ -16,7 +16,7 @@ Where:
   --rds-secret-arn  RDS master secret ARN (terraform output -raw rds_master_user_secret_arn)
   --sepex-password  Password for the sepex_app database user (choose one)
   --s3-bucket       S3 bucket for SEPEX storage (prod_bucket_name or test_bucket_name from terraform.tfvars)
-  --image           Container image (default: ghcr.io/biplovbhandari/sepex:dev)
+  --image           Container image (default: ghcr.io/dewberry/sepex:dev)
   --install-dir     Install directory (default: /opt/sepex)
   --reset           Drop and recreate the sepex database
   --skip-db         Skip database setup, only deploy
@@ -55,7 +55,7 @@ networks:
     external: true
 """
 
-DEFAULT_IMAGE = "ghcr.io/biplovbhandari/sepex:dev"
+DEFAULT_IMAGE = "ghcr.io/dewberry/sepex:dev"
 
 ENV_TEMPLATE = """\
 # --- Core

@@ -144,7 +144,7 @@ python3 /opt/twod-fim-deployment/deploy/setup_sepex.py \
 | `--rds-secret-arn` | `terraform output -raw rds_master_user_secret_arn` |
 | `--sepex-password` | User-chosen password for the `sepex_app` database user |
 | `--s3-bucket` | `prod_bucket_name` or `test_bucket_name` from `terraform.tfvars` |
-| `--image` | Container image (default: `ghcr.io/biplovbhandari/sepex:dev`) |
+| `--image` | Container image (default: `ghcr.io/dewberry/sepex:dev`) |
 | `--install-dir` | Install path (default: `/opt/sepex`) |
 | `--reset` | Drop and recreate the sepex database |
 | `--skip-db` | Skip database setup, only deploy |
