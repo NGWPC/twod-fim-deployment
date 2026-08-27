@@ -69,6 +69,72 @@ inputs:
     minOccurs: 0
     maxOccurs: 1
 
+  - id: grid_resolution
+    title: grid_resolution
+    description: DEM grid resolution in meters
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: epsg_code
+    title: epsg_code
+    description: Coordinate reference system EPSG code
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: dem_source
+    title: dem_source
+    description: DEM source path or URL
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: lulc_lookup
+    title: lulc_lookup
+    description: Land cover to Manning's n lookup table
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: domain_buffer
+    title: domain_buffer
+    description: Buffer distance around reach geometry in CRS units
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: other_geometries
+    title: other_geometries
+    description: Additional geometries for model building
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
 outputs:
   - id: plugin_results
     title: plugin_results

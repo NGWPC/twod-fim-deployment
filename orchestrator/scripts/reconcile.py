@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from recon import check, db, jobs, processing, queue
 from recon.config import settings
-from recon.workers import LocalDockerRunner, job_env
+from recon.workers import ContainerRunner, LocalDockerRunner, SepexRunner, job_env
 
 TALLY = """
     SELECT count(*) FILTER (WHERE state = 'finished')           AS finished,
@@ -45,19 +45,16 @@ TALLY = """
 """
 
 
-def build_runner(args: argparse.Namespace) -> LocalDockerRunner:
+def build_runner(args: argparse.Namespace) -> ContainerRunner:
     """A runner configured for this deployment.
 
-    job_env() carries the S3 settings both clients inside the images need —
-    boto3 reads AWS_ENDPOINT_URL, GDAL ignores it and wants its own. USE_CUDA
-    is emptied unless --gpu is passed: the run image is CUDA-capable but does
-    not require a GPU, and only an EMPTY string disables it (the job reads it
-    as bool(os.environ.get(...)), so "false" and "0" are both truthy).
+    When SEPEX_URL is set, jobs are submitted to the SEPEX API (which handles
+    Docker and Batch execution). Otherwise, jobs run as local Docker containers.
     """
-    # Two halves, and both are needed. USE_CUDA tells the job to put `cuda` in
-    # the solver's parameter file; --gpus lets the container see the device.
-    # Either without the other fails: no flag means the CUDA solver starts with
-    # no GPU, no USE_CUDA means the GPU sits idle while the CPU solver runs.
+    if settings.sepex_url:
+        logging.info("Using SEPEX runner at %s", settings.sepex_url)
+        return SepexRunner(base_url=settings.sepex_url)
+
     extra = {} if args.gpu else {"USE_CUDA": ""}
     return LocalDockerRunner(
         network=settings.docker_network,
@@ -70,7 +67,7 @@ def build_runner(args: argparse.Namespace) -> LocalDockerRunner:
     )
 
 
-def one_pass(runner: LocalDockerRunner, max_in_flight: int) -> int:
+def one_pass(runner: ContainerRunner, max_in_flight: int) -> int:
     """Poll what is running, then check what is due. Returns jobs submitted."""
     for outcome in jobs.status_pass(runner):
         if outcome["status"] in ("succeeded", "failed"):
@@ -152,7 +149,8 @@ def main() -> int:
     logging.getLogger("botocore").setLevel(logging.WARNING)
 
     runner = build_runner(args)
-    logging.info("images: %s", " ".join(sorted(set(runner.images.values()))))
+    if hasattr(runner, "images"):
+        logging.info("images: %s", " ".join(sorted(set(runner.images.values()))))
     logging.info(
         "database %s | storage s3://%s",
         settings.postgres_host,

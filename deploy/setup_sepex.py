@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deploy SEPEX alongside the twod-fim orchestrator on EC2.
 
-Handles database creation, repo clone, configuration, build, and startup.
+Handles database creation, configuration, and startup using a pre-built container image.
 Run on the SEPEX EC2 instance after infrastructure provisioning (see deploy/sepex.md steps 1-3).
 
 Usage:
@@ -16,7 +16,7 @@ Where:
   --rds-secret-arn  RDS master secret ARN (terraform output -raw rds_master_user_secret_arn)
   --sepex-password  Password for the sepex_app database user (choose one)
   --s3-bucket       S3 bucket for SEPEX storage (prod_bucket_name or test_bucket_name from terraform.tfvars)
-  --repo-url        SEPEX repo URL (default: https://github.com/Dewberry/sepex.git)
+  --image           Container image (default: ghcr.io/dewberry/sepex:dev)
   --install-dir     Install directory (default: /opt/sepex)
   --reset           Drop and recreate the sepex database
   --skip-db         Skip database setup, only deploy
@@ -38,15 +38,13 @@ MASTER_USER = "twodfim_admin"
 COMPOSE_CLOUD = """\
 services:
   api:
-    build:
-      context: ./api
+    image: {image}
     container_name: sepex-api
     ports:
       - '80:5050'
     env_file:
       - .env
     volumes:
-      - ./api/plugins:/app/plugins
       - ./.data/api:/.data
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -57,9 +55,10 @@ networks:
     external: true
 """
 
+DEFAULT_IMAGE = "ghcr.io/dewberry/sepex:dev"
+
 ENV_TEMPLATE = """\
 # --- Core
-REPO_URL='{repo_url}'
 API_NAME='sepex'
 API_PORT='5050'
 
@@ -178,27 +177,25 @@ def setup_database(rds_address, sepex_password, pg_env, reset=False):
     print(f"  public schema owned by {SEPEX_USER}")
 
 
-def clone_repo(repo_url, install_dir):
-    """Clone SEPEX repo if not already present."""
+def prepare_install_dir(install_dir):
+    """Create the install directory if it doesn't exist."""
     if install_dir.exists():
-        print(f"  {install_dir} already exists, skipping clone")
+        print(f"  {install_dir} already exists")
         return
 
-    print(f"Cloning {repo_url}...")
-    run(["sudo", "git", "clone", repo_url, str(install_dir)])
+    run(["sudo", "mkdir", "-p", str(install_dir)])
     run(["sudo", "chown", "-R", "ssm-user:ssm-user", str(install_dir)])
-    print(f"  Cloned to {install_dir}")
+    print(f"  Created {install_dir}")
 
 
-def write_config(install_dir, rds_address, sepex_password, s3_bucket, repo_url):
+def write_config(install_dir, rds_address, sepex_password, s3_bucket, image):
     """Generate docker-compose.cloud.yaml and .env."""
     compose_path = install_dir / "docker-compose.cloud.yaml"
-    compose_path.write_text(COMPOSE_CLOUD)
-    print(f"  Wrote {compose_path}")
+    compose_path.write_text(COMPOSE_CLOUD.format(image=image))
+    print(f"  Wrote {compose_path} (image: {image})")
 
     encoded_password = quote(sepex_password, safe="")
     env_content = ENV_TEMPLATE.format(
-        repo_url=repo_url,
         db_user=SEPEX_USER,
         db_password=encoded_password,
         rds_address=rds_address,
@@ -213,8 +210,8 @@ def write_config(install_dir, rds_address, sepex_password, s3_bucket, repo_url):
     print(f"  Wrote {env_path}")
 
 
-def build_and_start(install_dir):
-    """Create network, build image, start services."""
+def pull_and_start(install_dir):
+    """Create network, pull image, start services."""
     compose_file = str(install_dir / "docker-compose.cloud.yaml")
 
     print("Creating docker network...")
@@ -223,8 +220,8 @@ def build_and_start(install_dir):
         capture_output=True, check=False,
     )
 
-    print("\nBuilding SEPEX image...")
-    run(["docker", "compose", "-f", compose_file, "build"])
+    print("\nPulling SEPEX image...")
+    run(["docker", "compose", "-f", compose_file, "pull"])
 
     print("\nStopping existing services...")
     run(["docker", "compose", "-f", compose_file, "down"], check=False)
@@ -260,7 +257,7 @@ def main():
     parser.add_argument("--rds-secret-arn", required=True, help="RDS master secret ARN (terraform output -raw rds_master_user_secret_arn)")
     parser.add_argument("--sepex-password", required=True, help="Password for the sepex_app database user")
     parser.add_argument("--s3-bucket", required=True, help="S3 bucket for SEPEX storage (prod or test bucket from terraform.tfvars)")
-    parser.add_argument("--repo-url", default="https://github.com/Dewberry/sepex.git", help="SEPEX repo URL (default: Dewberry/sepex)")
+    parser.add_argument("--image", default=DEFAULT_IMAGE, help=f"Container image (default: {DEFAULT_IMAGE})")
     parser.add_argument("--install-dir", default="/opt/sepex", help="Install directory (default: /opt/sepex)")
     parser.add_argument("--reset", action="store_true", help="Drop and recreate the sepex database")
     parser.add_argument("--skip-db", action="store_true", help="Skip database setup, only deploy")
@@ -284,12 +281,12 @@ def main():
         print("\nDone. Database ready.")
 
     print(f"\n--- Deploying SEPEX ---")
-    clone_repo(args.repo_url, install_dir)
+    prepare_install_dir(install_dir)
 
     print("\nWriting configuration...")
-    write_config(install_dir, args.rds_address, args.sepex_password, args.s3_bucket, args.repo_url)
+    write_config(install_dir, args.rds_address, args.sepex_password, args.s3_bucket, args.image)
 
-    build_and_start(install_dir)
+    pull_and_start(install_dir)
 
     print("\n--- Setup complete ---")
 

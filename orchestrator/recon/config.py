@@ -70,14 +70,23 @@ class Settings(BaseSettings):
     # end to end. Treat any library produced this way as provisional — the
     # inundation is bounded by the domain rather than by the terrain.
     allow_water_on_edges: bool = True
+    sepex_url: str | None = None
     docker_data_dir: str | None = None
     # Hostname the database answers to from inside a job container. Jobs run as
     # siblings on the compose network, where the host's "localhost" is their own
     # container, so they cannot use the same connection string the loop does.
-    postgres_host_for_jobs: str = "db"
-    # Same idea for object storage: jobs run as siblings on the compose network,
-    # so the endpoint the loop uses (localhost) is not reachable from inside one.
-    aws_endpoint_url_for_jobs: str = "http://minio:9000"
+    postgres_host_for_jobs: str | None = None
+    aws_endpoint_url_for_jobs: str | None = None
+
+    @computed_field
+    @property
+    def effective_postgres_host_for_jobs(self) -> str:
+        return self.postgres_host_for_jobs or self.postgres_host
+
+    @computed_field
+    @property
+    def effective_aws_endpoint_url_for_jobs(self) -> str:
+        return self.aws_endpoint_url_for_jobs or self.aws_endpoint_url or ""
 
     @computed_field
     @property
@@ -94,7 +103,7 @@ class Settings(BaseSettings):
         """How a job container reaches the database. Handed to jobs, never used here."""
         return (
             f"postgresql://{quote_plus(self.postgres_user)}:{quote_plus(self.postgres_password)}"
-            f"@{self.postgres_host_for_jobs}:{self.postgres_port}/{self.postgres_db}"
+            f"@{self.effective_postgres_host_for_jobs}:{self.postgres_port}/{self.postgres_db}"
         )
 
 
