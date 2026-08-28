@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     run_nd_scenarios_lisflood_gpu_image: str = (
         "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev"
     )
-    docker_network: str = "twodfim"
+    docker_network: str = "twodfim_net"
     # Value for docker run --gpus, e.g. "all" or "device=0". None passes the
     # flag at all, which is right on a machine without a GPU — and note that on
     # such a machine the CPU image is what gets selected anyway, so there is no

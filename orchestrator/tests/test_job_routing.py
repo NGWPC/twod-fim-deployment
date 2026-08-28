@@ -14,9 +14,12 @@ import pytest
 
 from recon import gap
 from recon.check import RUN_ND_JOBS, _job_key
+from recon.config import settings
 from recon.workers import SEPEX_PROCESS_IDS, LocalDockerRunner
 
-SCHEMA = Path(__file__).resolve().parents[2] / "db" / "schema"
+DEPLOYMENT = Path(__file__).resolve().parents[2]
+SCHEMA = DEPLOYMENT / "db" / "schema"
+COMPOSE = DEPLOYMENT / "docker-compose-local.yml"
 
 
 # --- routing ------------------------------------------------------------
@@ -75,3 +78,18 @@ def test_variants_are_not_step_names():
         assert key not in allowed, (
             f"{key} is a runner variant, not a step; it must never reach "
             "reach_processing.current_step")
+
+
+def test_the_runner_attaches_jobs_to_the_network_the_stack_actually_uses():
+    """A job on the wrong network cannot resolve `db` or `minio`, and the
+    failure names neither — docker just refuses to start the container.
+
+    The compose file declares the network as external, so its name is the one
+    fact both sides must agree on. Only LocalDockerRunner reads the setting;
+    SepexRunner never does, which is how a stale default survived unnoticed
+    while the deployment ran through SEPEX.
+    """
+    declared = re.search(r"^networks:\n\s+([A-Za-z0-9_.-]+):",
+                         COMPOSE.read_text(), re.M)
+    assert declared, "no networks: block in docker-compose-local.yml"
+    assert settings.docker_network == declared.group(1)
