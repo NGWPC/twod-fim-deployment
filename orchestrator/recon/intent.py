@@ -31,8 +31,8 @@ _EFFECTIVE = """
         COALESCE(d.lulc_source,     f.lulc_source)     AS lulc_source,
         COALESCE(d.lulc_lookup,     f.lulc_lookup)     AS lulc_lookup,
         COALESCE(d.solver,          f.solver)          AS solver,
-        COALESCE(d.q_lower_bound,   f.q_lower_bound)   AS q_lower_bound,
-        COALESCE(d.q_upper_bound,   f.q_upper_bound)   AS q_upper_bound,
+        d.q_lower_bound,
+        d.q_upper_bound,
         COALESCE(d.initial_dq_step_for_nd, f.initial_dq_step_for_nd) AS initial_dq_step_for_nd
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
