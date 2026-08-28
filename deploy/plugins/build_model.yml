@@ -56,7 +56,7 @@ inputs:
         valueDefinition:
           anyValue: true
     minOccurs: 0
-    maxOccurs: 1
+    maxOccurs: 99
 
   - id: upstream_mainstem_reach_id
     title: upstream_mainstem_reach_id
@@ -155,7 +155,7 @@ inputs:
         valueDefinition:
           anyValue: true
     minOccurs: 0
-    maxOccurs: 1
+    maxOccurs: 99
 
 outputs:
   - id: plugin_results
