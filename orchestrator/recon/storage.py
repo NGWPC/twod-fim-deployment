@@ -4,9 +4,13 @@ Used by orchestrator for artifact read/write/verify.
 Points to MinIO locally (via AWS_ENDPOINT_URL), real S3 in production.
 """
 
+import logging
+
 import boto3
 
 from recon.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_s3_client():
@@ -39,26 +43,87 @@ INUNDATED_AREA_FILENAME = "inundated_area.geojson"
 STL_FILENAME = "stl.geojson"
 
 
-def results_base_path(reach_id: int, model_identity_hash: str) -> str:
-    """Where a reach's runs live, for one model recipe.
+def results_root() -> str:
+    """The `model_results_base_path` the run jobs take. Bare on purpose.
 
-    Runs are filed under the model IDENTITY hash, not the model id — the domain
-    code is the model's realization, and widening a domain must not orphan every
-    run of that reach. This is the `model_results_base_path` the run jobs take,
-    and they append `<run_identity_hash>/<scenario point>/` to it themselves.
+    The job builds the rest of the address itself — it appends
+    `reach=<id>/<model_id>/<run_identity_hash>/<scenario point>/` — so anything
+    added here is a segment written twice. Sending a per-reach prefix is what
+    produced paths with `reach=` in them twice, at which point nothing the loop
+    predicted could be found.
+
+    Note the grain: results hang off the whole model_id, DOMAIN CODE INCLUDED,
+    so a rebuild that moves the domain files its runs somewhere new. That is
+    the job's choice and the loop follows it, but it is also the stricter and
+    more honest of the two, because a run is only ever verified against the
+    exact model_id currently materialized (identity.verify_scenario_manifest).
+    Filing by identity alone kept older runs reachable while the verification
+    refused them anyway.
     """
-    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-            f"/results/reach={reach_id}/{model_identity_hash}")
+    return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/results"
+
+
+def nd_run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
+    """Where one run identity's normal-depth work lives, above the nd=<slope> folder."""
+    return f"{results_root()}/reach={reach_id}/{model_id}/{run_identity_hash}"
 
 
 def nd_library_path(
-    reach_id: int, model_identity_hash: str, run_identity_hash: str, ds_slope: float
-) -> str:
-    """The folder holding one normal-depth library: every q run at one slope."""
-    from recon.identity import nd_scenario_prefix
+    reach_id: int, model_id: str, run_identity_hash: str
+) -> str | None:
+    """The folder holding one normal-depth library: every q run at one slope.
 
-    return (f"{results_base_path(reach_id, model_identity_hash)}"
-            f"/{run_identity_hash}/{nd_scenario_prefix(ds_slope)}")
+    Discovered, not predicted: the job computes the slope itself from the
+    reach's own DEM (elevation drop over its own centerline), so nothing here
+    can know it in advance the way it once did from an authored value. None
+    when no library has appeared yet, or when the base holds anything other
+    than exactly one nd=<slope> folder — more than one should not happen for
+    a deterministic job and is logged rather than guessed at.
+    """
+    base = nd_run_base_path(reach_id, model_id, run_identity_hash)
+    found = list_subfolders(base, prefix="nd=")
+    if len(found) != 1:
+        if found:
+            logger.warning("expected exactly one nd= folder under %s, found %s", base, found)
+        return None
+    return f"{base}/{found[0]}"
+
+
+REACH_NETWORK_FILENAME = "reach_network.parquet"
+LULC_FILENAME = "lulc.tif"
+
+
+def reference_data_path(filename: str) -> str:
+    """Something every job reads and no reach owns, published once per deployment.
+
+    `reference_data/` rather than a reach folder, for the same reason lakes live
+    under `shared/`: these describe the world the models are built in, not any
+    one model's results.
+    """
+    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
+            f"/reference_data/{filename}")
+
+
+def lulc_path() -> str:
+    """The land-cover raster, as an address rather than a mounted file.
+
+    In storage so that running a job needs no volume arranged for it. GDAL
+    reads s3:// through /vsis3, but it does NOT read the boto3 endpoint
+    variable — a job needs AWS_S3_ENDPOINT and friends in its environment,
+    supplied by its SEPEX process definition.
+    """
+    return reference_data_path(LULC_FILENAME)
+
+
+def reach_network_path() -> str:
+    """The reach network as GeoParquet, which is what jobs read instead of the database.
+
+    One file for the whole deployment, under `reference_data/` rather than any
+    reach's folder: it describes the network, not a reach, and every job reads
+    the same copy. Written by scripts/seed.py, sorted by reach_id so a job can
+    fetch one reach without scanning.
+    """
+    return reference_data_path(REACH_NETWORK_FILENAME)
 
 
 def boundary_polygon_path(kind: str, feature_id: str) -> str:

@@ -24,27 +24,32 @@ Usage:
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import pyarrow.parquet as pq
 from recon import db, storage
 from recon.config import settings
+
+# The column the network is keyed and sorted by. Named once because the parquet
+# writer, the sort, and the row-group statistics all have to agree on it.
+REACH_ID_FIELD = "reach_id"
 
 TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
 DEFAULT_NETWORK_GPKG = TESTDATA / "network.gpkg"
 DEFAULT_NHF_GPKG = TESTDATA / "nhf.gpkg"
+# Land cover for the test network, clipped from the NLCD CONUS mosaic to the
+# network's extent plus a margin. Half a megabyte instead of 1.4 GB, which is
+# what makes it a fixture that can live beside the GeoPackages rather than a
+# download every machine has to arrange for itself.
+DEFAULT_LULC_TIF = TESTDATA / "lulc.tif"
 NETWORK_LAYER = "reach_network"
 LAKES_LAYER = "lakes_polygons"
 
-# The hydrofabric no longer carries slope, but build_model still reads it from
-# reach_network (REACH_FIELDS in twod-fim-jobs) and records it as the model's
-# properties.slope — which becomes the normal-depth boundary condition and the
-# `nd=` path component. Placeholder until the job stops asking.
-PLACEHOLDER_SLOPE = settings.default_ds_slope
-
-# Placeholder discharge intent, and the same caveat as the slope above: these
-# are inputs run_nd_scenarios REQUIRES, and nothing in the network implies them.
+# Placeholder discharge intent: these are inputs run_nd_scenarios REQUIRES,
+# and nothing in the network implies them.
 # A real deployment authors them per reach — a 12 km2 headwater and a 2,600 km2
 # trunk do not share a flood range — either in desired_state, or here once a
 # regional regression exists. The range is kept deliberately narrow so a test
@@ -58,9 +63,12 @@ PLACEHOLDER_DQ_STEP = 500
 # nothing it builds will be found where it looked.
 SDR_COMMIT = "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a"
 SOLVER = "lisflood"
-SOLVER_VERSION = "8.1.0"  # LISFLOOD-FP version reported by the run image
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
-LULC_SOURCE = "/data/Annual_NLCD_LndCov_2023_CU_C1V0.tif"
+# An address, not a mounted path: the raster is uploaded to storage by this
+# script, so a job reads it wherever it runs without a volume being arranged.
+# It is also a model IDENTITY input — the string is hashed — so changing it
+# moves every model's address and invalidates what is already built.
+LULC_SOURCE = storage.lulc_path()
 LULC_LOOKUP = {
     "11": 0.04,
     "21": 0.04,
@@ -145,7 +153,6 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
                 "total_da_sqkm": value("total_da_sqkm", float),
                 "stream_order": value("stream_order", int),
                 "length_km": value("length_km", float),
-                "slope": value("slope", float, PLACEHOLDER_SLOPE),
                 "geom": geom.wkt,
             }
         )
@@ -184,6 +191,74 @@ def lake_polygon_uri(lake_id: str) -> str:
     )
 
 
+# How many reaches share a row group. Point queries are the only access
+# pattern: a job wants ONE reach and reads whichever row group holds it, so this
+# is the granularity of that read. Small groups mean less wasted I/O per lookup
+# and more metadata to parse; the default (~1M rows) would mean fetching the
+# whole network to answer one question.
+#
+# 8k rows is small enough that a lookup transfers a few hundred KB rather than
+# the whole file, and large enough that the footer stays cheap to parse even for
+# a continental network. Row groups are only skippable because the file is
+# SORTED by reach_id — that is what makes each group's min/max a usable index.
+REACH_ROW_GROUP_SIZE = 8192
+
+
+def export_reach_network(reaches: list[dict]) -> str:
+    """Write the reach network as GeoParquet, sorted by reach_id.
+
+    This is what build_model reads INSTEAD OF connecting to the database. A job
+    that can open a file needs no credentials, no network route to Postgres, and
+    no schema coupling to a table it does not own — the reason the db_uri input
+    is gone.
+
+    Sorted by reach_id, with the sort recorded in the file metadata, so a reader
+    can use each row group's min/max to skip straight to the group holding a
+    reach. Unsorted, those statistics overlap and every group has to be read.
+    """
+    gdf = gpd.GeoDataFrame(
+        [{k: v for k, v in r.items() if k != "geom"} for r in reaches],
+        geometry=gpd.GeoSeries.from_wkt([r["geom"] for r in reaches]),
+        crs=5070,
+    ).sort_values(REACH_ID_FIELD, ignore_index=True)
+
+    uri = storage.reach_network_path()
+    with tempfile.TemporaryDirectory() as tmp:
+        local = Path(tmp) / storage.REACH_NETWORK_FILENAME
+        gdf.to_parquet(
+            local,
+            index=False,
+            row_group_size=REACH_ROW_GROUP_SIZE,
+            # Declares the file sorted so a reader can trust the row-group
+            # statistics rather than rediscovering the order.
+            sorting_columns=[pq.SortingColumn(gdf.columns.get_loc(REACH_ID_FIELD))],
+        )
+        bucket, key = storage.parse_s3_path(uri)
+        storage.get_s3_client().put_object(
+            Bucket=bucket, Key=key, Body=local.read_bytes()
+        )
+    return uri
+
+
+def export_lulc(lulc_tif: Path) -> str:
+    """Publish the land-cover raster to storage, where jobs can address it.
+
+    Uploaded rather than mounted. A mount has to be arranged by whatever starts
+    the container — which under SEPEX means every process definition declaring
+    the same volume, and a cloud deployment needing a different answer
+    entirely. An object in the bucket is reachable from all of them with the
+    credentials jobs already carry.
+    """
+    if not lulc_tif.exists():
+        sys.exit(f"No such land cover raster: {lulc_tif}")
+    uri = storage.lulc_path()
+    bucket, key = storage.parse_s3_path(uri)
+    storage.get_s3_client().put_object(
+        Bucket=bucket, Key=key, Body=lulc_tif.read_bytes()
+    )
+    return uri
+
+
 def export_lake_polygons(lakes: list[dict]) -> list[str]:
     """Write each lake to storage as GeoJSON, and return the paths written."""
     s3 = storage.get_s3_client()
@@ -197,7 +272,7 @@ def export_lake_polygons(lakes: list[dict]) -> list[str]:
     return written
 
 
-def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
+def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path) -> None:
     reaches = load_network(network_gpkg)
     lakes = load_lakes(nhf_gpkg)
 
@@ -207,16 +282,15 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
         conn.execute(
             """INSERT INTO desired_state_defaults
                    (sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
-                    lulc_lookup, solver, solver_version,
+                    lulc_lookup, solver,
                     q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
-               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 SDR_COMMIT,
                 DEM_SOURCE,
                 LULC_SOURCE,
                 json.dumps(LULC_LOOKUP),
                 SOLVER,
-                SOLVER_VERSION,
                 PLACEHOLDER_Q_LOWER,
                 PLACEHOLDER_Q_UPPER,
                 PLACEHOLDER_DQ_STEP,
@@ -235,11 +309,11 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
                 """INSERT INTO reach_network
                        (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
                         lake_to_id, coast_to_id, lake_inlet, lake_outlet, is_trimmed,
-                        total_da_sqkm, stream_order, length_km, slope, geom)
+                        total_da_sqkm, stream_order, length_km, geom)
                    VALUES (%(reach_id)s, %(reach_to_id)s, %(is_terminal)s, %(is_headwater)s,
                            %(terminal_reason)s, %(lake_to_id)s, %(coast_to_id)s, %(lake_inlet)s,
                            %(lake_outlet)s, %(is_trimmed)s, %(total_da_sqkm)s, %(stream_order)s,
-                           %(length_km)s, %(slope)s, ST_GeomFromText(%(geom)s, 5070))""",
+                           %(length_km)s, ST_GeomFromText(%(geom)s, 5070))""",
                 r,
             )
 
@@ -249,6 +323,8 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
         )
 
     written = export_lake_polygons(lakes)
+    network_uri = export_reach_network(reaches)
+    lulc_uri = export_lulc(lulc_tif)
 
     summary = db.one("""
         SELECT count(*) AS reaches,
@@ -266,6 +342,8 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
     print(f"lakes           {len(lakes)}")
     for uri in written:
         print(f"  exported      {uri}")
+    print(f"  network       {network_uri}")
+    print(f"  land cover    {lulc_uri}")
     if summary["outlet_terminals"]:
         print(
             "\nWARNING: outlet terminals have no boundary polygon source, so ND\n"
@@ -289,15 +367,24 @@ def main() -> None:
         default=DEFAULT_NHF_GPKG,
         help="hydrofabric holding the lakes_polygons layer",
     )
+    ap.add_argument(
+        "--lulc-tif",
+        type=Path,
+        default=DEFAULT_LULC_TIF,
+        help="land cover raster to publish to storage",
+    )
     args = ap.parse_args()
 
     for path in (args.network_gpkg, args.nhf_gpkg):
         if not path.exists():
             sys.exit(f"No such GeoPackage: {path}")
+    if not args.lulc_tif.exists():
+        sys.exit(f"No such land cover raster: {args.lulc_tif}")
 
     print(f"network  {args.network_gpkg}")
-    print(f"nhf      {args.nhf_gpkg}\n")
-    seed(args.network_gpkg, args.nhf_gpkg)
+    print(f"nhf      {args.nhf_gpkg}")
+    print(f"lulc     {args.lulc_tif}\n")
+    seed(args.network_gpkg, args.nhf_gpkg, args.lulc_tif)
 
 
 if __name__ == "__main__":

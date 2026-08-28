@@ -1,7 +1,7 @@
 info:
   version: '0.1.0'
-  id: runNdScenarios
-  title: Run ND Scenarios
+  id: runNdScenariosLisfloodCpu
+  title: Run ND Scenarios (LISFLOOD, CPU)
   description: Run normal-depth scenarios for a reach using adaptive discharge stepping
   jobControlOptions:
     - async-execute
@@ -9,15 +9,23 @@ info:
     - reference
 
 host:
-  type: "aws-batch"
-  jobDefinition: twod-fim-nd-scenarios
-  jobQueue: twod-fim-scenarios-queue
-  image: ""
+  type: docker
+  image: run_nd_scenarios-lisflood-cpu:local
 
 command: []
 
 config:
-  envVars: []
+  maxResources:
+    cpus: 3
+    memory: 2048
+  envVars:
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_ENDPOINT_URL
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_ACCESS_KEY_ID
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_SECRET_ACCESS_KEY
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_DEFAULT_REGION
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_S3_ENDPOINT
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_VIRTUAL_HOSTING
+    - RUNNDSCENARIOSLISFLOODCPU_AWS_HTTPS
 
 inputs:
   - id: model_manifest_path

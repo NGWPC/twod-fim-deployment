@@ -14,8 +14,9 @@ deletion are one mechanism seen from two sides.
 A model counts as existing when its manifest is present and sound. build_model
 writes model_manifest.json last, so a half-written build has artifacts but no
 manifest and is correctly invisible; a manifest that fails verification
-(belongs to another reach, or its identity does not hash to what it claims) is
-treated as absent and reported, never adopted.
+(belongs to another reach, sits in a folder its own realization code does not
+name, or its identity does not hash to what it claims) is treated as absent and
+reported, never adopted.
 """
 
 import json
@@ -54,7 +55,7 @@ def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> d
         manifest = storage.read_json(f"{base}/{name}/{storage.MANIFEST_FILENAME}")
         if manifest is None:
             continue  # build not finished; the manifest is written last
-        problems = identity.verify_manifest(manifest, reach_id, predicted)
+        problems = identity.verify_manifest(manifest, reach_id, name)
         if problems:
             refused.append({"folder": name, "problems": problems})
             logger.warning("refused manifest at %s/%s: %s", base, name, problems)
@@ -97,18 +98,19 @@ def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> d
 def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
     """Reconcile materialized_nd_runs for one reach against storage.
 
-    Half lookup, half listing, and the split is the point. Intent fixes the
-    address down to the slope — model identity, run identity, `nd=<slope>` —
-    so getting there is a prediction. What discharges live under it is not
-    intent's to say: the adaptive step algorithm decides which are hydraulically
-    distinct enough to keep, so the loop reads the q set back and judges it.
+    Lookup down to the run identity, listing the rest of the way. Intent fixes
+    the address down to model identity and run identity, so getting there is a
+    prediction. Below that, nothing is intent's to say: the job derives the
+    slope itself from the reach's own DEM, and the adaptive step algorithm
+    decides which discharges are hydraulically distinct enough to keep — so the
+    loop reads both back and judges them, via storage.nd_library_path for the
+    slope and the q= listing below it.
 
     Judged how: the library must SPAN the authored discharge range. Density
-    (the `ld_q_*` deltas guide.md also calls for) is not checked, because the
-    job does not take those deltas as inputs at all — it uses thresholds
-    compiled into its image, so there is nothing for the loop to hold it to yet.
-    Checking span alone is the honest subset; tightening it is a one-line change
-    here once the job accepts the deltas.
+    (the `ld_q_*` deltas guide.md also calls for) is not checked by default,
+    though the job now accepts those deltas as inputs (as of the solver
+    generalization PR) — tightening this to a real density check is a
+    follow-up, not a blocker.
 
     Anything short of a whole, verified library writes no row. A row is proof,
     and proof of a partial library is not a smaller proof — it is none.
@@ -142,10 +144,11 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                        f"{predicted_model} intent now implies")
 
     _, run_hash = identity.run_identity(wanted)
-    slope = intent.boundary_slope(reach_id, conn=conn)
-    if slope is None:
-        return retract("no downstream boundary slope, so no library address to look at")
-    library = storage.nd_library_path(reach_id, model["identity_hash"], run_hash, slope)
+    library = storage.nd_library_path(reach_id, model["model_id"], run_hash)
+    if library is None:
+        # Either nothing has been written yet, or more than one nd= folder is
+        # there and none of them can be called the library. storage logs which.
+        return retract("no single nd=<slope> folder to read")
     out.update({"predicted": run_hash, "library": library})
 
     discharges = sorted(
@@ -166,13 +169,18 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     # job publishes the max-q run last, so a library caught mid-publish usually
     # fails the span check above and never reaches this loop.
     curve, refused = [], []
+    # The realization directory as it appears under the run identity:
+    # `<nd|kwse>=<value>/q=<value>`. A scenario manifest claims one of these in
+    # its scenario_code, and verification is that claim against this location.
+    nd_folder = library.rsplit("/", 1)[-1]
     for q in discharges:
+        scenario_dir = f"{nd_folder}/{identity.q_folder(q)}"
         path = f"{library}/{identity.q_folder(q)}/{storage.SCENARIO_MANIFEST_FILENAME}"
         manifest = storage.read_json(path)
         if manifest is None:
             return {**retract(f"scenario q={q} has no manifest yet"), "refused": refused}
         problems = identity.verify_scenario_manifest(
-            manifest, reach_id, run_hash, model["model_id"], q)
+            manifest, reach_id, run_hash, model["model_id"], scenario_dir)
         if problems:
             refused.append({"q": q, "problems": problems})
             logger.warning("refused scenario manifest at %s: %s", path, problems)
@@ -187,11 +195,11 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     db.query(
         """
         INSERT INTO materialized_nd_runs
-            (reach_id, model_identity_hash, run_identity_hash, q_set,
+            (reach_id, model_id, run_identity_hash, q_set,
              us_wse_max, us_min_wse_curve, applied_revision, confirmed_at)
         VALUES (%s, %s, %s, %s, %s, %s, %s, now())
         ON CONFLICT (reach_id) DO UPDATE SET
-            model_identity_hash = EXCLUDED.model_identity_hash,
+            model_id            = EXCLUDED.model_id,
             run_identity_hash   = EXCLUDED.run_identity_hash,
             q_set               = EXCLUDED.q_set,
             us_wse_max          = EXCLUDED.us_wse_max,
@@ -199,7 +207,7 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
             applied_revision    = EXCLUDED.applied_revision,
             confirmed_at        = now()
         """,
-        (reach_id, model["identity_hash"], run_hash, discharges,
+        (reach_id, model["model_id"], run_hash, discharges,
          us_wse_max, json.dumps(curve), wanted["revision"]),
         conn=conn,
     )

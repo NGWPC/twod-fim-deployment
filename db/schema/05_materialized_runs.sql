@@ -34,7 +34,14 @@ CREATE TABLE IF NOT EXISTS materialized_nd_runs(
     -- Which model these runs were produced against, and under which solver
     -- recipe. Both are compared against what intent now implies, and both are
     -- components of the results path a later step writes to.
-    model_identity_hash char(8) NOT NULL CONSTRAINT materialized_nd_runs_model_hash_chk CHECK (model_identity_hash ~ '^[0-9a-f]{8}$'),
+    --
+    -- The WHOLE model_id, domain code included, not the identity hash alone.
+    -- The job files results under the full id, so that is what the address
+    -- needs; and a run produced against a different domain was already refused
+    -- at verification, so the identity hash never bought the portability its
+    -- narrower form implied.
+    model_id text NOT NULL CONSTRAINT materialized_nd_runs_model_id_chk CHECK (model_id ~
+	'^[0-9a-f]{8}_N(0|[1-9][0-9]*)S(0|[1-9][0-9]*)E(0|[1-9][0-9]*)W(0|[1-9][0-9]*)$'),
     run_identity_hash char(8) NOT NULL CONSTRAINT materialized_nd_runs_run_hash_chk CHECK (run_identity_hash ~ '^[0-9a-f]{8}$'),
     -- Every discharge in the library, ascending. The KWSE step needs it: a
     -- stage library is built at each of these discharges.

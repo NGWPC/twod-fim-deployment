@@ -11,6 +11,7 @@ storage, which is why a crash at any point costs at most some repeated work.
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +21,7 @@ from shapely.geometry import shape
 from recon import (activity, db, gap, identity, intent, observe, processing,
                    queue, storage)
 from recon.config import settings
-from recon.workers import ContainerRunner
+from recon.execution import ExecutionService
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +113,16 @@ def _downstream_max_q_dir(downstream: int) -> str:
     shapes a model domain — so it is derived once here.
     """
     proof = db.one(
-        "SELECT model_identity_hash, run_identity_hash, q_set FROM materialized_nd_runs"
+        "SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
         " WHERE reach_id = %s", (downstream,))
     if proof is None:
         raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
     library = storage.nd_library_path(
-        downstream, proof["model_identity_hash"], proof["run_identity_hash"],
-        intent.boundary_slope(downstream))
+        downstream, proof["model_id"], proof["run_identity_hash"])
+    if library is None:
+        raise RuntimeError(
+            f"downstream reach {downstream} is materialized but its nd=<slope> "
+            "folder cannot be found")
     return f"{library}/{identity.q_folder(max(proof['q_set']))}"
 
 
@@ -165,6 +169,46 @@ def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
     return _geojson_wkt(f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}")
 
 
+# The reaches draining into one reach, and which of them is the mainstem.
+#
+# Mainstem = largest drainage area, matching what the job used to compute for
+# itself. Ties are broken by reach_id so the answer is stable: two reaches with
+# identical drainage area would otherwise pick differently between runs, and
+# the mainstem's geometry moves the inflow line, which moves the domain.
+_UPSTREAM = """
+    SELECT reach_id, total_da_sqkm
+    FROM reach_network
+    WHERE reach_to_id = %s
+    ORDER BY total_da_sqkm DESC NULLS LAST, reach_id
+"""
+
+
+def _upstream(reach_id: int) -> dict:
+    """Upstream reach ids for this reach, and the mainstem among them."""
+    rows = db.query(_UPSTREAM, (reach_id,))
+    return {
+        "reach_ids": [r["reach_id"] for r in rows],
+        "mainstem_reach_id": rows[0]["reach_id"] if rows else None,
+    }
+
+
+# Labels SEPEX stores with a job and can filter on (GET /jobs?tags=...).
+#
+# A reach tag is the one thing a person always wants when looking at the
+# execution system: every job SEPEX holds is otherwise identified only by a
+# process name and a uuid, and the reach is nowhere in either. With this, the
+# jobs belonging to a reach are one query — which is what you want when a
+# reach halts and you need its history.
+#
+# Namespaced `reach:<id>` rather than a bare number so it stays legible beside
+# tags added later, and because a bare id is indistinguishable from any other
+# number. SEPEX allows letters, digits, and `. - _ :` in a tag, so the colon is
+# valid; it rejects anything else, and a rejected tag fails the submission.
+def job_tags(reach_id: int) -> list[str]:
+    """The tags every submission for this reach carries."""
+    return [f"reach:{reach_id}"]
+
+
 def _build_model_payload(reach_id: int) -> dict:
     """What build_model needs, with every identity input pinned.
 
@@ -175,38 +219,48 @@ def _build_model_payload(reach_id: int) -> dict:
     sdr_commit cannot be pinned: it is baked into the image. desired_state's
     value must therefore match the deployed image, and the observe self-check
     is what catches it when it does not.
+
+    The upstream reaches are supplied rather than left for the job to find.
+    The job reads the network from a file sorted by reach_id, so a lookup by
+    reach_to_id would mean reading every row group — while the loop has the
+    same question already answered by an index. Only the mainstem's GEOMETRY is
+    needed (it positions the inflow line), and the job fetches that itself by
+    id, so nothing large travels in the payload.
     """
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
+    upstream = _upstream(reach_id)
     return {
         "reach_id": reach_id,
-        "db_uri": settings.job_db_connection_string,
+        "reach_network_path": storage.reach_network_path(),
+        "upstream_reach_ids": upstream["reach_ids"],
+        "upstream_mainstem_reach_id": upstream["mainstem_reach_id"],
         "base_output_path": storage.model_base_path(reach_id),
         "grid_resolution": float(wanted["grid_resolution"]),
         "epsg_code": int(wanted["epsg_code"]),
         "dem_source": wanted["dem_source"],
         "lulc_source": wanted["lulc_source"],
         "lulc_lookup": wanted["lulc_lookup"],
-        "domain_buffer": settings.domain_buffer,
+        # No domain_buffer. It was a flat placeholder — one distance for every
+        # reach — standing in for a widening the job can now work out per reach,
+        # from the bankfull width its own drainage area implies. Sending a
+        # number would override that estimate with a worse one.
         "other_geometries": _model_geometries(reach_id, wanted),
     }
 
 
 def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     """The downstream boundary condition for a normal-depth run: where it is
-    applied, and at what slope.
+    applied.
 
-    Both halves come from the SAME place, which is the point — the boundary is
-    a statement about what this reach drains INTO, never about the reach
-    itself. Which place depends on the terminal/non-terminal split the whole
-    ladder turns on:
+    The boundary is a statement about what this reach drains INTO, never about
+    the reach itself, which is why it depends on the terminal/non-terminal
+    split the whole ladder turns on:
 
       non-terminal  the downstream reach's inundated area at the HIGHEST
-                    discharge of its library (the largest wetted footprint it
-                    produces, so it bounds every scenario this reach will run),
-                    at the DOWNSTREAM reach's centerline slope
-                    — DR-039 ALT-D, selected via ALT-F
+                    discharge of its library — the largest wetted footprint it
+                    produces, so it bounds every scenario this reach will run
       terminal      the lake or coast it drains into, published once per water
                     body and shared by every reach ending there
                     — DR-006 ALT-E
@@ -214,33 +268,32 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     The downstream address is read from that reach's proof rather than
     predicted, because the discharge in it is emergent: the adaptive step
     algorithm chose it, and only that reach's materialization knows what it was.
+
+    The slope itself is no longer this function's business: the job derives it
+    from the reach's own DEM (elevation drop over its own centerline) and no
+    longer takes one as input.
+
+    Which leaves DR-006 ALT-E still unmet, and now unmeetable from here. It
+    asks for a FREEFALL at a terminal — water leaving the domain without
+    resistance, so it does not pool in the transition zone. The loop used to
+    pass a slope and could at least have passed a steep one; it now passes
+    none, and the job applies a terminal's own centerline slope like any other
+    reach's. Satisfying ALT-E is the job's to do, and nothing here can stand in
+    for it.
     """
     if wanted["is_terminal"]:
         for kind in ("lake", "coast"):
             feature_id = wanted[f"{kind}_to_id"]
             if feature_id is not None:
-                # DR-006 ALT-E asks for a FREEFALL here — water leaving the
-                # domain without resistance, so it does not pool in the
-                # transition zone — and the job can only express that as a
-                # slope. No steep value has been decided, so this passes the
-                # reach's own slope and is knowingly wrong for a terminal:
-                # a flat slope behaves like a nearly closed boundary, which is
-                # what ALT-B was rejected for.
-                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id),
-                        "ds_slope": intent.boundary_slope(reach_id)}
+                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id)}
         raise RuntimeError(
             f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
             "lake or coast, so it has no outflow boundary")
 
     downstream = wanted["reach_to_id"]
-    # Two different slopes, and confusing them puts the loop in the wrong
-    # folder. The downstream reach's library sits at ITS boundary slope (its own
-    # downstream neighbour's); the slope THIS run is performed at is the
-    # downstream reach's centerline slope.
     return {
         "outflow_area_polygon_path":
             f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
-        "ds_slope": intent.boundary_slope(reach_id),
     }
 
 
@@ -251,11 +304,15 @@ def _run_nd_payload(reach_id: int) -> dict:
     only a STARTING increment — the job grows and shrinks it as the reach's
     response curve demands — which is why the loop cannot predict the resulting
     discharges and reads them back instead.
+
+    model_results_base_path is the bare results root. The job appends
+    `reach=<id>/<model_id>/<run_identity_hash>/` itself, so a per-reach prefix
+    here would be written into the path twice.
     """
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
-    model = db.one("SELECT identity_hash, model_id FROM materialized_models WHERE reach_id = %s",
+    model = db.one("SELECT model_id FROM materialized_models WHERE reach_id = %s",
                    (reach_id,))
     if model is None:
         raise RuntimeError(f"reach {reach_id} has no materialized model to run against")
@@ -264,29 +321,108 @@ def _run_nd_payload(reach_id: int) -> dict:
             raise RuntimeError(f"reach {reach_id} has no {field}; nd cannot be submitted")
     return {
         "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
-        "model_results_base_path": storage.results_base_path(reach_id, model["identity_hash"]),
-        "min_upstream_inflow": float(wanted["q_lower_bound"]),
-        "max_upstream_inflow": float(wanted["q_upper_bound"]),
-        "delta_upstream_inflow": float(wanted["initial_dq_step_for_nd"]),
+        "model_results_base_path": storage.results_root(),
+        # Whole cms. Discharge is integral end to end — authored as integer
+        # columns, run at integers, named into the q= folder as an integer, and
+        # recorded in q_set as an integer. Sending a float here would put the
+        # fraction back in at the one place it is allowed to enter.
+        "min_upstream_inflow": int(wanted["q_lower_bound"]),
+        "max_upstream_inflow": int(wanted["q_upper_bound"]),
+        "delta_upstream_inflow": int(wanted["initial_dq_step_for_nd"]),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
-        "solver": wanted["solver"],
     }
 
 
 PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 
+# The SEPEX process each STEP is carried out by. A step and a process are not
+# the same thing: build_model has one process regardless, but a normal-depth run
+# is one of a matrix — the solver picks the model, $GPU_AVAILABLE picks the
+# hardware, and
+# only their product is a registered process. Only lisflood is built; a solver
+# with no entry is refused here, where the reason is legible, rather than
+# surfacing later as a 404 from SEPEX.
+#
+# These are SEPEX process ids, which is the loop's whole vocabulary for
+# execution now. Which image serves a process, on what hardware, with which
+# environment and mounts — and where SEPEX was configured to read that from —
+# is SEPEX's business and is not represented here at all.
+#
+# The mapping stays OUT of the gap calculation and out of reach_processing on
+# purpose. Which variant ran is a realization detail, like the domain code: the
+# rung of the ladder is `run_nd_scenarios` whichever process serves it, and
+# reach_processing.current_step records the step (its CHECK constraint allows
+# exactly the three step names). The variant is recorded where history lives —
+# the activity log — and the job reference is the handle to the run itself.
+BUILD_MODEL_PROCESS = "buildModel"
+RUN_ND_PROCESSES = {
+    ("lisflood", False): "runNdScenariosLisfloodCpu",
+    ("lisflood", True):  "runNdScenariosLisfloodGpu",
+}
 
-def run_check(reach_id: int, runner: ContainerRunner, *,
-              may_submit: bool = True) -> CheckResult:
+
+# Whether this machine can run a solver on a GPU.
+#
+# Read from the environment at the moment it is needed, not held in Settings.
+# Settings describes what this DEPLOYMENT is — its database, its bucket, its
+# execution layer — and travels in .env. Whether a GPU is present is a property
+# of the HOST the jobs land on, which is why it is set by whoever starts the
+# process and not written down beside the bucket name.
+#
+# Parsed rather than truthiness-tested: a bare bool() on a string is true for
+# every non-empty value, so GPU_AVAILABLE=false would read as True. That exact
+# mistake shipped in the job images and made a CPU build ask for CUDA.
+GPU_AVAILABLE_ENV = "GPU_AVAILABLE"
+_TRUE = {"true", "1", "yes", "y", "on"}
+
+
+def gpu_available() -> bool:
+    """True when $GPU_AVAILABLE says this host has a usable GPU.
+
+    Defaults to false: a machine without a device works without being told
+    anything, and asking for the GPU process where none exists fails at the
+    solver rather than falling back.
+    """
+    return os.environ.get(GPU_AVAILABLE_ENV, "").strip().lower() in _TRUE
+
+
+def _process_id(step: str, reach_id: int) -> str:
+    """The SEPEX process that carries out a step for this reach.
+
+    Two things pick it: the solver, which is authored intent, and whether this
+    host has a GPU, which is $GPU_AVAILABLE. Intent is read only when the step
+    actually varies by it, so build_model costs no extra query.
+    """
+    if step == gap.BUILD_MODEL:
+        return BUILD_MODEL_PROCESS
+    if step != gap.RUN_ND:
+        raise RuntimeError(f"no SEPEX process for step {step!r}")
+    wanted = intent.effective(reach_id)
+    if wanted is None:
+        raise RuntimeError(f"no effective intent for reach {reach_id}")
+    key = (wanted["solver"], gpu_available())
+    if key not in RUN_ND_PROCESSES:
+        raise RuntimeError(
+            f"no {step} process for solver {wanted['solver']!r} "
+            f"({GPU_AVAILABLE_ENV}={gpu_available()}); "
+            f"built variants are {sorted(RUN_ND_PROCESSES)}")
+    return RUN_ND_PROCESSES[key]
+
+
+def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
     """Check one reach, and act on what the gap turns out to be.
 
-    `may_submit=False` runs the whole check but starts no new work: it still
-    observes storage, records proofs, and notes who it waits on. That is what a
-    caller at its concurrency limit wants — observation is how a FINISHED job
-    is noticed, so suppressing checks to hold the limit stops the loop from
-    seeing completed work. Only submission needs limiting.
+    A check submits whenever there is a gap. There is no concurrency limit and
+    no way to ask for one: SEPEX holds the resources, keeps the queue, and
+    admits work against its own pool, so a submission the loop makes is a
+    statement about what is NEEDED, never a claim that capacity exists. A job
+    it cannot start yet sits queued, which is the system working.
+
+    Which hardware variant of a multi-process step is asked for comes from
+    $GPU_AVAILABLE, not from the caller: it is a property of the host the jobs
+    land on rather than of one check.
     """
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
@@ -338,21 +474,22 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
             processing.wait_on(reach_id, None)
             result.note = f"{decision.step} awaiting inputs: {decision.reason}"
 
-        elif isinstance(decision, gap.RunStep) and not may_submit:
-            # Everything above still ran: the reach was observed and its proofs
-            # are current. Only starting the work is deferred.
-            processing.wait_on(reach_id, None)
-            result.decision, result.note = "Ready", f"{decision.step} ready, at capacity"
-
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
-            ref = runner.submit(decision.step, PAYLOADS[decision.step](reach_id))
+            process_id = _process_id(decision.step, reach_id)
+            ref = execution.submit(
+                process_id, PAYLOADS[decision.step](reach_id), tags=job_tags(reach_id)
+            )
+            # The STEP is what goes in the marker, not the process that served
+            # it: that column is the ladder's rung, and the gap calculation and
+            # its CHECK constraint both speak in steps. The variant is named in
+            # the note, which the activity log keeps.
             processing.mark_in_flight(reach_id, decision.step, ref, snapshot.revision)
             # Ask to be looked at again, so the result gets noticed without
             # waiting for the next sweep.
             queue.request_check(reach_id)
             result.submitted_ref = ref
-            result.note = f"submitted {decision.step} ({ref[:12]})"
+            result.note = f"submitted {process_id} ({ref[:12]})"
 
     except Exception as exc:  # submission failed; the reach must not stall
         failure = processing.record_failure(reach_id, str(exc))
@@ -372,7 +509,7 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
     return result
 
 
-def sweep(runner: ContainerRunner, limit: int | None = None) -> list[CheckResult]:
+def sweep(execution: ExecutionService, limit: int | None = None) -> list[CheckResult]:
     """Check every reach that is currently due, once.
 
     The list is read once at the start rather than re-queried as it goes, so a
@@ -380,4 +517,4 @@ def sweep(runner: ContainerRunner, limit: int | None = None) -> list[CheckResult
     re-reading its own queue would chase them forever. Call it again to pick
     those up — which is what the loop does anyway.
     """
-    return [run_check(r["reach_id"], runner) for r in queue.due_reaches(limit)]
+    return [run_check(r["reach_id"], execution) for r in queue.due_reaches(limit)]
