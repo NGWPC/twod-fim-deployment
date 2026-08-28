@@ -38,15 +38,37 @@ inputs:
     minOccurs: 1
     maxOccurs: 1
 
-  - id: db_uri
-    title: db_uri
-    description: Database connection string for the twodfim pipeline database
+  - id: reach_network_path
+    title: reach_network_path
+    description: S3 path to the reach network GeoParquet, sorted by reach_id
     input:
       literalDataDomain:
         dataType: value
         valueDefinition:
           anyValue: true
     minOccurs: 1
+    maxOccurs: 1
+
+  - id: upstream_reach_ids
+    title: upstream_reach_ids
+    description: Ids of the reaches draining into this one
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: upstream_mainstem_reach_id
+    title: upstream_mainstem_reach_id
+    description: Upstream reach with the largest drainage area; null for a headwater
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
     maxOccurs: 1
 
   - id: base_output_path

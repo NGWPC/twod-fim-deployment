@@ -168,6 +168,29 @@ def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
     return _geojson_wkt(f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}")
 
 
+# The reaches draining into one reach, and which of them is the mainstem.
+#
+# Mainstem = largest drainage area, matching what the job used to compute for
+# itself. Ties are broken by reach_id so the answer is stable: two reaches with
+# identical drainage area would otherwise pick differently between runs, and
+# the mainstem's geometry moves the inflow line, which moves the domain.
+_UPSTREAM = """
+    SELECT reach_id, total_da_sqkm
+    FROM reach_network
+    WHERE reach_to_id = %s
+    ORDER BY total_da_sqkm DESC NULLS LAST, reach_id
+"""
+
+
+def _upstream(reach_id: int) -> dict:
+    """Upstream reach ids for this reach, and the mainstem among them."""
+    rows = db.query(_UPSTREAM, (reach_id,))
+    return {
+        "reach_ids": [r["reach_id"] for r in rows],
+        "mainstem_reach_id": rows[0]["reach_id"] if rows else None,
+    }
+
+
 def _build_model_payload(reach_id: int) -> dict:
     """What build_model needs, with every identity input pinned.
 
@@ -178,13 +201,23 @@ def _build_model_payload(reach_id: int) -> dict:
     sdr_commit cannot be pinned: it is baked into the image. desired_state's
     value must therefore match the deployed image, and the observe self-check
     is what catches it when it does not.
+
+    The upstream reaches are supplied rather than left for the job to find.
+    The job reads the network from a file sorted by reach_id, so a lookup by
+    reach_to_id would mean reading every row group — while the loop has the
+    same question already answered by an index. Only the mainstem's GEOMETRY is
+    needed (it positions the inflow line), and the job fetches that itself by
+    id, so nothing large travels in the payload.
     """
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
+    upstream = _upstream(reach_id)
     return {
         "reach_id": reach_id,
-        "db_uri": settings.job_db_connection_string,
+        "reach_network_path": storage.reach_network_path(),
+        "upstream_reach_ids": upstream["reach_ids"],
+        "upstream_mainstem_reach_id": upstream["mainstem_reach_id"],
         "base_output_path": storage.model_base_path(reach_id),
         "grid_resolution": float(wanted["grid_resolution"]),
         "epsg_code": int(wanted["epsg_code"]),

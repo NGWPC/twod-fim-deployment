@@ -24,12 +24,18 @@ Usage:
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import pyarrow.parquet as pq
 from recon import db, storage
 from recon.config import settings
+
+# The column the network is keyed and sorted by. Named once because the parquet
+# writer, the sort, and the row-group statistics all have to agree on it.
+REACH_ID_FIELD = "reach_id"
 
 TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
 DEFAULT_NETWORK_GPKG = TESTDATA / "network.gpkg"
@@ -176,6 +182,55 @@ def lake_polygon_uri(lake_id: str) -> str:
     )
 
 
+# How many reaches share a row group. Point queries are the only access
+# pattern: a job wants ONE reach and reads whichever row group holds it, so this
+# is the granularity of that read. Small groups mean less wasted I/O per lookup
+# and more metadata to parse; the default (~1M rows) would mean fetching the
+# whole network to answer one question.
+#
+# 8k rows is small enough that a lookup transfers a few hundred KB rather than
+# the whole file, and large enough that the footer stays cheap to parse even for
+# a continental network. Row groups are only skippable because the file is
+# SORTED by reach_id — that is what makes each group's min/max a usable index.
+REACH_ROW_GROUP_SIZE = 8192
+
+
+def export_reach_network(reaches: list[dict]) -> str:
+    """Write the reach network as GeoParquet, sorted by reach_id.
+
+    This is what build_model reads INSTEAD OF connecting to the database. A job
+    that can open a file needs no credentials, no network route to Postgres, and
+    no schema coupling to a table it does not own — the reason the db_uri input
+    is gone.
+
+    Sorted by reach_id, with the sort recorded in the file metadata, so a reader
+    can use each row group's min/max to skip straight to the group holding a
+    reach. Unsorted, those statistics overlap and every group has to be read.
+    """
+    gdf = gpd.GeoDataFrame(
+        [{k: v for k, v in r.items() if k != "geom"} for r in reaches],
+        geometry=gpd.GeoSeries.from_wkt([r["geom"] for r in reaches]),
+        crs=5070,
+    ).sort_values(REACH_ID_FIELD, ignore_index=True)
+
+    uri = storage.reach_network_path()
+    with tempfile.TemporaryDirectory() as tmp:
+        local = Path(tmp) / storage.REACH_NETWORK_FILENAME
+        gdf.to_parquet(
+            local,
+            index=False,
+            row_group_size=REACH_ROW_GROUP_SIZE,
+            # Declares the file sorted so a reader can trust the row-group
+            # statistics rather than rediscovering the order.
+            sorting_columns=[pq.SortingColumn(gdf.columns.get_loc(REACH_ID_FIELD))],
+        )
+        bucket, key = storage.parse_s3_path(uri)
+        storage.get_s3_client().put_object(
+            Bucket=bucket, Key=key, Body=local.read_bytes()
+        )
+    return uri
+
+
 def export_lake_polygons(lakes: list[dict]) -> list[str]:
     """Write each lake to storage as GeoJSON, and return the paths written."""
     s3 = storage.get_s3_client()
@@ -240,6 +295,7 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
         )
 
     written = export_lake_polygons(lakes)
+    network_uri = export_reach_network(reaches)
 
     summary = db.one("""
         SELECT count(*) AS reaches,
@@ -257,6 +313,7 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
     print(f"lakes           {len(lakes)}")
     for uri in written:
         print(f"  exported      {uri}")
+    print(f"  network       {network_uri}")
     if summary["outlet_terminals"]:
         print(
             "\nWARNING: outlet terminals have no boundary polygon source, so ND\n"

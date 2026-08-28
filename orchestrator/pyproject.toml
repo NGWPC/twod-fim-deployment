@@ -13,6 +13,12 @@ dependencies = [
     "python-dotenv>=1.0",
     "pydantic-settings>=2.0",
     "shapely>=2.1.2",
+    # scripts/seed.py reads the hydrofabric GeoPackages and writes the reach
+    # network as GeoParquet. geopandas was already being imported without being
+    # declared; pyarrow is what its to_parquet writer needs, and what lets the
+    # writer control row groups and record the sort order.
+    "geopandas>=1.0",
+    "pyarrow>=15",
 ]
 
 [dependency-groups]

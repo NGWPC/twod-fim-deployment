@@ -89,6 +89,21 @@ def nd_library_path(
     return f"{base}/{found[0]}"
 
 
+REACH_NETWORK_FILENAME = "reach_network.parquet"
+
+
+def reach_network_path() -> str:
+    """The reach network as GeoParquet, which is what jobs read instead of the database.
+
+    One file for the whole deployment, under `reference_data/` rather than any
+    reach's folder: it describes the network, not a reach, and every job reads
+    the same copy. Written by scripts/seed.py, sorted by reach_id so a job can
+    fetch one reach without scanning.
+    """
+    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
+            f"/reference_data/{REACH_NETWORK_FILENAME}")
+
+
 def boundary_polygon_path(kind: str, feature_id: str) -> str:
     """Where a lake or coast outflow polygon is published by the seeder.
 

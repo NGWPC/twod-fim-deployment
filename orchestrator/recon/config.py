@@ -60,36 +60,19 @@ class Settings(BaseSettings):
     # The execution layer. Required: the loop has no other way to run a job.
     # Needs a scheme — urllib rejects a bare host:port — and SEPEX's port, 5050.
     sepex_url: str
-    # Hostname the database answers to from inside a job container. Jobs run as
-    # siblings on the compose network, where the host's "localhost" is their own
-    # container, so they cannot use the same connection string the loop does.
-    postgres_host_for_jobs: str | None = None
-    # No aws_endpoint_url_for_jobs: how a JOB reaches storage is part of that
-    # job's environment, which SEPEX supplies from its plugin's envVars (see
-    # sepex_local.env, BUILDMODEL_AWS_ENDPOINT_URL and friends). The loop's own
-    # endpoint above is only for observing storage itself.
-
-    @computed_field
-    @property
-    def effective_postgres_host_for_jobs(self) -> str:
-        return self.postgres_host_for_jobs or self.postgres_host
+    # There is no job-side view of any service here. A job reads the reach
+    # network from a file and its artifacts from storage, and gets the endpoint
+    # for the latter from SEPEX's own process definition. Nothing the loop
+    # builds has to be resolvable from inside a job container any more, which
+    # is what removed the second hostname this class used to carry.
 
     @computed_field
     @property
     def pipeline_db_connection_string(self) -> str:
-        """How the loop reaches the database."""
+        """How the loop reaches the database. The loop's own, never handed out."""
         return (
             f"postgresql://{quote_plus(self.postgres_user)}:{quote_plus(self.postgres_password)}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
-
-    @computed_field
-    @property
-    def job_db_connection_string(self) -> str:
-        """How a job container reaches the database. Handed to jobs, never used here."""
-        return (
-            f"postgresql://{quote_plus(self.postgres_user)}:{quote_plus(self.postgres_password)}"
-            f"@{self.effective_postgres_host_for_jobs}:{self.postgres_port}/{self.postgres_db}"
         )
 
 
