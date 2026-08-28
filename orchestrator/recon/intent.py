@@ -33,7 +33,7 @@ _EFFECTIVE = """
         COALESCE(d.solver,          f.solver)          AS solver,
         d.q_lower_bound,
         d.q_upper_bound,
-        COALESCE(d.initial_dq_step_for_nd, f.initial_dq_step_for_nd) AS initial_dq_step_for_nd
+        d.initial_dq_step_for_nd
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
     CROSS JOIN desired_state_defaults f
