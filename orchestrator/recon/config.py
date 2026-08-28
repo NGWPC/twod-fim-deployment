@@ -33,16 +33,6 @@ class Settings(BaseSettings):
     # satisfy, so an unsent tolerance means every scenario runs the full
     # simulation length instead of stopping when the reach settles.
     volume_convergence_tolerance: float = 1e-3
-    # How far build_model buffers the bounding box around the reach geometry,
-    # in CRS units (m at EPSG:5070). The job's own default is 0, which leaves
-    # domains too tight for water to stay inside at higher discharges.
-    #
-    # NOTE this is a REALIZATION input, not an identity one: changing it moves
-    # the domain_code, never the identity hash. So a change here does not
-    # invalidate existing models — observe matches on the identity prefix and
-    # accepts whatever domain code it finds. Rebuild deliberately if you want a
-    # new buffer applied to models that already exist.
-    domain_buffer: float = 50.0
     # Failures in a row before a reach is parked for a person. 1 means no
     # retries at all, which is what you want while developing: a failure should
     # stop and be looked at, not be retried five times over an hour.

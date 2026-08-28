@@ -1,7 +1,7 @@
 """Which SEPEX process carries out a step, and the line between the two.
 
-A normal-depth run is not one job: the solver picks the model and --gpu picks
-the hardware, and only their product is a registered SEPEX process. These tests
+A normal-depth run is not one job: the solver picks the model and
+$GPU_AVAILABLE picks the hardware, and only their product is a registered SEPEX process. These tests
 pin three things that are easy to get wrong and expensive to discover at
 runtime:
 
@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 
 from recon import gap
-from recon.check import BUILD_MODEL_PROCESS, RUN_ND_PROCESSES, _process_id
+from recon.check import (BUILD_MODEL_PROCESS, RUN_ND_PROCESSES, _process_id,
+                         gpu_available)
 
 DEPLOYMENT = Path(__file__).resolve().parents[2]
 SCHEMA = DEPLOYMENT / "db" / "schema"
@@ -37,13 +38,36 @@ def plugin_process_ids() -> set[str]:
 
 # --- routing ------------------------------------------------------------
 
-@pytest.mark.parametrize("gpu,expected", [
-    (False, "runNdScenariosLisfloodCpu"),
-    (True, "runNdScenariosLisfloodGpu"),
+@pytest.mark.parametrize("env_value,expected", [
+    ("false", "runNdScenariosLisfloodCpu"),
+    ("true", "runNdScenariosLisfloodGpu"),
 ])
-def test_the_hardware_flag_picks_the_process(monkeypatch, gpu, expected):
+def test_gpu_available_picks_the_process(monkeypatch, env_value, expected):
+    """Which hardware variant is asked for comes from the environment, not from
+    an argument: the host either has a device or it does not."""
     monkeypatch.setattr("recon.check.intent.effective", lambda _r: {"solver": "lisflood"})
-    assert _process_id(gap.RUN_ND, 1, gpu=gpu) == expected
+    monkeypatch.setenv("GPU_AVAILABLE", env_value)
+    assert _process_id(gap.RUN_ND, 1) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("true", True), ("True", True), ("1", True), ("yes", True), ("on", True),
+    ("false", False), ("False", False), ("0", False), ("no", False), ("", False),
+])
+def test_gpu_available_parses_the_variable_rather_than_its_truthiness(
+    monkeypatch, value, expected
+):
+    """bool() on a string is true for every non-empty value, so GPU_AVAILABLE
+    =false would select the GPU process. That mistake shipped in the job images
+    once already, where it made a CPU build ask for CUDA."""
+    monkeypatch.setenv("GPU_AVAILABLE", value)
+    assert gpu_available() is expected
+
+
+def test_gpu_is_off_when_the_variable_is_absent(monkeypatch):
+    """A host with no GPU must work without being told anything."""
+    monkeypatch.delenv("GPU_AVAILABLE", raising=False)
+    assert gpu_available() is False
 
 
 def test_build_model_has_one_process_and_never_reads_intent(monkeypatch):
@@ -52,7 +76,7 @@ def test_build_model_has_one_process_and_never_reads_intent(monkeypatch):
         raise AssertionError("build_model routing must not read intent")
 
     monkeypatch.setattr("recon.check.intent.effective", fail)
-    assert _process_id(gap.BUILD_MODEL, 1, gpu=True) == BUILD_MODEL_PROCESS
+    assert _process_id(gap.BUILD_MODEL, 1) == BUILD_MODEL_PROCESS
 
 
 def test_an_unbuilt_solver_is_refused_where_the_reason_is_legible(monkeypatch):
@@ -60,8 +84,9 @@ def test_an_unbuilt_solver_is_refused_where_the_reason_is_legible(monkeypatch):
     process. Refusing here names the solver; letting it through reaches SEPEX
     as a 404 that names only the process id."""
     monkeypatch.setattr("recon.check.intent.effective", lambda _r: {"solver": "sfincs"})
+    monkeypatch.setenv("GPU_AVAILABLE", "false")
     with pytest.raises(RuntimeError, match="sfincs"):
-        _process_id(gap.RUN_ND, 1, gpu=False)
+        _process_id(gap.RUN_ND, 1)
 
 
 # --- the loop can only name processes that exist ------------------------

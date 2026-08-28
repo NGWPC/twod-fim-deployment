@@ -23,7 +23,7 @@ Examples:
     python scripts/reconcile.py                  # until settled, then exit
     python scripts/reconcile.py --forever        # keep going, like a service
     python scripts/reconcile.py --once           # a single pass, for cron
-    python scripts/reconcile.py --gpu --interval 15
+    GPU_AVAILABLE=true python scripts/reconcile.py   # ask for the GPU jobs
 """
 
 import argparse
@@ -53,15 +53,15 @@ TALLY = """
 def build_execution(args: argparse.Namespace) -> ExecutionService:
     """The execution layer. There is one, and it is SEPEX.
 
-    --gpu is not an execution setting: it selects which SEPEX PROCESS is asked for,
-    because a CPU and a GPU run are separate registered processes. Everything
-    else about how a job runs lives in that process's plugin.
+    Nothing here says which hardware a job runs on. A CPU and a GPU run are
+    separate registered SEPEX processes, and which one is asked for comes from
+    $GPU_AVAILABLE — a property of the host, not of this runner.
     """
     logging.info("SEPEX at %s", settings.sepex_url)
     return SepexClient(base_url=settings.sepex_url)
 
 
-def one_pass(execution: ExecutionService, gpu: bool) -> int:
+def one_pass(execution: ExecutionService) -> int:
     """Poll what is running, then check what is due. Returns jobs submitted."""
     for outcome in jobs.poll_in_flight(execution):
         if outcome["status"] in ("succeeded", "failed"):
@@ -80,7 +80,7 @@ def one_pass(execution: ExecutionService, gpu: bool) -> int:
         # work back here would be guessing at SEPEX's capacity from outside;
         # SEPEX queues what it cannot start yet, and a queued job is the system
         # working rather than a problem to avoid.
-        result = check.run_check(row["reach_id"], execution, gpu=gpu)
+        result = check.run_check(row["reach_id"], execution)
         if result.submitted_ref:
             submitted += 1
             logging.info("%s", result)
@@ -97,12 +97,6 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="a single pass, then exit")
     parser.add_argument(
         "--forever", action="store_true", help="keep going after the network settles"
-    )
-    parser.add_argument(
-        "--gpu",
-        action="store_true",
-        help="ask for the GPU build of the run job (default: CPU). "
-        "How many run at once is SEPEX's to decide, not this loop's",
     )
     parser.add_argument(
         "-v",
@@ -132,14 +126,14 @@ def main() -> int:
         "database %s | storage s3://%s | run job %s",
         settings.postgres_host,
         settings.artifacts_s3_bucket,
-        check.RUN_ND_PROCESSES.get(("lisflood", args.gpu), "?"),
+        check.RUN_ND_PROCESSES.get(("lisflood", check.gpu_available()), "?"),
     )
 
     started, passes, quiet = time.time(), 0, 0
     try:
         while True:
             passes += 1
-            submitted = one_pass(execution, args.gpu)
+            submitted = one_pass(execution)
             now = db.one(TALLY)
             logging.info(
                 "pass %-4d finished %s/%s  waiting %s  awaiting %s  in flight %s  "

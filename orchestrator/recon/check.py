@@ -11,6 +11,7 @@ storage, which is why a crash at any point costs at most some repeated work.
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -241,7 +242,10 @@ def _build_model_payload(reach_id: int) -> dict:
         "dem_source": wanted["dem_source"],
         "lulc_source": wanted["lulc_source"],
         "lulc_lookup": wanted["lulc_lookup"],
-        "domain_buffer": settings.domain_buffer,
+        # No domain_buffer. It was a flat placeholder — one distance for every
+        # reach — standing in for a widening the job can now work out per reach,
+        # from the bankfull width its own drainage area implies. Sending a
+        # number would override that estimate with a worse one.
         "other_geometries": _model_geometries(reach_id, wanted),
     }
 
@@ -335,7 +339,8 @@ PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 
 # The SEPEX process each STEP is carried out by. A step and a process are not
 # the same thing: build_model has one process regardless, but a normal-depth run
-# is one of a matrix — the solver picks the model, --gpu picks the hardware, and
+# is one of a matrix — the solver picks the model, $GPU_AVAILABLE picks the
+# hardware, and
 # only their product is a registered process. Only lisflood is built; a solver
 # with no entry is refused here, where the reason is legible, rather than
 # surfacing later as a 404 from SEPEX.
@@ -346,7 +351,7 @@ PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 # is SEPEX's business and is not represented here at all.
 #
 # The mapping stays OUT of the gap calculation and out of reach_processing on
-# purpose. Which variant ran is a realization detail, like domain_buffer: the
+# purpose. Which variant ran is a realization detail, like the domain code: the
 # rung of the ladder is `run_nd_scenarios` whichever process serves it, and
 # reach_processing.current_step records the step (its CHECK constraint allows
 # exactly the three step names). The variant is recorded where history lives —
@@ -358,11 +363,37 @@ RUN_ND_PROCESSES = {
 }
 
 
-def _process_id(step: str, reach_id: int, *, gpu: bool) -> str:
+# Whether this machine can run a solver on a GPU.
+#
+# Read from the environment at the moment it is needed, not held in Settings.
+# Settings describes what this DEPLOYMENT is — its database, its bucket, its
+# execution layer — and travels in .env. Whether a GPU is present is a property
+# of the HOST the jobs land on, which is why it is set by whoever starts the
+# process and not written down beside the bucket name.
+#
+# Parsed rather than truthiness-tested: a bare bool() on a string is true for
+# every non-empty value, so GPU_AVAILABLE=false would read as True. That exact
+# mistake shipped in the job images and made a CPU build ask for CUDA.
+GPU_AVAILABLE_ENV = "GPU_AVAILABLE"
+_TRUE = {"true", "1", "yes", "y", "on"}
+
+
+def gpu_available() -> bool:
+    """True when $GPU_AVAILABLE says this host has a usable GPU.
+
+    Defaults to false: a machine without a device works without being told
+    anything, and asking for the GPU process where none exists fails at the
+    solver rather than falling back.
+    """
+    return os.environ.get(GPU_AVAILABLE_ENV, "").strip().lower() in _TRUE
+
+
+def _process_id(step: str, reach_id: int) -> str:
     """The SEPEX process that carries out a step for this reach.
 
-    Intent is read only when the step actually varies by it, so build_model
-    costs no extra query.
+    Two things pick it: the solver, which is authored intent, and whether this
+    host has a GPU, which is $GPU_AVAILABLE. Intent is read only when the step
+    actually varies by it, so build_model costs no extra query.
     """
     if step == gap.BUILD_MODEL:
         return BUILD_MODEL_PROCESS
@@ -371,15 +402,16 @@ def _process_id(step: str, reach_id: int, *, gpu: bool) -> str:
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
-    key = (wanted["solver"], gpu)
+    key = (wanted["solver"], gpu_available())
     if key not in RUN_ND_PROCESSES:
         raise RuntimeError(
-            f"no {step} process for solver {wanted['solver']!r} (gpu={gpu}); "
+            f"no {step} process for solver {wanted['solver']!r} "
+            f"({GPU_AVAILABLE_ENV}={gpu_available()}); "
             f"built variants are {sorted(RUN_ND_PROCESSES)}")
     return RUN_ND_PROCESSES[key]
 
 
-def run_check(reach_id: int, execution: ExecutionService, *, gpu: bool = False) -> CheckResult:
+def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
     """Check one reach, and act on what the gap turns out to be.
 
     A check submits whenever there is a gap. There is no concurrency limit and
@@ -388,9 +420,9 @@ def run_check(reach_id: int, execution: ExecutionService, *, gpu: bool = False) 
     statement about what is NEEDED, never a claim that capacity exists. A job
     it cannot start yet sits queued, which is the system working.
 
-    `gpu` picks which hardware variant of a multi-process step (currently only
-    run_nd_scenarios) is asked for; it says nothing about build_model, which
-    has one process regardless.
+    Which hardware variant of a multi-process step is asked for comes from
+    $GPU_AVAILABLE, not from the caller: it is a property of the host the jobs
+    land on rather than of one check.
     """
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
@@ -444,7 +476,7 @@ def run_check(reach_id: int, execution: ExecutionService, *, gpu: bool = False) 
 
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
-            process_id = _process_id(decision.step, reach_id, gpu=gpu)
+            process_id = _process_id(decision.step, reach_id)
             ref = execution.submit(
                 process_id, PAYLOADS[decision.step](reach_id), tags=job_tags(reach_id)
             )
@@ -477,7 +509,7 @@ def run_check(reach_id: int, execution: ExecutionService, *, gpu: bool = False) 
     return result
 
 
-def sweep(execution: ExecutionService, limit: int | None = None, *, gpu: bool = False) -> list[CheckResult]:
+def sweep(execution: ExecutionService, limit: int | None = None) -> list[CheckResult]:
     """Check every reach that is currently due, once.
 
     The list is read once at the start rather than re-queried as it goes, so a
@@ -485,4 +517,4 @@ def sweep(execution: ExecutionService, limit: int | None = None, *, gpu: bool = 
     re-reading its own queue would chase them forever. Call it again to pick
     those up — which is what the loop does anyway.
     """
-    return [run_check(r["reach_id"], execution, gpu=gpu) for r in queue.due_reaches(limit)]
+    return [run_check(r["reach_id"], execution) for r in queue.due_reaches(limit)]
