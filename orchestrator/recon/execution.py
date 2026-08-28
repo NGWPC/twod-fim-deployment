@@ -89,7 +89,7 @@ class ExecutionService(Protocol):
     worth testing without an execution system attached.
     """
 
-    def submit(self, process_id: str, payload: dict) -> str:
+    def submit(self, process_id: str, payload: dict, tags: list[str] | None = None) -> str:
         """Start a job and return a reference to it, without waiting."""
         ...
 
@@ -147,18 +147,27 @@ class SepexClient:
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             raise SepexUnavailable(f"SEPEX unreachable at {self.base_url}: {e}") from e
 
-    def submit(self, process_id: str, payload: dict) -> str:
+    def submit(self, process_id: str, payload: dict, tags: list[str] | None = None) -> str:
         """Ask SEPEX to run one job. Returns its jobID.
 
         Returning means SEPEX accepted the job, not that it started it: with a
         busy resource pool the job sits queued, which is the normal case and
         not something the caller should try to avoid.
+
+        `tags` are labels SEPEX stores with the job and can filter on
+        (GET /jobs?tags=...). They are a sibling of `inputs` in the request
+        body, never part of it — a payload is validated against the process's
+        declared inputs, so a tag smuggled in there would be rejected as an
+        unexpected field.
         """
         logger.info("submitting %s for reach %s", process_id, reach_of(payload))
+        body: dict = {"inputs": payload}
+        if tags:
+            body["tags"] = tags
         result = self._request(
             "POST",
             f"/processes/{process_id}/execution",
-            data={"inputs": payload},
+            data=body,
             headers={"Prefer": "respond-async"},
         )
         if result is None:

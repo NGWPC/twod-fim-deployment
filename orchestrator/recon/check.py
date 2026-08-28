@@ -191,6 +191,23 @@ def _upstream(reach_id: int) -> dict:
     }
 
 
+# Labels SEPEX stores with a job and can filter on (GET /jobs?tags=...).
+#
+# A reach tag is the one thing a person always wants when looking at the
+# execution system: every job SEPEX holds is otherwise identified only by a
+# process name and a uuid, and the reach is nowhere in either. With this, the
+# jobs belonging to a reach are one query — which is what you want when a
+# reach halts and you need its history.
+#
+# Namespaced `reach:<id>` rather than a bare number so it stays legible beside
+# tags added later, and because a bare id is indistinguishable from any other
+# number. SEPEX allows letters, digits, and `. - _ :` in a tag, so the colon is
+# valid; it rejects anything else, and a rejected tag fails the submission.
+def job_tags(reach_id: int) -> list[str]:
+    """The tags every submission for this reach carries."""
+    return [f"reach:{reach_id}"]
+
+
 def _build_model_payload(reach_id: int) -> dict:
     """What build_model needs, with every identity input pinned.
 
@@ -301,9 +318,13 @@ def _run_nd_payload(reach_id: int) -> dict:
     return {
         "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
         "model_results_base_path": storage.results_root(),
-        "min_upstream_inflow": float(wanted["q_lower_bound"]),
-        "max_upstream_inflow": float(wanted["q_upper_bound"]),
-        "delta_upstream_inflow": float(wanted["initial_dq_step_for_nd"]),
+        # Whole cms. Discharge is integral end to end — authored as integer
+        # columns, run at integers, named into the q= folder as an integer, and
+        # recorded in q_set as an integer. Sending a float here would put the
+        # fraction back in at the one place it is allowed to enter.
+        "min_upstream_inflow": int(wanted["q_lower_bound"]),
+        "max_upstream_inflow": int(wanted["q_upper_bound"]),
+        "delta_upstream_inflow": int(wanted["initial_dq_step_for_nd"]),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
@@ -424,7 +445,9 @@ def run_check(reach_id: int, execution: ExecutionService, *, gpu: bool = False) 
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
             process_id = _process_id(decision.step, reach_id, gpu=gpu)
-            ref = execution.submit(process_id, PAYLOADS[decision.step](reach_id))
+            ref = execution.submit(
+                process_id, PAYLOADS[decision.step](reach_id), tags=job_tags(reach_id)
+            )
             # The STEP is what goes in the marker, not the process that served
             # it: that column is the ladder's rung, and the gap calculation and
             # its CHECK constraint both speak in steps. The variant is named in

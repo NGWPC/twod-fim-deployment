@@ -101,16 +101,29 @@ def test_an_unknown_run_identity_dimension_is_refused():
     assert any("unknown" in p for p in problems)
 
 
-def test_fractional_discharge_matches_its_rounded_folder():
-    """The adaptive stepper emits fractional discharges and the job rounds them
-    into the folder name. Truncating instead of rounding refused a valid
-    12-scenario library and cost a 2.5-hour re-run, so this is pinned."""
+def test_a_fractional_discharge_is_refused():
+    """Discharge is a whole number of cms everywhere — authored in integer
+    columns, stepped in whole cms, named into the folder, recorded in q_set. A
+    fraction reaching a manifest means the job let one through, and rounding it
+    into the nearest folder would adopt a library whose recorded discharges are
+    not the ones that were run."""
     m = sound_scenario(us_discharge=1171.875)
-    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1172) == []
+    for folder_q in (1171, 1172):
+        problems = identity.verify_scenario_manifest(
+            m, 5, m["identity_hash"], m["model_id"], folder_q)
+        assert any("us_discharge" in p for p in problems), folder_q
 
 
-def test_a_discharge_rounding_to_a_different_folder_is_still_refused():
-    """The guard must still catch a manifest in the wrong folder."""
-    m = sound_scenario(us_discharge=1171.875)
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1171)
+def test_an_integer_discharge_written_as_a_float_is_still_accepted():
+    """JSON has one number type, so a whole value may arrive as 1000.0. That is
+    the same discharge, not a fraction, and equality says so."""
+    m = sound_scenario(us_discharge=1000.0)
+    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1000) == []
+
+
+def test_a_discharge_in_the_wrong_folder_is_refused():
+    """The guard's real job: catching a manifest that does not belong where it
+    sits, whether misfiled or copied."""
+    m = sound_scenario(us_discharge=1200)
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1000)
     assert any("us_discharge" in p for p in problems)

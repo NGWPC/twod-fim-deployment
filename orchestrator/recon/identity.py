@@ -168,8 +168,13 @@ def run_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
 RUN_NAME_Q_ROUNDING_PRECISION = 0
 
 
-def q_folder(q: float) -> str:
-    """The `q=<discharge>` folder for one scenario."""
+def q_folder(q: int) -> str:
+    """The `q=<discharge>` folder for one scenario.
+
+    Discharge is integral, so this is a rendering rather than a rounding and
+    parse_q_folder recovers the value exactly. The format string keeps the
+    job's own precision constant so the two sides cannot drift.
+    """
     return f"q={q:.{RUN_NAME_Q_ROUNDING_PRECISION}f}"
 
 
@@ -201,20 +206,21 @@ def verify_scenario_manifest(
     if manifest.get("model_id") != model_id:
         problems.append(f"manifest model_id {manifest.get('model_id')} != {model_id}")
 
-    # Compare through the job's own folder-naming function, never by casting.
-    # The adaptive stepper emits fractional discharges (1171.875), and the job
-    # ROUNDS them into the folder name (q=1172) while the manifest keeps full
-    # precision. int() truncates, so a cast here reads 1171 and refuses a
-    # perfectly good scenario. Formatting both sides the same way is the only
-    # comparison that cannot drift from what the job wrote.
+    # Discharge is a whole number of cms everywhere: authored in integer
+    # columns, stepped in whole cms, named into the folder, recorded in q_set.
+    # So this is an exact comparison, and a manifest that does not match the
+    # folder it sits in is either misfiled or was produced by a job that let a
+    # fraction through. Both are defects, and both are refused here rather than
+    # rounded away — rounding would adopt a library whose recorded discharges
+    # are not the ones that were run.
     #
     # Read from the top of the manifest, not from `inputs`. `inputs` holds the
-    # literal inputs — the discharge is in there as one of several boundary
-    # conditions — while this is the scenario's summary value, published
-    # alongside scenario_code. Recovering it from the folder name is not an
-    # option: that name is rounded, which is the whole reason for this check.
+    # literal inputs, where the discharge appears as one of several boundary
+    # conditions; this is the scenario's summary value, published alongside
+    # scenario_code. Comparing against the folder name is the point — it is the
+    # manifest's own claim about where it belongs.
     discharge = manifest.get("us_discharge")
-    if discharge is None or q_folder(float(discharge)) != q_folder(q):
+    if discharge is None or discharge != q:
         problems.append(f"manifest us_discharge {discharge} is not in folder q={q}")
 
     ident = manifest.get("identity")
