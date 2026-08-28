@@ -52,6 +52,7 @@ LAKES_LAYER = "lakes_polygons"
 # Q bounds
 Q_LOWER_BOUND_FIELD = "q_lower_bound"
 Q_UPPER_BOUND_FIELD = "q_upper_bound"
+DQ_STEP_FIELD = "initial_dq_step_for_nd"
 
 # Mirrors what the deployed job images bake in (twod_fim_jobs/consts.py). The
 # loop predicts artifact addresses from these, so they must match the images or
@@ -204,6 +205,8 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
             continue
         r[Q_LOWER_BOUND_FIELD] = low
         r[Q_UPPER_BOUND_FIELD] = high
+        rng = high - low
+        r[DQ_STEP_FIELD] = int(rng / 10)
     if duplicate_ids:
         raise RuntimeError(f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}")
     if missing_reaches:
@@ -347,8 +350,8 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
                 r,
             )
             conn.execute(
-                """INSERT INTO desired_state (reach_id, q_lower_bound, q_upper_bound)
-                       VALUES (%(reach_id)s, %(q_lower_bound)s, %(q_upper_bound)s)""",
+                """INSERT INTO desired_state (reach_id, q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
+                       VALUES (%(reach_id)s, %(q_lower_bound)s, %(q_upper_bound)s, %(initial_dq_step_for_nd)s)""",
                 r,
             )
 
