@@ -15,6 +15,9 @@ host:
 command: []
 
 config:
+  maxResources:
+    cpus: 3
+    memory: 2048
   envVars:
     - RUNNDSCENARIOSLISFLOODGPU_AWS_ENDPOINT_URL
     - RUNNDSCENARIOSLISFLOODGPU_AWS_ACCESS_KEY_ID

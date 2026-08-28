@@ -20,7 +20,7 @@ from shapely.geometry import shape
 from recon import (activity, db, gap, identity, intent, observe, processing,
                    queue, storage)
 from recon.config import settings
-from recon.workers import ContainerRunner
+from recon.execution import ExecutionService
 
 logger = logging.getLogger(__name__)
 
@@ -279,57 +279,64 @@ def _run_nd_payload(reach_id: int) -> dict:
 
 PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 
-# Which image/process a STEP is actually carried out by. The two are no longer
-# the same thing: build_model has one image regardless, but a normal-depth run
+# The SEPEX process each STEP is carried out by. A step and a process are not
+# the same thing: build_model has one process regardless, but a normal-depth run
 # is one of a matrix — the solver picks the model, --gpu picks the hardware, and
-# only their product is a published image. Only lisflood is built; a solver with
-# no entry is refused here, where the reason is legible, rather than surfacing
-# later as an image pull error.
+# only their product is a registered process. Only lisflood is built; a solver
+# with no entry is refused here, where the reason is legible, rather than
+# surfacing later as a 404 from SEPEX.
 #
-# This mapping stays OUT of the gap calculation and out of reach_processing on
+# These are SEPEX process ids, which is the loop's whole vocabulary for
+# execution now. Which image serves a process, on what hardware, with which
+# environment and mounts — and where SEPEX was configured to read that from —
+# is SEPEX's business and is not represented here at all.
+#
+# The mapping stays OUT of the gap calculation and out of reach_processing on
 # purpose. Which variant ran is a realization detail, like domain_buffer: the
-# rung of the ladder is `run_nd_scenarios` whichever image serves it, and
+# rung of the ladder is `run_nd_scenarios` whichever process serves it, and
 # reach_processing.current_step records the step (its CHECK constraint allows
 # exactly the three step names). The variant is recorded where history lives —
 # the activity log — and the job reference is the handle to the run itself.
-RUN_ND_JOBS = {
-    ("lisflood", False): "run_nd_scenarios-lisflood-cpu",
-    ("lisflood", True):  "run_nd_scenarios-lisflood-gpu",
+BUILD_MODEL_PROCESS = "buildModel"
+RUN_ND_PROCESSES = {
+    ("lisflood", False): "runNdScenariosLisfloodCpu",
+    ("lisflood", True):  "runNdScenariosLisfloodGpu",
 }
 
 
-def _job_key(step: str, reach_id: int, *, gpu: bool) -> str:
-    """The concrete runner job (image / SEPEX process) that carries out a step.
+def _process_id(step: str, reach_id: int, *, gpu: bool) -> str:
+    """The SEPEX process that carries out a step for this reach.
 
     Intent is read only when the step actually varies by it, so build_model
     costs no extra query.
     """
+    if step == gap.BUILD_MODEL:
+        return BUILD_MODEL_PROCESS
     if step != gap.RUN_ND:
-        return step
+        raise RuntimeError(f"no SEPEX process for step {step!r}")
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
     key = (wanted["solver"], gpu)
-    if key not in RUN_ND_JOBS:
+    if key not in RUN_ND_PROCESSES:
         raise RuntimeError(
-            f"no {step} image for solver {wanted['solver']!r} (gpu={gpu}); "
-            f"built variants are {sorted(RUN_ND_JOBS)}")
-    return RUN_ND_JOBS[key]
+            f"no {step} process for solver {wanted['solver']!r} (gpu={gpu}); "
+            f"built variants are {sorted(RUN_ND_PROCESSES)}")
+    return RUN_ND_PROCESSES[key]
 
 
-def run_check(reach_id: int, runner: ContainerRunner, *,
-              may_submit: bool = True, gpu: bool = False) -> CheckResult:
+def run_check(reach_id: int, execution: ExecutionService, *, gpu: bool = False) -> CheckResult:
     """Check one reach, and act on what the gap turns out to be.
 
-    `may_submit=False` runs the whole check but starts no new work: it still
-    observes storage, records proofs, and notes who it waits on. That is what a
-    caller at its concurrency limit wants — observation is how a FINISHED job
-    is noticed, so suppressing checks to hold the limit stops the loop from
-    seeing completed work. Only submission needs limiting.
+    A check submits whenever there is a gap. There is no concurrency limit and
+    no way to ask for one: SEPEX holds the resources, keeps the queue, and
+    admits work against its own pool, so a submission the loop makes is a
+    statement about what is NEEDED, never a claim that capacity exists. A job
+    it cannot start yet sits queued, which is the system working.
 
-    `gpu` picks which hardware variant of a multi-image step (currently only
-    run_nd_scenarios) gets submitted; it says nothing about build_model, which
-    has one image regardless.
+    `gpu` picks which hardware variant of a multi-process step (currently only
+    run_nd_scenarios) is asked for; it says nothing about build_model, which
+    has one process regardless.
     """
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
@@ -381,17 +388,11 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
             processing.wait_on(reach_id, None)
             result.note = f"{decision.step} awaiting inputs: {decision.reason}"
 
-        elif isinstance(decision, gap.RunStep) and not may_submit:
-            # Everything above still ran: the reach was observed and its proofs
-            # are current. Only starting the work is deferred.
-            processing.wait_on(reach_id, None)
-            result.decision, result.note = "Ready", f"{decision.step} ready, at capacity"
-
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
-            job_key = _job_key(decision.step, reach_id, gpu=gpu)
-            ref = runner.submit(job_key, PAYLOADS[decision.step](reach_id))
-            # The STEP is what goes in the marker, not the variant that served
+            process_id = _process_id(decision.step, reach_id, gpu=gpu)
+            ref = execution.submit(process_id, PAYLOADS[decision.step](reach_id))
+            # The STEP is what goes in the marker, not the process that served
             # it: that column is the ladder's rung, and the gap calculation and
             # its CHECK constraint both speak in steps. The variant is named in
             # the note, which the activity log keeps.
@@ -400,7 +401,7 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
             # waiting for the next sweep.
             queue.request_check(reach_id)
             result.submitted_ref = ref
-            result.note = f"submitted {job_key} ({ref[:12]})"
+            result.note = f"submitted {process_id} ({ref[:12]})"
 
     except Exception as exc:  # submission failed; the reach must not stall
         failure = processing.record_failure(reach_id, str(exc))
@@ -420,7 +421,7 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
     return result
 
 
-def sweep(runner: ContainerRunner, limit: int | None = None, *, gpu: bool = False) -> list[CheckResult]:
+def sweep(execution: ExecutionService, limit: int | None = None, *, gpu: bool = False) -> list[CheckResult]:
     """Check every reach that is currently due, once.
 
     The list is read once at the start rather than re-queried as it goes, so a
@@ -428,4 +429,4 @@ def sweep(runner: ContainerRunner, limit: int | None = None, *, gpu: bool = Fals
     re-reading its own queue would chase them forever. Call it again to pick
     those up — which is what the loop does anyway.
     """
-    return [run_check(r["reach_id"], runner, gpu=gpu) for r in queue.due_reaches(limit)]
+    return [run_check(r["reach_id"], execution, gpu=gpu) for r in queue.due_reaches(limit)]

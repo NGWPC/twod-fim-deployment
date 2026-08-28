@@ -6,8 +6,8 @@
 --   reach_activity    append-only history of what happened
 --
 -- Neither can be rebuilt by rescanning storage — that is exactly why they are
--- separate from current_state (04) and runs (05). Those two describe what
--- exists; these two describe what the system is doing.
+-- separate from materialized_models (04) and materialized_*_runs (05). Those
+-- two describe what exists; these two describe what the system is doing.
 -- ---------------------------------------------------------------------------
 -- reach_processing: what the loop is DOING to each reach
 --

@@ -1,10 +1,15 @@
-"""Which image carries out a step, and the line between a step and its variant.
+"""Which SEPEX process carries out a step, and the line between the two.
 
-A normal-depth run is no longer one job: the solver picks the model and --gpu
-picks the hardware, and only their product is a published image. These tests
-pin both halves of that — the routing itself, and the rule that the routing
-must not leak into the ladder, because the two are easy to conflate and the
-database refuses the conflation only at write time.
+A normal-depth run is not one job: the solver picks the model and --gpu picks
+the hardware, and only their product is a registered SEPEX process. These tests
+pin three things that are easy to get wrong and expensive to discover at
+runtime:
+
+  - the routing itself
+  - that every process the loop can name is actually registered as a plugin,
+    so a submission cannot 404 against SEPEX
+  - that the routing never leaks into the ladder, because reach_processing
+    refuses that only at write time
 """
 
 import re
@@ -13,60 +18,82 @@ from pathlib import Path
 import pytest
 
 from recon import gap
-from recon.check import RUN_ND_JOBS, _job_key
-from recon.config import settings
-from recon.workers import SEPEX_PROCESS_IDS, LocalDockerRunner
+from recon.check import BUILD_MODEL_PROCESS, RUN_ND_PROCESSES, _process_id
 
 DEPLOYMENT = Path(__file__).resolve().parents[2]
 SCHEMA = DEPLOYMENT / "db" / "schema"
-COMPOSE = DEPLOYMENT / "docker-compose-local.yml"
+PLUGINS = DEPLOYMENT / "sepex" / "local" / "plugins"
+
+
+def plugin_process_ids() -> set[str]:
+    """Every `info.id` SEPEX would register from the local plugin directory."""
+    ids = set()
+    for yml in PLUGINS.glob("*/*.yml"):
+        found = re.search(r"^\s*id:\s*(\S+)", yml.read_text(), re.M)
+        if found:
+            ids.add(found.group(1))
+    return ids
 
 
 # --- routing ------------------------------------------------------------
 
 @pytest.mark.parametrize("gpu,expected", [
-    (False, "run_nd_scenarios-lisflood-cpu"),
-    (True, "run_nd_scenarios-lisflood-gpu"),
+    (False, "runNdScenariosLisfloodCpu"),
+    (True, "runNdScenariosLisfloodGpu"),
 ])
-def test_the_hardware_flag_picks_the_variant(monkeypatch, gpu, expected):
+def test_the_hardware_flag_picks_the_process(monkeypatch, gpu, expected):
     monkeypatch.setattr("recon.check.intent.effective", lambda _r: {"solver": "lisflood"})
-    assert _job_key(gap.RUN_ND, 1, gpu=gpu) == expected
+    assert _process_id(gap.RUN_ND, 1, gpu=gpu) == expected
 
 
-def test_build_model_has_one_image_and_never_reads_intent(monkeypatch):
+def test_build_model_has_one_process_and_never_reads_intent(monkeypatch):
     """A step that does not vary must not pay for a query to discover that."""
     def fail(_r):
         raise AssertionError("build_model routing must not read intent")
 
     monkeypatch.setattr("recon.check.intent.effective", fail)
-    assert _job_key(gap.BUILD_MODEL, 1, gpu=True) == gap.BUILD_MODEL
+    assert _process_id(gap.BUILD_MODEL, 1, gpu=True) == BUILD_MODEL_PROCESS
 
 
 def test_an_unbuilt_solver_is_refused_where_the_reason_is_legible(monkeypatch):
     """sfincs is a valid thing to ask for (the schema allows it) and has no
-    image. Refusing here names the solver; letting it through surfaces as an
-    image pull failure with nothing pointing at the cause."""
+    process. Refusing here names the solver; letting it through reaches SEPEX
+    as a 404 that names only the process id."""
     monkeypatch.setattr("recon.check.intent.effective", lambda _r: {"solver": "sfincs"})
     with pytest.raises(RuntimeError, match="sfincs"):
-        _job_key(gap.RUN_ND, 1, gpu=False)
+        _process_id(gap.RUN_ND, 1, gpu=False)
 
 
-# --- the step / variant line -------------------------------------------
+# --- the loop can only name processes that exist ------------------------
 
-def test_every_variant_is_runnable_by_both_runners():
-    """A routing key that no runner can turn into an image or a process is a
-    submission that fails at the last moment, for a reason visible nowhere in
-    this repo."""
-    for key in RUN_ND_JOBS.values():
-        assert key in LocalDockerRunner().images, f"{key} has no docker image"
-        assert key in SEPEX_PROCESS_IDS, f"{key} has no SEPEX process"
+def test_every_process_the_loop_can_name_exists_in_the_local_definitions():
+    """The loop's whole vocabulary for execution is SEPEX process ids. One it
+    can produce but SEPEX does not have is a submission that fails at the last
+    possible moment, for a reason visible nowhere in this repo.
+
+    Scoped to the LOCAL process definitions on purpose. SEPEX can be pointed at
+    definitions anywhere (PLUGINS_LOAD_DIR), and a deployment that does so is
+    not misconfigured — so this skips rather than fails when the local set is
+    absent. Where it does apply, GET /processes is the only authority at
+    runtime; this is the cheap version of that question, asked without a
+    running SEPEX.
+    """
+    registered = plugin_process_ids()
+    if not registered:
+        pytest.skip(f"no local process definitions under {PLUGINS}")
+    for pid in {BUILD_MODEL_PROCESS, *RUN_ND_PROCESSES.values()}:
+        assert pid in registered, (
+            f"{pid} is not the info.id of any local process definition in {PLUGINS}; "
+            f"found: {sorted(registered)}")
 
 
-def test_variants_are_not_step_names():
+# --- the step / process line -------------------------------------------
+
+def test_processes_are_not_step_names():
     """reach_processing.current_step is CHECK-constrained to the three step
-    names, so writing a variant there fails the insert. This is the test that
-    catches the conflation before the database does — the marker records the
-    rung of the ladder, and the variant lives in the activity log instead."""
+    names, so writing a process id there fails the insert. This is the test
+    that catches the conflation before the database does — the marker records
+    the rung of the ladder, and the process is recorded in the activity log."""
     allowed = set(
         re.findall(r"'([a-z_]+)'",
                    re.search(r"current_step text CONSTRAINT.*?\)\),",
@@ -74,22 +101,7 @@ def test_variants_are_not_step_names():
                              re.S).group(0))
     )
     assert gap.BUILD_MODEL in allowed and gap.RUN_ND in allowed
-    for key in RUN_ND_JOBS.values():
-        assert key not in allowed, (
-            f"{key} is a runner variant, not a step; it must never reach "
+    for pid in {BUILD_MODEL_PROCESS, *RUN_ND_PROCESSES.values()}:
+        assert pid not in allowed, (
+            f"{pid} is a SEPEX process, not a step; it must never reach "
             "reach_processing.current_step")
-
-
-def test_the_runner_attaches_jobs_to_the_network_the_stack_actually_uses():
-    """A job on the wrong network cannot resolve `db` or `minio`, and the
-    failure names neither — docker just refuses to start the container.
-
-    The compose file declares the network as external, so its name is the one
-    fact both sides must agree on. Only LocalDockerRunner reads the setting;
-    SepexRunner never does, which is how a stale default survived unnoticed
-    while the deployment ran through SEPEX.
-    """
-    declared = re.search(r"^networks:\n\s+([A-Za-z0-9_.-]+):",
-                         COMPOSE.read_text(), re.M)
-    assert declared, "no networks: block in docker-compose-local.yml"
-    assert settings.docker_network == declared.group(1)

@@ -17,29 +17,13 @@ class Settings(BaseSettings):
     artifacts_s3_bucket: str = "twod-fim-artifacts"
     major_version: int = 1
     aws_endpoint_url: str | None = None
-    build_model_image: str = "ghcr.io/ngwpc/twod-fim-jobs/build_model:dev"
-    # One image per (job, solver, hardware): the job name AND the solver are
-    # baked into each image's ENTRYPOINT, so the runner picks an image by the
-    # resolved job key (e.g. "run_nd_scenarios-lisflood-gpu") rather than
-    # passing a command. Only lisflood is implemented; sfincs images do not
-    # exist yet.
-    run_nd_scenarios_lisflood_cpu_image: str = (
-        "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-cpu:dev"
-    )
-    run_nd_scenarios_lisflood_gpu_image: str = (
-        "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev"
-    )
-    docker_network: str = "twodfim_net"
-    # Value for docker run --gpus, e.g. "all" or "device=0". None passes the
-    # flag at all, which is right on a machine without a GPU — and note that on
-    # such a machine the CPU image is what gets selected anyway, so there is no
-    # device for this to hand over.
+    # Nothing here says which IMAGE runs a job, on what hardware, with which
+    # environment or mounts. That belongs to the SEPEX process definition,
+    # wherever this deployment's SEPEX reads it from, and the loop never sees
+    # it: the loop names a process and hands over a payload. Adding an image
+    # setting back here would create a second place to be wrong about the same
+    # fact.
     #
-    # Needs the NVIDIA Container Toolkit on the host — `nvidia-smi` working
-    # outside Docker is not enough, the daemon needs the runtime too. Check
-    # with: docker info | grep -i runtimes
-    docker_gpus: str | None = None
-    docker_platform: str | None = None
     # When a normal-depth run is considered steady and may stop early: the
     # volume change over a save interval, normalized by inflow. DR-022 selects
     # volume convergence as the termination metric and DR-028 sets it to 1e-3.
@@ -73,23 +57,22 @@ class Settings(BaseSettings):
     # end to end. Treat any library produced this way as provisional — the
     # inundation is bounded by the domain rather than by the terrain.
     allow_water_on_edges: bool = True
-    sepex_url: str | None = None
-    docker_data_dir: str | None = None
+    # The execution layer. Required: the loop has no other way to run a job.
+    # Needs a scheme — urllib rejects a bare host:port — and SEPEX's port, 5050.
+    sepex_url: str
     # Hostname the database answers to from inside a job container. Jobs run as
     # siblings on the compose network, where the host's "localhost" is their own
     # container, so they cannot use the same connection string the loop does.
     postgres_host_for_jobs: str | None = None
-    aws_endpoint_url_for_jobs: str | None = None
+    # No aws_endpoint_url_for_jobs: how a JOB reaches storage is part of that
+    # job's environment, which SEPEX supplies from its plugin's envVars (see
+    # sepex_local.env, BUILDMODEL_AWS_ENDPOINT_URL and friends). The loop's own
+    # endpoint above is only for observing storage itself.
 
     @computed_field
     @property
     def effective_postgres_host_for_jobs(self) -> str:
         return self.postgres_host_for_jobs or self.postgres_host
-
-    @computed_field
-    @property
-    def effective_aws_endpoint_url_for_jobs(self) -> str:
-        return self.aws_endpoint_url_for_jobs or self.aws_endpoint_url or ""
 
     @computed_field
     @property
