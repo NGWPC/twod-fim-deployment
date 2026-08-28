@@ -14,8 +14,9 @@ deletion are one mechanism seen from two sides.
 A model counts as existing when its manifest is present and sound. build_model
 writes model_manifest.json last, so a half-written build has artifacts but no
 manifest and is correctly invisible; a manifest that fails verification
-(belongs to another reach, or its identity does not hash to what it claims) is
-treated as absent and reported, never adopted.
+(belongs to another reach, sits in a folder its own realization code does not
+name, or its identity does not hash to what it claims) is treated as absent and
+reported, never adopted.
 """
 
 import json
@@ -54,7 +55,7 @@ def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> d
         manifest = storage.read_json(f"{base}/{name}/{storage.MANIFEST_FILENAME}")
         if manifest is None:
             continue  # build not finished; the manifest is written last
-        problems = identity.verify_manifest(manifest, reach_id, predicted)
+        problems = identity.verify_manifest(manifest, reach_id, name)
         if problems:
             refused.append({"folder": name, "problems": problems})
             logger.warning("refused manifest at %s/%s: %s", base, name, problems)
@@ -168,13 +169,18 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     # job publishes the max-q run last, so a library caught mid-publish usually
     # fails the span check above and never reaches this loop.
     curve, refused = [], []
+    # The realization directory as it appears under the run identity:
+    # `<nd|kwse>=<value>/q=<value>`. A scenario manifest claims one of these in
+    # its scenario_code, and verification is that claim against this location.
+    nd_folder = library.rsplit("/", 1)[-1]
     for q in discharges:
+        scenario_dir = f"{nd_folder}/{identity.q_folder(q)}"
         path = f"{library}/{identity.q_folder(q)}/{storage.SCENARIO_MANIFEST_FILENAME}"
         manifest = storage.read_json(path)
         if manifest is None:
             return {**retract(f"scenario q={q} has no manifest yet"), "refused": refused}
         problems = identity.verify_scenario_manifest(
-            manifest, reach_id, run_hash, model["model_id"], q)
+            manifest, reach_id, run_hash, model["model_id"], scenario_dir)
         if problems:
             refused.append({"q": q, "problems": problems})
             logger.warning("refused scenario manifest at %s: %s", path, problems)

@@ -51,44 +51,70 @@ def test_parse_q_folder_ignores_anything_else(name):
 
 # --- scenario manifest verification -------------------------------------
 
+SCENARIO_DIR = "nd=1.0E03/q=100"
+
+
 def sound_scenario(**kw) -> dict:
     obj, digest = identity.run_identity(RUN_INTENT)
     return {"reach_id": 5, "identity": obj, "identity_hash": digest,
             "model_id": "abcd1234_N10S10E10W10",
-            "us_discharge": 100.0,
+            "scenario_code": "ND1.0E03Q100",
             "properties": {"nominal_wse": 283.2}, **kw}
 
 
 def test_a_sound_scenario_manifest_is_adopted():
     m = sound_scenario()
-    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100) == []
+    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR) == []
 
 
 def test_a_scenario_from_another_model_is_refused():
     """The same reach and solver, but built against a model intent no longer
     asks for — its results are a previous intent's, not this one's."""
     m = sound_scenario()
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], "ffff0000_N10S10E10W10", 100)
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], "ffff0000_N10S10E10W10", SCENARIO_DIR)
     assert any("model_id" in p for p in problems)
 
 
-def test_a_scenario_in_the_wrong_q_folder_is_refused():
+def test_a_scenario_in_the_wrong_folder_is_refused():
+    """The guard's real job: a manifest that does not belong where it sits,
+    whether misfiled or copied."""
     m = sound_scenario()
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 90)
-    assert any("us_discharge" in p for p in problems)
+    problems = identity.verify_scenario_manifest(
+        m, 5, m["identity_hash"], m["model_id"], "nd=1.0E03/q=90")
+    assert any("scenario_code" in p for p in problems)
+
+
+def test_the_slope_half_is_checked_too():
+    """The realization has two halves. Reading a discharge alone left the
+    downstream condition unanchored, so a manifest moved between nd= folders
+    passed."""
+    m = sound_scenario()
+    problems = identity.verify_scenario_manifest(
+        m, 5, m["identity_hash"], m["model_id"], "nd=9.9E99/q=100")
+    assert any("scenario_code" in p for p in problems)
+
+
+def test_an_unrecognised_scenario_code_is_refused():
+    """A code this mirror cannot parse means the jobs repo names scenarios in a
+    way the loop does not know; adopting it would mean trusting a location it
+    cannot check."""
+    m = sound_scenario(scenario_code="WHAT1234")
+    problems = identity.verify_scenario_manifest(
+        m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
+    assert any("scenario_code" in p for p in problems)
 
 
 def test_a_drifted_run_recipe_is_caught_by_the_self_check():
     m = sound_scenario()
     m["identity"] = {**m["identity"], "solver": "sfincs"}
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100)
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("drifted" in p for p in problems)
 
 
 def test_a_non_string_solver_is_refused():
     m = sound_scenario()
     m["identity"] = {**m["identity"], "solver": {"name": "lisflood", "version": "8.1.0"}}
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100)
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("solver must be a string" in p for p in problems)
 
 
@@ -97,33 +123,28 @@ def test_an_unknown_run_identity_dimension_is_refused():
     Refusing is how it announces itself, instead of a silent network rebuild."""
     m = sound_scenario()
     m["identity"] = {**m["identity"], "gpu_model": "A100"}
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100)
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("unknown" in p for p in problems)
 
 
-def test_a_fractional_discharge_is_refused():
-    """Discharge is a whole number of cms everywhere — authored in integer
-    columns, stepped in whole cms, named into the folder, recorded in q_set. A
-    fraction reaching a manifest means the job let one through, and rounding it
-    into the nearest folder would adopt a library whose recorded discharges are
-    not the ones that were run."""
-    m = sound_scenario(us_discharge=1171.875)
-    for folder_q in (1171, 1172):
-        problems = identity.verify_scenario_manifest(
-            m, 5, m["identity_hash"], m["model_id"], folder_q)
-        assert any("us_discharge" in p for p in problems), folder_q
+# --- the realization code mirror ----------------------------------------
+# These pairs were produced by running the jobs repo's own get_scenario_code
+# and get_scenario_dir_name, not by running this module and writing down what
+# it said. That distinction is the whole value: a test recording our own output
+# would still pass after the mirror drifted from the naming it mirrors.
+
+@pytest.mark.parametrize("code,directory", [
+    ("ND1.0E03Q100", "nd=1.0E03/q=100"),
+    ("ND1.5E04Q1000", "nd=1.5E04/q=1000"),
+    ("ND1.2E03Q1500", "nd=1.2E03/q=1500"),
+    ("KWSE200.2Q200", "kwse=200.2/q=200"),
+])
+def test_scenario_dir_from_code_matches_the_jobs_repo(code, directory):
+    assert identity.scenario_dir_from_code(code) == directory
 
 
-def test_an_integer_discharge_written_as_a_float_is_still_accepted():
-    """JSON has one number type, so a whole value may arrive as 1000.0. That is
-    the same discharge, not a fraction, and equality says so."""
-    m = sound_scenario(us_discharge=1000.0)
-    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1000) == []
-
-
-def test_a_discharge_in_the_wrong_folder_is_refused():
-    """The guard's real job: catching a manifest that does not belong where it
-    sits, whether misfiled or copied."""
-    m = sound_scenario(us_discharge=1200)
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 1000)
-    assert any("us_discharge" in p for p in problems)
+@pytest.mark.parametrize("code", ["", "ND1.0E03", "Q100", "WHAT1234", "nd=1.0E03/q=100"])
+def test_an_uninterpretable_code_yields_no_directory(code):
+    """None rather than a guess: a code this mirror cannot read means the loop
+    cannot check where the manifest belongs, and unverifiable is refused."""
+    assert identity.scenario_dir_from_code(code) is None

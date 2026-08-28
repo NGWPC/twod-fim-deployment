@@ -26,6 +26,7 @@ Two representation details are load-bearing, learned from the job's own types:
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping
 
 from shapely import wkb as shapely_wkb
@@ -87,7 +88,7 @@ def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     return identity, hash_dict(identity)
 
 
-def verify_manifest(manifest: Mapping[str, Any], reach_id: int, folder_hash: str) -> list[str]:
+def verify_manifest(manifest: Mapping[str, Any], reach_id: int, model_id: str) -> list[str]:
     """Why this manifest should NOT be adopted; empty list means it is sound.
 
     Checks are about trust, not correctness of the model itself:
@@ -95,13 +96,22 @@ def verify_manifest(manifest: Mapping[str, Any], reach_id: int, folder_hash: str
       - its identity object hashes to the identity_hash it claims (self-check;
         this is what catches drift between this copy and the job's recipe)
       - its identity carries exactly the keys this copy knows
+
+    `model_id` is the folder the manifest was found in, and BOTH halves of it
+    are checked: the identity hash, and the realization code after it. Trusting
+    the folder name for the realization is what let a model manifest be adopted
+    under a domain code that was not its own — the same misfiling a scenario
+    manifest is refused for.
     """
     problems = []
+    folder_hash, _, _ = model_id.partition("_")
     if manifest.get("reach_id") != reach_id:
         problems.append(f"manifest reach_id {manifest.get('reach_id')} != {reach_id}")
     claimed = manifest.get("identity_hash", "")
     if claimed != folder_hash:
         problems.append(f"manifest identity_hash {claimed} != folder {folder_hash}")
+    if manifest.get("model_id") != model_id:
+        problems.append(f"manifest model_id {manifest.get('model_id')} != folder {model_id}")
     ident = manifest.get("identity")
     if not isinstance(ident, dict):
         problems.append("manifest has no identity object")
@@ -188,8 +198,39 @@ def parse_q_folder(name: str) -> int | None:
         return None
 
 
+# The scenario's realization code and the folder it lives in are two renderings
+# of the same thing, produced by one pair of functions in the jobs repo
+# (utils/naming.py: get_scenario_code and get_scenario_dir_name share their
+# formatting helpers). So the code can be turned back into the directory it
+# implies, and compared with where the manifest actually sits:
+#
+#     ND1.5E04Q1000  ->  nd=1.5E04/q=1000
+#     KWSE200.2Q200  ->  kwse=200.2/q=200
+#
+# This is the scenario's equivalent of comparing a model's model_id to its
+# folder, and it covers BOTH halves of the realization — the downstream
+# condition and the discharge — where reading a discharge alone covered one.
+_SCENARIO_CODE = re.compile(r"^(ND|KWSE)(.+?)Q(\d+)$")
+
+
+def scenario_dir_from_code(code: str) -> str | None:
+    """The `<nd|kwse>=<value>/q=<value>` directory a scenario code implies.
+
+    None when the code is not one this copy recognises, which is refused rather
+    than guessed at: an unrecognised code means the jobs repo names scenarios in
+    a way this mirror does not know, and adopting it would mean trusting a
+    location we cannot check.
+    """
+    found = _SCENARIO_CODE.match(code or "")
+    if not found:
+        return None
+    kind, ds_value, q_value = found.groups()
+    return f"{kind.lower()}={ds_value}/q={q_value}"
+
+
 def verify_scenario_manifest(
-    manifest: Mapping[str, Any], reach_id: int, run_hash: str, model_id: str, q: int
+    manifest: Mapping[str, Any], reach_id: int, run_hash: str, model_id: str,
+    scenario_dir: str,
 ) -> list[str]:
     """Why this scenario manifest should NOT be adopted; empty means sound.
 
@@ -206,22 +247,17 @@ def verify_scenario_manifest(
     if manifest.get("model_id") != model_id:
         problems.append(f"manifest model_id {manifest.get('model_id')} != {model_id}")
 
-    # Discharge is a whole number of cms everywhere: authored in integer
-    # columns, stepped in whole cms, named into the folder, recorded in q_set.
-    # So this is an exact comparison, and a manifest that does not match the
-    # folder it sits in is either misfiled or was produced by a job that let a
-    # fraction through. Both are defects, and both are refused here rather than
-    # rounded away — rounding would adopt a library whose recorded discharges
-    # are not the ones that were run.
-    #
-    # Read from the top of the manifest, not from `inputs`. `inputs` holds the
-    # literal inputs, where the discharge appears as one of several boundary
-    # conditions; this is the scenario's summary value, published alongside
-    # scenario_code. Comparing against the folder name is the point — it is the
-    # manifest's own claim about where it belongs.
-    discharge = manifest.get("us_discharge")
-    if discharge is None or discharge != q:
-        problems.append(f"manifest us_discharge {discharge} is not in folder q={q}")
+    # The realization: which scenario point this is. scenario_code is the
+    # manifest's own claim about that, and scenario_dir is where it was found,
+    # so comparing them asks whether the manifest belongs where it sits. Both
+    # halves at once — the downstream condition and the discharge — because the
+    # code carries both.
+    code = manifest.get("scenario_code")
+    implied = scenario_dir_from_code(code) if code else None
+    if implied != scenario_dir:
+        problems.append(
+            f"manifest scenario_code {code!r} implies {implied!r}, "
+            f"but it sits in {scenario_dir!r}")
 
     ident = manifest.get("identity")
     if not isinstance(ident, dict):
