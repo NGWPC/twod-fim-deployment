@@ -50,15 +50,20 @@ def build_runner(args: argparse.Namespace) -> ContainerRunner:
 
     When SEPEX_URL is set, jobs are submitted to the SEPEX API (which handles
     Docker and Batch execution). Otherwise, jobs run as local Docker containers.
+
+    --gpu is not configured here beyond device access. It selects the job
+    itself — a CPU and a GPU run are different images, chosen per step in
+    check._job_key — so there is nothing to switch on inside a container any
+    more. Local Docker still needs the device passed through; SEPEX needs
+    nothing, because the process it is asked for already names the variant.
     """
     if settings.sepex_url:
         logging.info("Using SEPEX runner at %s", settings.sepex_url)
         return SepexRunner(base_url=settings.sepex_url)
 
-    extra = {} if args.gpu else {"USE_CUDA": ""}
     return LocalDockerRunner(
         network=settings.docker_network,
-        env_vars=job_env(extra),
+        env_vars=job_env(),
         platform=settings.docker_platform,
         gpus=(args.gpus or "all") if args.gpu else None,
         volumes=[f"{settings.docker_data_dir}:/data:ro"]
@@ -67,7 +72,7 @@ def build_runner(args: argparse.Namespace) -> ContainerRunner:
     )
 
 
-def one_pass(runner: ContainerRunner, max_in_flight: int) -> int:
+def one_pass(runner: ContainerRunner, max_in_flight: int, gpu: bool) -> int:
     """Poll what is running, then check what is due. Returns jobs submitted."""
     for outcome in jobs.status_pass(runner):
         if outcome["status"] in ("succeeded", "failed"):
@@ -88,7 +93,7 @@ def one_pass(runner: ContainerRunner, max_in_flight: int) -> int:
         # sit complete in storage, unobserved, while the loop waits on an
         # unrelated job; the reach then looks unbuilt and gets resubmitted.
         at_cap = len(processing.in_flight()) >= max_in_flight
-        result = check.run_check(row["reach_id"], runner, may_submit=not at_cap)
+        result = check.run_check(row["reach_id"], runner, may_submit=not at_cap, gpu=gpu)
         if result.submitted_ref:
             submitted += 1
             logging.info("%s", result)
@@ -116,8 +121,8 @@ def main() -> int:
     parser.add_argument(
         "--gpu",
         action="store_true",
-        help="run the solver on a GPU: enables CUDA in the image "
-        "and gives containers device access (default: CPU)",
+        help="run the solver on a GPU: selects the GPU build of the "
+        "run job and gives containers device access (default: CPU)",
     )
     parser.add_argument(
         "--gpus",
@@ -161,7 +166,7 @@ def main() -> int:
     try:
         while True:
             passes += 1
-            submitted = one_pass(runner, args.max_in_flight)
+            submitted = one_pass(runner, args.max_in_flight, args.gpu)
             now = db.one(TALLY)
             logging.info(
                 "pass %-4d finished %s/%s  waiting %s  awaiting %s  in flight %s  "

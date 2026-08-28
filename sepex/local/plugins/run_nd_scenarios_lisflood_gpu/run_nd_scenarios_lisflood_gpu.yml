@@ -1,7 +1,7 @@
 info:
   version: '0.1.0'
-  id: runNdScenarios
-  title: Run ND Scenarios
+  id: runNdScenariosLisfloodGpu
+  title: Run ND Scenarios (LISFLOOD, GPU)
   description: Run normal-depth scenarios for a reach using adaptive discharge stepping
   jobControlOptions:
     - async-execute
@@ -9,10 +9,8 @@ info:
     - reference
 
 host:
-  type: "aws-batch"
-  jobDefinition: twod-fim-nd-scenarios
-  jobQueue: twod-fim-scenarios-queue
-  image: ""
+  type: docker
+  image: ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev
 
 command: []
 

@@ -130,13 +130,15 @@ class LocalDockerRunner:
         gpus: str | None = None,
     ):
         self.image = image or settings.build_model_image
-        # One image per job: the job name is baked into each image's ENTRYPOINT
+        # One image per job (job-only for build_model; job+solver+hardware for
+        # run_nd_scenarios): the job name is baked into each image's ENTRYPOINT
         # (twod_fim_jobs <job>), so only the payload is passed at run time.
-        # `images` overrides per step, for trying a candidate build of one job
+        # `images` overrides per key, for trying a candidate build of one job
         # without disturbing the rest.
         self.images = {
             "build_model": self.image,
-            "run_nd_scenarios": settings.run_nd_scenarios_image,
+            "run_nd_scenarios-lisflood-cpu": settings.run_nd_scenarios_lisflood_cpu_image,
+            "run_nd_scenarios-lisflood-gpu": settings.run_nd_scenarios_lisflood_gpu_image,
             **(images or {}),
         }
         self.network = network
@@ -217,7 +219,8 @@ class LocalDockerRunner:
 
 SEPEX_PROCESS_IDS = {
     "build_model": "buildModel",
-    "run_nd_scenarios": "runNdScenarios",
+    "run_nd_scenarios-lisflood-cpu": "runNdScenariosLisfloodCpu",
+    "run_nd_scenarios-lisflood-gpu": "runNdScenariosLisfloodGpu",
 }
 
 SEPEX_STATUS_MAP = {

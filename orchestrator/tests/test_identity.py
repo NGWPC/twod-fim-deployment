@@ -17,15 +17,13 @@ from recon import identity
 # If it ever changes, this copy has drifted from the job and every run address
 # the loop predicts is wrong.
 
-RUN_INTENT = {"sdr_commit": "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a",
-              "solver": "lisflood", "solver_version": "8.1.0"}
+RUN_INTENT = {"sdr_commit": "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a", "solver": "lisflood"}
 
 
 def test_run_identity_matches_the_jobs_repo():
     obj, digest = identity.run_identity(RUN_INTENT)
-    assert obj == {"sdr_commit_id": RUN_INTENT["sdr_commit"],
-                   "solver": {"name": "lisflood", "version": "8.1.0"}}
-    assert digest == "6bb59569"
+    assert obj == {"sdr_commit_id": RUN_INTENT["sdr_commit"], "solver": "lisflood"}
+    assert digest == "0c24be7a"
 
 
 def test_run_identity_says_nothing_about_the_reach():
@@ -34,28 +32,7 @@ def test_run_identity_says_nothing_about_the_reach():
     assert identity.run_identity(RUN_INTENT)[1] == identity.run_identity(dict(RUN_INTENT))[1]
 
 
-def test_solver_version_moves_the_address():
-    upgraded = {**RUN_INTENT, "solver_version": "8.2.0"}
-    assert identity.run_identity(upgraded)[1] != identity.run_identity(RUN_INTENT)[1]
-
-
 # --- the scenario point -------------------------------------------------
-
-@pytest.mark.parametrize("slope,folder", [
-    (0.001, "nd=1.0E03"), (0.01, "nd=1.0E02"), (0.0001, "nd=1.0E04"),
-])
-def test_nd_prefix_matches_make_scenario_dir_name(slope, folder):
-    assert identity.nd_scenario_prefix(slope) == folder
-
-
-def test_nd_prefix_drops_the_sign_the_way_the_job_does():
-    """0.001 renders as 1.0E03 — a negative exponent reading as positive. Ugly,
-    and reproduced deliberately, because the loop must look where the job writes.
-    Only the minus is stripped, so a slope of 1000 keeps its + and the two do
-    not collide."""
-    assert identity.nd_scenario_prefix(0.001) == "nd=1.0E03"
-    assert identity.nd_scenario_prefix(1000.0) == "nd=1.0E+03"
-
 
 @pytest.mark.parametrize("q,folder", [(100, "q=100"), (100.0, "q=100"), (1250.4, "q=1250")])
 def test_q_folder_rounds_to_whole_cms(q, folder):
@@ -103,9 +80,16 @@ def test_a_scenario_in_the_wrong_q_folder_is_refused():
 
 def test_a_drifted_run_recipe_is_caught_by_the_self_check():
     m = sound_scenario()
-    m["identity"] = {**m["identity"], "solver": {"name": "lisflood", "version": "9.9.9"}}
+    m["identity"] = {**m["identity"], "solver": "sfincs"}
     problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100)
     assert any("drifted" in p for p in problems)
+
+
+def test_a_non_string_solver_is_refused():
+    m = sound_scenario()
+    m["identity"] = {**m["identity"], "solver": {"name": "lisflood", "version": "8.1.0"}}
+    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], 100)
+    assert any("solver must be a string" in p for p in problems)
 
 
 def test_an_unknown_run_identity_dimension_is_refused():

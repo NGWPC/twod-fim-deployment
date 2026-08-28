@@ -117,8 +117,11 @@ def _downstream_max_q_dir(downstream: int) -> str:
     if proof is None:
         raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
     library = storage.nd_library_path(
-        downstream, proof["model_identity_hash"], proof["run_identity_hash"],
-        intent.boundary_slope(downstream))
+        downstream, proof["model_identity_hash"], proof["run_identity_hash"])
+    if library is None:
+        raise RuntimeError(
+            f"downstream reach {downstream} is materialized but its nd=<slope> "
+            "folder cannot be found")
     return f"{library}/{identity.q_folder(max(proof['q_set']))}"
 
 
@@ -195,18 +198,15 @@ def _build_model_payload(reach_id: int) -> dict:
 
 def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     """The downstream boundary condition for a normal-depth run: where it is
-    applied, and at what slope.
+    applied.
 
-    Both halves come from the SAME place, which is the point — the boundary is
-    a statement about what this reach drains INTO, never about the reach
-    itself. Which place depends on the terminal/non-terminal split the whole
-    ladder turns on:
+    The boundary is a statement about what this reach drains INTO, never about
+    the reach itself, which is why it depends on the terminal/non-terminal
+    split the whole ladder turns on:
 
       non-terminal  the downstream reach's inundated area at the HIGHEST
-                    discharge of its library (the largest wetted footprint it
-                    produces, so it bounds every scenario this reach will run),
-                    at the DOWNSTREAM reach's centerline slope
-                    — DR-039 ALT-D, selected via ALT-F
+                    discharge of its library — the largest wetted footprint it
+                    produces, so it bounds every scenario this reach will run
       terminal      the lake or coast it drains into, published once per water
                     body and shared by every reach ending there
                     — DR-006 ALT-E
@@ -214,33 +214,32 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     The downstream address is read from that reach's proof rather than
     predicted, because the discharge in it is emergent: the adaptive step
     algorithm chose it, and only that reach's materialization knows what it was.
+
+    The slope itself is no longer this function's business: the job derives it
+    from the reach's own DEM (elevation drop over its own centerline) and no
+    longer takes one as input.
+
+    Which leaves DR-006 ALT-E still unmet, and now unmeetable from here. It
+    asks for a FREEFALL at a terminal — water leaving the domain without
+    resistance, so it does not pool in the transition zone. The loop used to
+    pass a slope and could at least have passed a steep one; it now passes
+    none, and the job applies a terminal's own centerline slope like any other
+    reach's. Satisfying ALT-E is the job's to do, and nothing here can stand in
+    for it.
     """
     if wanted["is_terminal"]:
         for kind in ("lake", "coast"):
             feature_id = wanted[f"{kind}_to_id"]
             if feature_id is not None:
-                # DR-006 ALT-E asks for a FREEFALL here — water leaving the
-                # domain without resistance, so it does not pool in the
-                # transition zone — and the job can only express that as a
-                # slope. No steep value has been decided, so this passes the
-                # reach's own slope and is knowingly wrong for a terminal:
-                # a flat slope behaves like a nearly closed boundary, which is
-                # what ALT-B was rejected for.
-                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id),
-                        "ds_slope": intent.boundary_slope(reach_id)}
+                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id)}
         raise RuntimeError(
             f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
             "lake or coast, so it has no outflow boundary")
 
     downstream = wanted["reach_to_id"]
-    # Two different slopes, and confusing them puts the loop in the wrong
-    # folder. The downstream reach's library sits at ITS boundary slope (its own
-    # downstream neighbour's); the slope THIS run is performed at is the
-    # downstream reach's centerline slope.
     return {
         "outflow_area_polygon_path":
             f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
-        "ds_slope": intent.boundary_slope(reach_id),
     }
 
 
@@ -271,15 +270,51 @@ def _run_nd_payload(reach_id: int) -> dict:
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
-        "solver": wanted["solver"],
     }
 
 
 PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 
+# Which image/process a STEP is actually carried out by. The two are no longer
+# the same thing: build_model has one image regardless, but a normal-depth run
+# is one of a matrix — the solver picks the model, --gpu picks the hardware, and
+# only their product is a published image. Only lisflood is built; a solver with
+# no entry is refused here, where the reason is legible, rather than surfacing
+# later as an image pull error.
+#
+# This mapping stays OUT of the gap calculation and out of reach_processing on
+# purpose. Which variant ran is a realization detail, like domain_buffer: the
+# rung of the ladder is `run_nd_scenarios` whichever image serves it, and
+# reach_processing.current_step records the step (its CHECK constraint allows
+# exactly the three step names). The variant is recorded where history lives —
+# the activity log — and the job reference is the handle to the run itself.
+RUN_ND_JOBS = {
+    ("lisflood", False): "run_nd_scenarios-lisflood-cpu",
+    ("lisflood", True):  "run_nd_scenarios-lisflood-gpu",
+}
+
+
+def _job_key(step: str, reach_id: int, *, gpu: bool) -> str:
+    """The concrete runner job (image / SEPEX process) that carries out a step.
+
+    Intent is read only when the step actually varies by it, so build_model
+    costs no extra query.
+    """
+    if step != gap.RUN_ND:
+        return step
+    wanted = intent.effective(reach_id)
+    if wanted is None:
+        raise RuntimeError(f"no effective intent for reach {reach_id}")
+    key = (wanted["solver"], gpu)
+    if key not in RUN_ND_JOBS:
+        raise RuntimeError(
+            f"no {step} image for solver {wanted['solver']!r} (gpu={gpu}); "
+            f"built variants are {sorted(RUN_ND_JOBS)}")
+    return RUN_ND_JOBS[key]
+
 
 def run_check(reach_id: int, runner: ContainerRunner, *,
-              may_submit: bool = True) -> CheckResult:
+              may_submit: bool = True, gpu: bool = False) -> CheckResult:
     """Check one reach, and act on what the gap turns out to be.
 
     `may_submit=False` runs the whole check but starts no new work: it still
@@ -287,6 +322,10 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
     caller at its concurrency limit wants — observation is how a FINISHED job
     is noticed, so suppressing checks to hold the limit stops the loop from
     seeing completed work. Only submission needs limiting.
+
+    `gpu` picks which hardware variant of a multi-image step (currently only
+    run_nd_scenarios) gets submitted; it says nothing about build_model, which
+    has one image regardless.
     """
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
@@ -346,13 +385,18 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
 
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
-            ref = runner.submit(decision.step, PAYLOADS[decision.step](reach_id))
+            job_key = _job_key(decision.step, reach_id, gpu=gpu)
+            ref = runner.submit(job_key, PAYLOADS[decision.step](reach_id))
+            # The STEP is what goes in the marker, not the variant that served
+            # it: that column is the ladder's rung, and the gap calculation and
+            # its CHECK constraint both speak in steps. The variant is named in
+            # the note, which the activity log keeps.
             processing.mark_in_flight(reach_id, decision.step, ref, snapshot.revision)
             # Ask to be looked at again, so the result gets noticed without
             # waiting for the next sweep.
             queue.request_check(reach_id)
             result.submitted_ref = ref
-            result.note = f"submitted {decision.step} ({ref[:12]})"
+            result.note = f"submitted {job_key} ({ref[:12]})"
 
     except Exception as exc:  # submission failed; the reach must not stall
         failure = processing.record_failure(reach_id, str(exc))
@@ -372,7 +416,7 @@ def run_check(reach_id: int, runner: ContainerRunner, *,
     return result
 
 
-def sweep(runner: ContainerRunner, limit: int | None = None) -> list[CheckResult]:
+def sweep(runner: ContainerRunner, limit: int | None = None, *, gpu: bool = False) -> list[CheckResult]:
     """Check every reach that is currently due, once.
 
     The list is read once at the start rather than re-queried as it goes, so a
@@ -380,4 +424,4 @@ def sweep(runner: ContainerRunner, limit: int | None = None) -> list[CheckResult
     re-reading its own queue would chase them forever. Call it again to pick
     those up — which is what the loop does anyway.
     """
-    return [run_check(r["reach_id"], runner) for r in queue.due_reaches(limit)]
+    return [run_check(r["reach_id"], runner, gpu=gpu) for r in queue.due_reaches(limit)]

@@ -1,7 +1,7 @@
 info:
   version: '0.1.0'
-  id: runNdScenarios
-  title: Run ND Scenarios
+  id: runNdScenariosLisfloodCpu
+  title: Run ND Scenarios (LISFLOOD, CPU)
   description: Run normal-depth scenarios for a reach using adaptive discharge stepping
   jobControlOptions:
     - async-execute
@@ -10,7 +10,7 @@ info:
 
 host:
   type: docker
-  image: ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev
+  image: ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-cpu:dev
 
 command: []
 
@@ -73,26 +73,15 @@ inputs:
     minOccurs: 1
     maxOccurs: 1
 
-  - id: ds_slope
-    title: ds_slope
-    description: Downstream boundary condition slope in m/m
-    input:
-      literalDataDomain:
-        dataType: value
-        valueDefinition:
-          anyValue: true
-    minOccurs: 1
-    maxOccurs: 1
-
   - id: outflow_area_polygon_path
     title: outflow_area_polygon_path
-    description: S3 path to the outflow area polygon
+    description: S3 path to the outflow area polygon; derived by the job when omitted
     input:
       literalDataDomain:
         dataType: value
         valueDefinition:
           anyValue: true
-    minOccurs: 1
+    minOccurs: 0
     maxOccurs: 1
 
   - id: volume_convergence_tolerance
@@ -117,21 +106,10 @@ inputs:
     minOccurs: 0
     maxOccurs: 1
 
-  - id: solver
-    title: solver
-    description: Solver name
-    input:
-      literalDataDomain:
-        dataType: value
-        valueDefinition:
-          anyValue: true
-    minOccurs: 0
-    maxOccurs: 1
-
 outputs:
   - id: plugin_results
     title: plugin_results
-    description: Scenario manifest paths and adaptive step comparison results
+    description: Adaptive step comparison results and job warnings
     output:
       transmissionMode:
         - reference

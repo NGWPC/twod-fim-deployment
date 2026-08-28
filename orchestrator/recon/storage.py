@@ -4,9 +4,13 @@ Used by orchestrator for artifact read/write/verify.
 Points to MinIO locally (via AWS_ENDPOINT_URL), real S3 in production.
 """
 
+import logging
+
 import boto3
 
 from recon.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_s3_client():
@@ -51,14 +55,30 @@ def results_base_path(reach_id: int, model_identity_hash: str) -> str:
             f"/results/reach={reach_id}/{model_identity_hash}")
 
 
-def nd_library_path(
-    reach_id: int, model_identity_hash: str, run_identity_hash: str, ds_slope: float
-) -> str:
-    """The folder holding one normal-depth library: every q run at one slope."""
-    from recon.identity import nd_scenario_prefix
+def nd_run_base_path(reach_id: int, model_identity_hash: str, run_identity_hash: str) -> str:
+    """Where one run identity's normal-depth work lives, above the nd=<slope> folder."""
+    return f"{results_base_path(reach_id, model_identity_hash)}/{run_identity_hash}"
 
-    return (f"{results_base_path(reach_id, model_identity_hash)}"
-            f"/{run_identity_hash}/{nd_scenario_prefix(ds_slope)}")
+
+def nd_library_path(
+    reach_id: int, model_identity_hash: str, run_identity_hash: str
+) -> str | None:
+    """The folder holding one normal-depth library: every q run at one slope.
+
+    Discovered, not predicted: the job computes the slope itself from the
+    reach's own DEM (elevation drop over its own centerline), so nothing here
+    can know it in advance the way it once did from an authored value. None
+    when no library has appeared yet, or when the base holds anything other
+    than exactly one nd=<slope> folder — more than one should not happen for
+    a deterministic job and is logged rather than guessed at.
+    """
+    base = nd_run_base_path(reach_id, model_identity_hash, run_identity_hash)
+    found = list_subfolders(base, prefix="nd=")
+    if len(found) != 1:
+        if found:
+            logger.warning("expected exactly one nd= folder under %s, found %s", base, found)
+        return None
+    return f"{base}/{found[0]}"
 
 
 def boundary_polygon_path(kind: str, feature_id: str) -> str:

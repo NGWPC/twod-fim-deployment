@@ -18,15 +18,22 @@ class Settings(BaseSettings):
     major_version: int = 1
     aws_endpoint_url: str | None = None
     build_model_image: str = "ghcr.io/ngwpc/twod-fim-jobs/build_model:dev"
-    # One image per job: the job name is baked into each image's ENTRYPOINT, so
-    # the runner picks an image by step rather than passing a command.
-    run_nd_scenarios_image: str = (
+    # One image per (job, solver, hardware): the job name AND the solver are
+    # baked into each image's ENTRYPOINT, so the runner picks an image by the
+    # resolved job key (e.g. "run_nd_scenarios-lisflood-gpu") rather than
+    # passing a command. Only lisflood is implemented; sfincs images do not
+    # exist yet.
+    run_nd_scenarios_lisflood_cpu_image: str = (
+        "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-cpu:dev"
+    )
+    run_nd_scenarios_lisflood_gpu_image: str = (
         "ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev"
     )
     docker_network: str = "twodfim"
     # Value for docker run --gpus, e.g. "all" or "device=0". None passes the
-    # flag at all, which is right on a machine without a GPU: the run image is
-    # CUDA-capable but does not require one.
+    # flag at all, which is right on a machine without a GPU — and note that on
+    # such a machine the CPU image is what gets selected anyway, so there is no
+    # device for this to hand over.
     #
     # Needs the NVIDIA Container Toolkit on the host — `nvidia-smi` working
     # outside Docker is not enough, the daemon needs the runtime too. Check
@@ -52,10 +59,6 @@ class Settings(BaseSettings):
     # accepts whatever domain code it finds. Rebuild deliberately if you want a
     # new buffer applied to models that already exist.
     domain_buffer: float = 50.0
-    # Normal-depth slope for the downstream boundary, used until the hydrofabric
-    # supplies real slopes. Seeded into reach_network.slope, from where
-    # intent.boundary_slope reads it, so build_model and run_nd_scenarios agree.
-    default_ds_slope: float = 0.01
     # Failures in a row before a reach is parked for a person. 1 means no
     # retries at all, which is what you want while developing: a failure should
     # stop and be looked at, not be retried five times over an hour.

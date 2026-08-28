@@ -1,11 +1,11 @@
 -- 03_desired_state.sql
---
+-- 
 -- Intent, in two tables. desired_state holds what is authored for one reach;
 -- desired_state_defaults holds what everything falls back to. Effective intent
 -- is COALESCE(desired_state.x, desired_state_defaults.x) — which is what
 -- guide.md's "NULL means use the default source" has always implied, finally
 -- given somewhere to resolve against.
---
+-- 
 -- This matters beyond tidiness: the reconciler predicts a model's identity hash
 -- from these values to work out where its artifacts should live. Values it
 -- cannot read are values it cannot predict, and until now six of the seven
@@ -30,14 +30,9 @@ CREATE TABLE IF NOT EXISTS desired_state_defaults(
     -- ------------------------------------------------------------------
     -- Defaults for everything desired_state can author per reach.
     -- ------------------------------------------------------------------
-    solver text NOT NULL DEFAULT 'lisflood' CONSTRAINT desired_state_defaults_solver_chk CHECK (solver IN ('lisflood', 'sfincs', 'triton')),
-    -- Run identity is hash(sdr_commit + solver name + solver VERSION), and the
-    -- job reads that version from the solver binary at runtime. The loop cannot
-    -- see inside the image, so the version is pinned here the same way
-    -- sdr_commit is: this row states what the deployed image is expected to
-    -- report, and a disagreement shows up as runs that are never found at the
-    -- address the loop predicted.
-    solver_version text NOT NULL,
+    -- Run identity is hash(sdr_commit + solver NAME).
+    solver text NOT NULL DEFAULT 'lisflood' CONSTRAINT desired_state_defaults_solver_chk CHECK (solver IN
+	('lisflood', 'sfincs', 'triton')),
     q_lower_bound integer,
     q_upper_bound integer,
     initial_dq_step_for_nd integer,
@@ -69,7 +64,6 @@ CREATE TABLE IF NOT EXISTS desired_state(
     initial_dq_step_for_nd integer, -- cms
     solver text,
     CONSTRAINT desired_state_solver_chk CHECK (solver IS NULL OR solver IN ('lisflood', 'sfincs', 'triton')),
-    solver_version text,
     -- Identity inputs, overridable per reach. Rarely authored — a reach needing
     -- a different DEM source or resolution than the rest of the network — but
     -- the loop resolves them the same way as everything else, so a one-off does

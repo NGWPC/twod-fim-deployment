@@ -128,24 +128,24 @@ def verify_manifest(manifest: Mapping[str, Any], reach_id: int, folder_hash: str
 # The reach-specific part of the address is the model identity hash above it in
 # the path, and the scenario point below it.
 RUN_IDENTITY_KEYS = frozenset({"sdr_commit_id", "solver"})
-SOLVER_KEYS = frozenset({"name", "version"})
 
 
 def run_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     """The run identity object and hash this reach's effective intent implies.
 
-    `intent` needs: sdr_commit, solver, solver_version.
+    `intent` needs: sdr_commit, solver.
 
-    solver_version is the one identity input the loop cannot derive: the job
-    reads it from the solver binary at runtime (`lisflood` prints its version),
-    and the loop cannot see inside the image. desired_state_defaults states what
-    the deployed image is expected to report; a disagreement shows up as runs
-    that never appear at the address the loop predicted, rather than as
+    solver is just the solver's name (e.g. "lisflood") — the job no longer
+    takes a version as part of its identity; the solver binary that runs is
+    whichever one is baked into the image the loop chose (by solver and
+    hardware), the same way sdr_commit is baked in rather than passed. A
+    disagreement between what desired_state names and what got deployed shows
+    up as runs that never appear at the address the loop predicted, not as
     corruption.
     """
     identity = {
         "sdr_commit_id": intent["sdr_commit"],
-        "solver": {"name": intent["solver"], "version": intent["solver_version"]},
+        "solver": intent["solver"],
     }
     return identity, hash_dict(identity)
 
@@ -153,33 +153,19 @@ def run_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
 # ---------------------------------------------------------------------------
 # The scenario point — a run's realization
 # ---------------------------------------------------------------------------
-# Mirrors make_scenario_dir_name/make_scenario_code in the jobs repo. The two
-# halves of an ND scenario folder are not alike, and the difference is what the
-# whole ND observation rests on:
+# Mirrors make_scenario_dir_name/make_scenario_code in the jobs repo. Both
+# halves of an ND scenario folder are EMERGENT now:
 #
-#   nd=<slope>  AUTHORED. The loop supplies ds_slope, so it can predict this
-#               exactly and list the library at a known prefix.
-#   q=<value>   EMERGENT. The adaptive step algorithm decides which discharges
-#               are hydraulically distinct enough to keep, so the loop cannot
-#               predict them and reads them back instead. Only the two ends are
+#   nd=<slope>  the job derives the slope itself from the reach's own DEM
+#               (elevation drop over its own centerline), so the loop cannot
+#               predict it and finds it by listing (storage.nd_library_path).
+#   q=<value>   the adaptive step algorithm decides which discharges are
+#               hydraulically distinct enough to keep, so the loop cannot
+#               predict them either and reads them back. Only the two ends are
 #               guaranteed, because the job always runs min and max.
 #
-# So an ND library is a lookup down to the slope and a listing below it.
-RUN_NAME_SLOPE_ROUNDING_PRECISION = 1
+# So an ND library is a listing down to the slope, and a listing below it.
 RUN_NAME_Q_ROUNDING_PRECISION = 0
-
-
-def nd_scenario_prefix(ds_slope: float) -> str:
-    """The `nd=<slope>` folder for a normal-depth library, e.g. nd=1.0E03.
-
-    The job formats the slope in scientific notation and strips the minus sign,
-    so 0.001 becomes 1.0E03 — the exponent is negative and reads as though it
-    were positive. Reproduced exactly rather than tidied: the loop's job is to
-    look where the job writes, not where it ought to. (A slope of 1000 would
-    render as 1.0E+03 and keep its sign, so real slopes never collide.)
-    """
-    formatted = f"{ds_slope:.{RUN_NAME_SLOPE_ROUNDING_PRECISION}e}"
-    return f"nd={formatted.replace('-', '').replace('e', 'E')}"
 
 
 def q_folder(q: float) -> str:
@@ -233,8 +219,8 @@ def verify_scenario_manifest(
     if keys != RUN_IDENTITY_KEYS:
         unknown, missing = keys - RUN_IDENTITY_KEYS, RUN_IDENTITY_KEYS - keys
         problems.append(f"identity keys differ: unknown={sorted(unknown)} missing={sorted(missing)}")
-    elif not isinstance(ident.get("solver"), dict) or set(ident["solver"]) != SOLVER_KEYS:
-        problems.append(f"solver keys differ: {sorted(ident.get('solver') or [])}")
+    elif not isinstance(ident.get("solver"), str):
+        problems.append(f"solver must be a string, got {ident.get('solver')!r}")
     elif hash_dict(ident) != claimed:
         problems.append(
             f"identity object hashes to {hash_dict(ident)}, manifest claims {claimed}: "

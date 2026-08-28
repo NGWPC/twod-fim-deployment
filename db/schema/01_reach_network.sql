@@ -54,12 +54,6 @@ CREATE TABLE IF NOT EXISTS reach_network(
     total_da_sqkm double precision,
     stream_order integer,
     length_km double precision,
-    -- Reach centerline slope. Still required because build_model reads it
-    -- (REACH_FIELDS in twod-fim-jobs) and records it as the model's
-    -- properties.slope, which becomes the normal-depth boundary condition. The
-    -- hydrofabric no longer supplies it, so the loader writes a placeholder;
-    -- this column will be deleted in future.
-    slope double precision,
     -- What this reach terminates into, when it terminates. The polygon behind
     -- one of these is the outflow area for the nd job.
     -- An ordinary reach uses the inundated area of the reach below it, a
@@ -95,8 +89,6 @@ COMMENT ON COLUMN reach_network.is_trimmed IS 'Geometry was clipped at a lake bo
 COMMENT ON COLUMN reach_network.total_da_sqkm IS 'Total drainage area (km2); used by build_model for bankfull width estimation.';
 
 COMMENT ON COLUMN reach_network.stream_order IS 'Strahler stream order from the hydrofabric.';
-
-COMMENT ON COLUMN reach_network.slope IS 'Reach centerline slope from the hydrofabric.';
 
 COMMENT ON COLUMN reach_network.geom IS 'Reach centerline, EPSG:5070; basis of model identity reach_geom_hash.';
 

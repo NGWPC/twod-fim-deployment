@@ -37,14 +37,8 @@ DEFAULT_NHF_GPKG = TESTDATA / "nhf.gpkg"
 NETWORK_LAYER = "reach_network"
 LAKES_LAYER = "lakes_polygons"
 
-# The hydrofabric no longer carries slope, but build_model still reads it from
-# reach_network (REACH_FIELDS in twod-fim-jobs) and records it as the model's
-# properties.slope — which becomes the normal-depth boundary condition and the
-# `nd=` path component. Placeholder until the job stops asking.
-PLACEHOLDER_SLOPE = settings.default_ds_slope
-
-# Placeholder discharge intent, and the same caveat as the slope above: these
-# are inputs run_nd_scenarios REQUIRES, and nothing in the network implies them.
+# Placeholder discharge intent: these are inputs run_nd_scenarios REQUIRES,
+# and nothing in the network implies them.
 # A real deployment authors them per reach — a 12 km2 headwater and a 2,600 km2
 # trunk do not share a flood range — either in desired_state, or here once a
 # regional regression exists. The range is kept deliberately narrow so a test
@@ -58,7 +52,6 @@ PLACEHOLDER_DQ_STEP = 500
 # nothing it builds will be found where it looked.
 SDR_COMMIT = "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a"
 SOLVER = "lisflood"
-SOLVER_VERSION = "8.1.0"  # LISFLOOD-FP version reported by the run image
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 LULC_SOURCE = "/data/Annual_NLCD_LndCov_2023_CU_C1V0.tif"
 LULC_LOOKUP = {
@@ -145,7 +138,6 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
                 "total_da_sqkm": value("total_da_sqkm", float),
                 "stream_order": value("stream_order", int),
                 "length_km": value("length_km", float),
-                "slope": value("slope", float, PLACEHOLDER_SLOPE),
                 "geom": geom.wkt,
             }
         )
@@ -207,16 +199,15 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
         conn.execute(
             """INSERT INTO desired_state_defaults
                    (sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
-                    lulc_lookup, solver, solver_version,
+                    lulc_lookup, solver,
                     q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
-               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 SDR_COMMIT,
                 DEM_SOURCE,
                 LULC_SOURCE,
                 json.dumps(LULC_LOOKUP),
                 SOLVER,
-                SOLVER_VERSION,
                 PLACEHOLDER_Q_LOWER,
                 PLACEHOLDER_Q_UPPER,
                 PLACEHOLDER_DQ_STEP,
@@ -235,11 +226,11 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
                 """INSERT INTO reach_network
                        (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
                         lake_to_id, coast_to_id, lake_inlet, lake_outlet, is_trimmed,
-                        total_da_sqkm, stream_order, length_km, slope, geom)
+                        total_da_sqkm, stream_order, length_km, geom)
                    VALUES (%(reach_id)s, %(reach_to_id)s, %(is_terminal)s, %(is_headwater)s,
                            %(terminal_reason)s, %(lake_to_id)s, %(coast_to_id)s, %(lake_inlet)s,
                            %(lake_outlet)s, %(is_trimmed)s, %(total_da_sqkm)s, %(stream_order)s,
-                           %(length_km)s, %(slope)s, ST_GeomFromText(%(geom)s, 5070))""",
+                           %(length_km)s, ST_GeomFromText(%(geom)s, 5070))""",
                 r,
             )
 

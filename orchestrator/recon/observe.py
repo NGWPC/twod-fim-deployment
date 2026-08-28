@@ -97,18 +97,19 @@ def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> d
 def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
     """Reconcile materialized_nd_runs for one reach against storage.
 
-    Half lookup, half listing, and the split is the point. Intent fixes the
-    address down to the slope — model identity, run identity, `nd=<slope>` —
-    so getting there is a prediction. What discharges live under it is not
-    intent's to say: the adaptive step algorithm decides which are hydraulically
-    distinct enough to keep, so the loop reads the q set back and judges it.
+    Lookup down to the run identity, listing the rest of the way. Intent fixes
+    the address down to model identity and run identity, so getting there is a
+    prediction. Below that, nothing is intent's to say: the job derives the
+    slope itself from the reach's own DEM, and the adaptive step algorithm
+    decides which discharges are hydraulically distinct enough to keep — so the
+    loop reads both back and judges them, via storage.nd_library_path for the
+    slope and the q= listing below it.
 
     Judged how: the library must SPAN the authored discharge range. Density
-    (the `ld_q_*` deltas guide.md also calls for) is not checked, because the
-    job does not take those deltas as inputs at all — it uses thresholds
-    compiled into its image, so there is nothing for the loop to hold it to yet.
-    Checking span alone is the honest subset; tightening it is a one-line change
-    here once the job accepts the deltas.
+    (the `ld_q_*` deltas guide.md also calls for) is not checked by default,
+    though the job now accepts those deltas as inputs (as of the solver
+    generalization PR) — tightening this to a real density check is a
+    follow-up, not a blocker.
 
     Anything short of a whole, verified library writes no row. A row is proof,
     and proof of a partial library is not a smaller proof — it is none.
@@ -142,10 +143,11 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                        f"{predicted_model} intent now implies")
 
     _, run_hash = identity.run_identity(wanted)
-    slope = intent.boundary_slope(reach_id, conn=conn)
-    if slope is None:
-        return retract("no downstream boundary slope, so no library address to look at")
-    library = storage.nd_library_path(reach_id, model["identity_hash"], run_hash, slope)
+    library = storage.nd_library_path(reach_id, model["identity_hash"], run_hash)
+    if library is None:
+        # Either nothing has been written yet, or more than one nd= folder is
+        # there and none of them can be called the library. storage logs which.
+        return retract("no single nd=<slope> folder to read")
     out.update({"predicted": run_hash, "library": library})
 
     discharges = sorted(
