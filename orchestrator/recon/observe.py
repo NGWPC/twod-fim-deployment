@@ -143,7 +143,7 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                        f"{predicted_model} intent now implies")
 
     _, run_hash = identity.run_identity(wanted)
-    library = storage.nd_library_path(reach_id, model["identity_hash"], run_hash)
+    library = storage.nd_library_path(reach_id, model["model_id"], run_hash)
     if library is None:
         # Either nothing has been written yet, or more than one nd= folder is
         # there and none of them can be called the library. storage logs which.
@@ -189,11 +189,11 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     db.query(
         """
         INSERT INTO materialized_nd_runs
-            (reach_id, model_identity_hash, run_identity_hash, q_set,
+            (reach_id, model_id, run_identity_hash, q_set,
              us_wse_max, us_min_wse_curve, applied_revision, confirmed_at)
         VALUES (%s, %s, %s, %s, %s, %s, %s, now())
         ON CONFLICT (reach_id) DO UPDATE SET
-            model_identity_hash = EXCLUDED.model_identity_hash,
+            model_id            = EXCLUDED.model_id,
             run_identity_hash   = EXCLUDED.run_identity_hash,
             q_set               = EXCLUDED.q_set,
             us_wse_max          = EXCLUDED.us_wse_max,
@@ -201,7 +201,7 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
             applied_revision    = EXCLUDED.applied_revision,
             confirmed_at        = now()
         """,
-        (reach_id, model["identity_hash"], run_hash, discharges,
+        (reach_id, model["model_id"], run_hash, discharges,
          us_wse_max, json.dumps(curve), wanted["revision"]),
         conn=conn,
     )

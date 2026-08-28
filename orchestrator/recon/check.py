@@ -112,12 +112,12 @@ def _downstream_max_q_dir(downstream: int) -> str:
     shapes a model domain — so it is derived once here.
     """
     proof = db.one(
-        "SELECT model_identity_hash, run_identity_hash, q_set FROM materialized_nd_runs"
+        "SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
         " WHERE reach_id = %s", (downstream,))
     if proof is None:
         raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
     library = storage.nd_library_path(
-        downstream, proof["model_identity_hash"], proof["run_identity_hash"])
+        downstream, proof["model_id"], proof["run_identity_hash"])
     if library is None:
         raise RuntimeError(
             f"downstream reach {downstream} is materialized but its nd=<slope> "
@@ -250,11 +250,15 @@ def _run_nd_payload(reach_id: int) -> dict:
     only a STARTING increment — the job grows and shrinks it as the reach's
     response curve demands — which is why the loop cannot predict the resulting
     discharges and reads them back instead.
+
+    model_results_base_path is the bare results root. The job appends
+    `reach=<id>/<model_id>/<run_identity_hash>/` itself, so a per-reach prefix
+    here would be written into the path twice.
     """
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
-    model = db.one("SELECT identity_hash, model_id FROM materialized_models WHERE reach_id = %s",
+    model = db.one("SELECT model_id FROM materialized_models WHERE reach_id = %s",
                    (reach_id,))
     if model is None:
         raise RuntimeError(f"reach {reach_id} has no materialized model to run against")
@@ -263,7 +267,7 @@ def _run_nd_payload(reach_id: int) -> dict:
             raise RuntimeError(f"reach {reach_id} has no {field}; nd cannot be submitted")
     return {
         "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
-        "model_results_base_path": storage.results_base_path(reach_id, model["identity_hash"]),
+        "model_results_base_path": storage.results_root(),
         "min_upstream_inflow": float(wanted["q_lower_bound"]),
         "max_upstream_inflow": float(wanted["q_upper_bound"]),
         "delta_upstream_inflow": float(wanted["initial_dq_step_for_nd"]),
