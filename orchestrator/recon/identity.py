@@ -207,7 +207,13 @@ def verify_scenario_manifest(
     # precision. int() truncates, so a cast here reads 1171 and refuses a
     # perfectly good scenario. Formatting both sides the same way is the only
     # comparison that cannot drift from what the job wrote.
-    discharge = (manifest.get("inputs") or {}).get("us_discharge")
+    #
+    # Read from the top of the manifest, not from `inputs`. `inputs` holds the
+    # literal inputs — the discharge is in there as one of several boundary
+    # conditions — while this is the scenario's summary value, published
+    # alongside scenario_code. Recovering it from the folder name is not an
+    # option: that name is rounded, which is the whole reason for this check.
+    discharge = manifest.get("us_discharge")
     if discharge is None or q_folder(float(discharge)) != q_folder(q):
         problems.append(f"manifest us_discharge {discharge} is not in folder q={q}")
 
