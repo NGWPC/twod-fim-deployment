@@ -40,6 +40,11 @@ REACH_ID_FIELD = "reach_id"
 TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
 DEFAULT_NETWORK_GPKG = TESTDATA / "network.gpkg"
 DEFAULT_NHF_GPKG = TESTDATA / "nhf.gpkg"
+# Land cover for the test network, clipped from the NLCD CONUS mosaic to the
+# network's extent plus a margin. Half a megabyte instead of 1.4 GB, which is
+# what makes it a fixture that can live beside the GeoPackages rather than a
+# download every machine has to arrange for itself.
+DEFAULT_LULC_TIF = TESTDATA / "lulc.tif"
 NETWORK_LAYER = "reach_network"
 LAKES_LAYER = "lakes_polygons"
 
@@ -59,7 +64,11 @@ PLACEHOLDER_DQ_STEP = 500
 SDR_COMMIT = "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a"
 SOLVER = "lisflood"
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
-LULC_SOURCE = "/data/Annual_NLCD_LndCov_2023_CU_C1V0.tif"
+# An address, not a mounted path: the raster is uploaded to storage by this
+# script, so a job reads it wherever it runs without a volume being arranged.
+# It is also a model IDENTITY input — the string is hashed — so changing it
+# moves every model's address and invalidates what is already built.
+LULC_SOURCE = storage.lulc_path()
 LULC_LOOKUP = {
     "11": 0.04,
     "21": 0.04,
@@ -231,6 +240,25 @@ def export_reach_network(reaches: list[dict]) -> str:
     return uri
 
 
+def export_lulc(lulc_tif: Path) -> str:
+    """Publish the land-cover raster to storage, where jobs can address it.
+
+    Uploaded rather than mounted. A mount has to be arranged by whatever starts
+    the container — which under SEPEX means every process definition declaring
+    the same volume, and a cloud deployment needing a different answer
+    entirely. An object in the bucket is reachable from all of them with the
+    credentials jobs already carry.
+    """
+    if not lulc_tif.exists():
+        sys.exit(f"No such land cover raster: {lulc_tif}")
+    uri = storage.lulc_path()
+    bucket, key = storage.parse_s3_path(uri)
+    storage.get_s3_client().put_object(
+        Bucket=bucket, Key=key, Body=lulc_tif.read_bytes()
+    )
+    return uri
+
+
 def export_lake_polygons(lakes: list[dict]) -> list[str]:
     """Write each lake to storage as GeoJSON, and return the paths written."""
     s3 = storage.get_s3_client()
@@ -244,7 +272,7 @@ def export_lake_polygons(lakes: list[dict]) -> list[str]:
     return written
 
 
-def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
+def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path) -> None:
     reaches = load_network(network_gpkg)
     lakes = load_lakes(nhf_gpkg)
 
@@ -296,6 +324,7 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
 
     written = export_lake_polygons(lakes)
     network_uri = export_reach_network(reaches)
+    lulc_uri = export_lulc(lulc_tif)
 
     summary = db.one("""
         SELECT count(*) AS reaches,
@@ -314,6 +343,7 @@ def seed(network_gpkg: Path, nhf_gpkg: Path) -> None:
     for uri in written:
         print(f"  exported      {uri}")
     print(f"  network       {network_uri}")
+    print(f"  land cover    {lulc_uri}")
     if summary["outlet_terminals"]:
         print(
             "\nWARNING: outlet terminals have no boundary polygon source, so ND\n"
@@ -337,15 +367,24 @@ def main() -> None:
         default=DEFAULT_NHF_GPKG,
         help="hydrofabric holding the lakes_polygons layer",
     )
+    ap.add_argument(
+        "--lulc-tif",
+        type=Path,
+        default=DEFAULT_LULC_TIF,
+        help="land cover raster to publish to storage",
+    )
     args = ap.parse_args()
 
     for path in (args.network_gpkg, args.nhf_gpkg):
         if not path.exists():
             sys.exit(f"No such GeoPackage: {path}")
+    if not args.lulc_tif.exists():
+        sys.exit(f"No such land cover raster: {args.lulc_tif}")
 
     print(f"network  {args.network_gpkg}")
-    print(f"nhf      {args.nhf_gpkg}\n")
-    seed(args.network_gpkg, args.nhf_gpkg)
+    print(f"nhf      {args.nhf_gpkg}")
+    print(f"lulc     {args.lulc_tif}\n")
+    seed(args.network_gpkg, args.nhf_gpkg, args.lulc_tif)
 
 
 if __name__ == "__main__":

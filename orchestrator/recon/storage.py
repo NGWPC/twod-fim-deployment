@@ -90,6 +90,29 @@ def nd_library_path(
 
 
 REACH_NETWORK_FILENAME = "reach_network.parquet"
+LULC_FILENAME = "lulc.tif"
+
+
+def reference_data_path(filename: str) -> str:
+    """Something every job reads and no reach owns, published once per deployment.
+
+    `reference_data/` rather than a reach folder, for the same reason lakes live
+    under `shared/`: these describe the world the models are built in, not any
+    one model's results.
+    """
+    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
+            f"/reference_data/{filename}")
+
+
+def lulc_path() -> str:
+    """The land-cover raster, as an address rather than a mounted file.
+
+    In storage so that running a job needs no volume arranged for it. GDAL
+    reads s3:// through /vsis3, but it does NOT read the boto3 endpoint
+    variable — a job needs AWS_S3_ENDPOINT and friends in its environment,
+    supplied by its SEPEX process definition.
+    """
+    return reference_data_path(LULC_FILENAME)
 
 
 def reach_network_path() -> str:
@@ -100,8 +123,7 @@ def reach_network_path() -> str:
     the same copy. Written by scripts/seed.py, sorted by reach_id so a job can
     fetch one reach without scanning.
     """
-    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-            f"/reference_data/{REACH_NETWORK_FILENAME}")
+    return reference_data_path(REACH_NETWORK_FILENAME)
 
 
 def boundary_polygon_path(kind: str, feature_id: str) -> str:
