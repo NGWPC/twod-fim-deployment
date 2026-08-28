@@ -10,7 +10,7 @@ info:
 
 host:
   type: docker
-  image: ghcr.io/ngwpc/twod-fim-jobs/build_model:local
+  image: build_model:local
 
 command: []
 

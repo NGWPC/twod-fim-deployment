@@ -10,7 +10,7 @@ info:
 
 host:
   type: docker
-  image: ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-cpu:local
+  image: run_nd_scenarios-lisflood-cpu:local
 
 command: []
 
