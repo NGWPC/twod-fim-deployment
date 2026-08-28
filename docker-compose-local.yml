@@ -77,6 +77,19 @@ services:
 
   sepex:
     image: ghcr.io/dewberry/sepex:dev
+    # For GPU enabled machines, uncomment the following lines to enable GPU support in the container.
+    # And comment the above line.
+    # This requires Docker Engine 19.03+ and NVIDIA Container Toolkit installed on the host.
+    # In addition to that you must also set GPU_AVAILABLE=1 in the .env file, (not sepex_local.env).
+    # image: ghcr.io/dewberry/sepex:sha-738e11f
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [ gpu ]
+
     container_name: sepex
     ports:
       - '5050:5050'
