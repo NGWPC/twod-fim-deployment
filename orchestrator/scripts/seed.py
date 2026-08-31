@@ -26,7 +26,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-
+import numpy as np
 import geopandas as gpd
 import pandas as pd
 import pyarrow.parquet as pq
@@ -50,8 +50,10 @@ NETWORK_LAYER = "reach_network"
 LAKES_LAYER = "lakes_polygons"
 
 # Q bounds
-Q_LOWER_BOUND_FIELD = "q_lower_bound"
-Q_UPPER_BOUND_FIELD = "q_upper_bound"
+Q_LOWER_BOUND_SRC_FIELD = "high_flow_threshold"
+Q_LOWER_BOUND_MULTIPLIER = 0.9
+Q_UPPER_BOUND_SRC_FIELD = "f100year"
+Q_UPPER_BOUND_MULTIPLIER = 1.5
 DQ_STEP_FIELD = "initial_dq_step_for_nd"
 
 # Mirrors what the deployed job images bake in (twod_fim_jobs/consts.py). The
@@ -198,13 +200,17 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
         if isinstance(row, pd.DataFrame):
             # duplicate row
             continue
-        low = row[Q_LOWER_BOUND_FIELD]
-        high = row[Q_UPPER_BOUND_FIELD]
+        low = np.floor(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(int)
+        high = np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(int)
         if pd.isna(low) or pd.isna(high):
             nan_bounds.append(reach_id)
             continue
-        r[Q_LOWER_BOUND_FIELD] = low
-        r[Q_UPPER_BOUND_FIELD] = high
+        if low > high:
+            r["q_lower_bound"] = high
+            r["q_upper_bound"] = low
+        else:
+            r["q_lower_bound"] = low
+            r["q_upper_bound"] = high
         rng = high - low
         r[DQ_STEP_FIELD] = int(rng / 10)
     if duplicate_ids:
