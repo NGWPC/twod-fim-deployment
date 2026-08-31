@@ -168,4 +168,5 @@ aws s3 ls s3://<artifacts-bucket>/v1/ --recursive
 | `code-server not healthy` | Check `docker compose -f docker-compose.cloud.yaml logs code-server` |
 | `password authentication failed` | Wrong password in `.env`, or user not created (run `setup.py` without `--skip-db`) |
 | `database does not exist` | Run `setup.py` without `--skip-db` |
-| `AccessDenied on LULC raster` | Set `DOCKER_DATA_DIR` and `LULC_SOURCE` in `.env` to use local raster |
+| `AccessDenied on LULC raster` | The orchestrator role needs read on the source bucket - check `external_source_bucket_names` is applied in the app stack. Workaround: set `DOCKER_DATA_DIR` and `LULC_SOURCE` in `.env` to use a local raster |
+| `403 Forbidden` / `PermanentRedirect` on a requester-pays LULC read | `AWS_REQUEST_PAYER=requester` missing, `AWS_ENDPOINT_URL` pinned to the wrong region, or the bucket's region not in `enabledRegions` in `aws-accelerator-config` (region-deny SCP) |

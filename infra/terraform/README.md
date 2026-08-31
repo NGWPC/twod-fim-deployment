@@ -48,7 +48,7 @@ infra/terraform/
     ├── data.tf                    aws_partition, aws_caller_identity data sources
     ├── ec2.tf                     orchestrator instance, optional worker instances, optional SSH key pair
     ├── ecr.tf                     4 ECR repos (optional, create_ecr toggle) + scan-on-push + lifecycle policies
-    ├── iam.tf                     create_iam toggle, IAM roles + instance profiles + SSM policy + conditional ECR policies, existing_* fallbacks
+    ├── iam.tf                     create_iam toggle, IAM roles + instance profiles + SSM policy + conditional ECR policies, external read-only source buckets, existing_* fallbacks
     ├── lambda.tf                  Batch completion handler Lambda (placeholder logic), EventBridge rule/target, SQS dead-letter queue
     ├── lambda_placeholder.zip     placeholder archive for Lambda function deployment
     ├── outputs.tf                 EC2, RDS, ECR, Batch, and Lambda outputs

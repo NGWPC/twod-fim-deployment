@@ -14,6 +14,14 @@ dagster_s3_bucket  = "twod-fim-dagster-123456789012"
 # Leave commented out if egress to AWS services routes through TGW or NAT.
 # vpce_security_group_id = "sg-xxxxxxxxx"
 
+# --- External read-only data sources (optional, default shown) ---
+# Third-party buckets the orchestrator role gets s3:GetObject/s3:ListBucket on.
+# usgs-landcover holds the NLCD land-cover raster build_model reads, is requester-pays
+# (transfer billed to this account), and lives in us-west-2 - so that region must be in
+# enabledRegions in the org's aws-accelerator-config, or the region-deny SCP rejects the
+# call before this policy is ever evaluated.
+# external_source_bucket_names = ["usgs-landcover"]
+
 # --- App-specific (required) ---
 ec2_ami_id     = "ami-xxxxxxxxx"     # Ubuntu Noble 24.04 or golden AMI
 nd_image_tag   = "sha-abc1234"       # git SHA or release tag

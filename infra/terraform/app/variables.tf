@@ -71,6 +71,19 @@ variable "vpc_id" {
   type        = string
 }
 
+# --- External read-only data sources ---
+
+variable "external_source_bucket_names" {
+  description = "Third-party S3 buckets granted read-only to the EC2 orchestrator role"
+  type        = list(string)
+  default     = ["usgs-landcover"]
+
+  validation {
+    condition     = alltrue([for b in var.external_source_bucket_names : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", b))])
+    error_message = "external_source_bucket_names must be bare S3 bucket names (no s3:// prefix, no ARN)."
+  }
+}
+
 # --- App-specific: Batch ---
 
 variable "use_spot" {

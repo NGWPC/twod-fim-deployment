@@ -130,7 +130,30 @@ locals {
     "${local.dagster_bucket_arn}/*",
   ]
 
-  ec2_log_group_arn   = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"
+  external_source_bucket_arns_list = [
+    for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}"
+  ]
+
+  external_source_bucket_arns_objects = [
+    for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}/*"
+  ]
+
+  external_source_statements = length(var.external_source_bucket_names) == 0 ? [] : [
+    {
+      Sid      = "S3ExternalSourceList"
+      Effect   = "Allow"
+      Action   = "s3:ListBucket"
+      Resource = local.external_source_bucket_arns_list
+    },
+    {
+      Sid      = "S3ExternalSourceRead"
+      Effect   = "Allow"
+      Action   = "s3:GetObject"
+      Resource = local.external_source_bucket_arns_objects
+    },
+  ]
+
+  ec2_log_group_arn           = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"
   batch_log_group_arn         = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/${var.project_name}:*"
   batch_default_log_group_arn = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/job:*"
 
@@ -139,7 +162,7 @@ locals {
   # No resource-level ARN scoping exists for batch:SubmitJob/TerminateJob's job-instance
   # target (jobs aren't known until submission), so this scopes to the account/region at
   # least, rather than a bare "*".
-  batch_job_arn_pattern    = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job/*"
+  batch_job_arn_pattern     = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job/*"
   batch_job_def_arn_pattern = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job-definition/${var.project_name}-*"
 }
 
@@ -173,7 +196,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid      = "S3List"
         Effect   = "Allow"
@@ -254,7 +277,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_db_instance.main.master_user_secret[0].secret_arn
       },
-    ]
+    ], local.external_source_statements)
   })
 }
 
