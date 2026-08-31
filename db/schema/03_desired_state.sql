@@ -33,9 +33,6 @@ CREATE TABLE IF NOT EXISTS desired_state_defaults(
     -- Run identity is hash(sdr_commit + solver NAME).
     solver text NOT NULL DEFAULT 'lisflood' CONSTRAINT desired_state_defaults_solver_chk CHECK (solver IN
 	('lisflood', 'sfincs', 'triton')),
-    q_lower_bound integer,
-    q_upper_bound integer,
-    initial_dq_step_for_nd integer,
     ld_q_mean_stage_delta double precision,
     ld_q_max_stage_delta double precision,
     ld_q_max_extent_prcnt_delta double precision,

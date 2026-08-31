@@ -26,7 +26,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-
+import numpy as np
 import geopandas as gpd
 import pandas as pd
 import pyarrow.parquet as pq
@@ -40,6 +40,7 @@ REACH_ID_FIELD = "reach_id"
 TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
 DEFAULT_NETWORK_GPKG = TESTDATA / "network.gpkg"
 DEFAULT_NHF_GPKG = TESTDATA / "nhf.gpkg"
+DEFAULT_Q_BOUNDS_PARQUET = TESTDATA / "min_max_network_flows.parquet"
 # Land cover for the test network, clipped from the NLCD CONUS mosaic to the
 # network's extent plus a margin. Half a megabyte instead of 1.4 GB, which is
 # what makes it a fixture that can live beside the GeoPackages rather than a
@@ -48,15 +49,12 @@ DEFAULT_LULC_TIF = TESTDATA / "lulc.tif"
 NETWORK_LAYER = "reach_network"
 LAKES_LAYER = "lakes_polygons"
 
-# Placeholder discharge intent: these are inputs run_nd_scenarios REQUIRES,
-# and nothing in the network implies them.
-# A real deployment authors them per reach — a 12 km2 headwater and a 2,600 km2
-# trunk do not share a flood range — either in desired_state, or here once a
-# regional regression exists. The range is kept deliberately narrow so a test
-# sweep finishes: every discharge in it is one full hydraulic simulation.
-PLACEHOLDER_Q_LOWER = 1000
-PLACEHOLDER_Q_UPPER = 2000
-PLACEHOLDER_DQ_STEP = 500
+# Q bounds
+Q_LOWER_BOUND_SRC_FIELD = "high_flow_threshold"
+Q_LOWER_BOUND_MULTIPLIER = 0.9
+Q_UPPER_BOUND_SRC_FIELD = "f100year"
+Q_UPPER_BOUND_MULTIPLIER = 1.5
+DQ_STEP_FIELD = "initial_dq_step_for_nd"
 
 # Mirrors what the deployed job images bake in (twod_fim_jobs/consts.py). The
 # loop predicts artifact addresses from these, so they must match the images or
@@ -178,6 +176,50 @@ def load_lakes(gpkg_path: Path, layer: str = LAKES_LAYER) -> list[dict]:
         for _, r in gdf.iterrows()
     ]
 
+def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
+    """Lookup and append flow bounds to the reach dataset."""
+    bounds = pd.read_parquet(q_bound_parquet)
+
+    if bounds.index.name != REACH_ID_FIELD:
+        raise RuntimeError(f"Q bound parquet file is indexed by {bounds.index.name} instead of {REACH_ID_FIELD}")
+    if not pd.api.types.is_integer_dtype(bounds.index):
+        raise RuntimeError(f"Q bound parquet index must be integer, got {bounds.index.dtype}")
+
+    duplicate_ids = list(bounds.index[bounds.index.duplicated()])
+
+    missing_reaches = []
+    nan_bounds = []
+    for r in reaches:
+        reach_id = r["reach_id"]
+        reach_id = int(str(reach_id).split("_")[0])
+        try:
+            row = bounds.loc[reach_id]
+        except KeyError:
+            missing_reaches.append(reach_id)
+            continue
+        if isinstance(row, pd.DataFrame):
+            # duplicate row
+            continue
+        low = np.floor(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(int)
+        high = np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(int)
+        if pd.isna(low) or pd.isna(high):
+            nan_bounds.append(reach_id)
+            continue
+        if low > high:
+            r["q_lower_bound"] = high
+            r["q_upper_bound"] = low
+        else:
+            r["q_lower_bound"] = low
+            r["q_upper_bound"] = high
+        rng = high - low
+        r[DQ_STEP_FIELD] = int(rng / 10)
+    if duplicate_ids:
+        raise RuntimeError(f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}")
+    if missing_reaches:
+        raise RuntimeError(f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}")
+    if nan_bounds:
+        raise RuntimeError(f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}")
+    return reaches
 
 def lake_polygon_uri(lake_id: str) -> str:
     """Where a lake's polygon lives in storage.
@@ -272,8 +314,9 @@ def export_lake_polygons(lakes: list[dict]) -> list[str]:
     return written
 
 
-def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path) -> None:
+def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Path) -> None:
     reaches = load_network(network_gpkg)
+    reaches = load_q_bounds(q_bound_parquet, reaches)
     lakes = load_lakes(nhf_gpkg)
 
     with db.connect() as conn:
@@ -282,18 +325,14 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path) -> None:
         conn.execute(
             """INSERT INTO desired_state_defaults
                    (sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
-                    lulc_lookup, solver,
-                    q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
-               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s, %s, %s)""",
+                    lulc_lookup, solver)
+               VALUES (%s, 10, 5070, %s, %s, %s, %s)""",
             (
                 SDR_COMMIT,
                 DEM_SOURCE,
                 LULC_SOURCE,
                 json.dumps(LULC_LOOKUP),
                 SOLVER,
-                PLACEHOLDER_Q_LOWER,
-                PLACEHOLDER_Q_UPPER,
-                PLACEHOLDER_DQ_STEP,
             ),
         )
 
@@ -316,11 +355,11 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path) -> None:
                            %(length_km)s, ST_GeomFromText(%(geom)s, 5070))""",
                 r,
             )
-
-        # Intent: every reach, everything defaulted.
-        conn.execute(
-            "INSERT INTO desired_state (reach_id) SELECT reach_id FROM reach_network"
-        )
+            conn.execute(
+                """INSERT INTO desired_state (reach_id, q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
+                       VALUES (%(reach_id)s, %(q_lower_bound)s, %(q_upper_bound)s, %(initial_dq_step_for_nd)s)""",
+                r,
+            )
 
     written = export_lake_polygons(lakes)
     network_uri = export_reach_network(reaches)
@@ -373,6 +412,12 @@ def main() -> None:
         default=DEFAULT_LULC_TIF,
         help="land cover raster to publish to storage",
     )
+    ap.add_argument(
+        "--q-bound-parquet",
+        type=Path,
+        default=DEFAULT_Q_BOUNDS_PARQUET,
+        help="land cover raster to publish to storage",
+    )
     args = ap.parse_args()
 
     for path in (args.network_gpkg, args.nhf_gpkg):
@@ -384,7 +429,7 @@ def main() -> None:
     print(f"network  {args.network_gpkg}")
     print(f"nhf      {args.nhf_gpkg}")
     print(f"lulc     {args.lulc_tif}\n")
-    seed(args.network_gpkg, args.nhf_gpkg, args.lulc_tif)
+    seed(args.network_gpkg, args.nhf_gpkg, args.lulc_tif, args.q_bound_parquet)
 
 
 if __name__ == "__main__":
