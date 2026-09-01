@@ -233,7 +233,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Sid      = "BatchLogsRead"
         Effect   = "Allow"
         Action   = "logs:GetLogEvents"
-        Resource = local.batch_default_log_group_arn
+        Resource = local.batch_log_group_arn
       },
       {
         Sid      = "SecretsManagerDBCreds"
