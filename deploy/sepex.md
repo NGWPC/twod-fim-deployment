@@ -147,7 +147,6 @@ python3 /opt/twod-fim-deployment/deploy/setup_sepex.py \
 | `--image` | Container image (default: `ghcr.io/dewberry/sepex:dev`) |
 | `--install-dir` | Install path (default: `/opt/sepex`) |
 | `--reset` | Drop and recreate the sepex database |
-| `--skip-db` | Skip database setup, only deploy |
 
 The password is automatically URL-encoded in the connection string.
 Record the chosen password - it is needed for redeployments without `--reset`.
