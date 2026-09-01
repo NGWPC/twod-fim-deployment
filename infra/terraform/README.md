@@ -34,9 +34,9 @@ infra/terraform/
 ├── foundation/                    persistent infra stack - VPC, endpoints, buckets
 │   ├── data.tf                    aws_caller_identity data source
 │   ├── networking.tf              VPC, public/private subnets, IGW, NAT gateway, VPC endpoints, vpce SG
-│   ├── outputs.tf                 vpc_id, private_subnet_ids, vpce_security_group_id, prod_bucket_name, test_bucket_name, dagster_bucket_name
+│   ├── outputs.tf                 vpc_id, private_subnet_ids, vpce_security_group_id, prod_bucket_name, test_bucket_name
 │   ├── providers.tf               AWS provider config, default tags (incl. optional team/poc)
-│   ├── storage.tf                 prod (prevent_destroy), test (force_destroy), and dagster (force_destroy) S3 buckets
+│   ├── storage.tf                 prod (prevent_destroy) and test (force_destroy) S3 buckets
 │   ├── terraform.tf               version constraints, S3 backend block
 │   ├── variables.tf               create_networking, create_storage, CIDRs, existing_* fallbacks, team, poc
 │   ├── backend.hcl.example        remote state backend template
@@ -82,7 +82,7 @@ Creates:
 - NAT gateway for private subnet internet access
 - VPC endpoints for S3, Secrets Manager, and Batch
 - VPC endpoint security group (app stack adds ingress rules when `vpce_security_group_id` is provided)
-- Prod, test, and Dagster compute logs S3 buckets
+- Prod and test S3 buckets
 
 Networking and storage are each independently toggleable via `create_networking` and `create_storage`.
 
@@ -124,7 +124,7 @@ Set `team` and `poc` in `terraform.tfvars` if required by your organization.
 | Toggle | Stack | Default | Controls | `existing_*` fallback variables required when false |
 |---|---|---|---|---|
 | `create_networking` | foundation | `true` | VPC, subnets, IGW, NAT gateway, VPC endpoints, VPC endpoints security group | `existing_vpc_id`, `existing_private_subnet_ids` (+ optionally `existing_vpce_security_group_id`) |
-| `create_storage` | foundation | `true` | Prod, test, and Dagster compute logs S3 buckets | `existing_prod_bucket_name`, `existing_test_bucket_name`, `existing_dagster_bucket_name` |
+| `create_storage` | foundation | `true` | Prod and test S3 buckets | `existing_prod_bucket_name`, `existing_test_bucket_name` |
 | `create_iam` | app | `true` | 6 IAM roles + 2 instance profiles (EC2 orchestrator, Batch job/execution/instance, Spot Fleet, Lambda execution) | `existing_ec2_instance_profile_name`, `existing_batch_job_role_arn`, `existing_batch_execution_role_arn`, `existing_batch_instance_profile_arn`, `existing_spot_fleet_role_arn`, `existing_lambda_execution_role_arn`, `existing_batch_service_role_arn` |
 | `create_ecr` | app | `true` | 4 ECR repos (orchestrator, model_worker, nd, kwse) + lifecycle policies + ECR IAM policies | `orchestrator_image_repo`, `build_model_image_repo`, `nd_image_repo`, `kwse_image_repo` |
 | `create_batch_service_linked_role` | app | `true` | The account-global `AWSServiceRoleForBatch` service-linked role | none directly - see note below |
@@ -189,7 +189,7 @@ cp backend.hcl.example backend.hcl
 # If foundation was deployed, pull its outputs into terraform.tfvars:
 #   terraform -chdir=../foundation output
 # If using existing infra, get these existing values from your environment:
-#   vpc_id, private_subnet_ids, prod_bucket_name, test_bucket_name, dagster_s3_bucket
+#   vpc_id, private_subnet_ids, prod_bucket_name, test_bucket_name
 
 # also set: ec2_ami_id, nd_image_tag, kwse_image_tag
 # optional: ssm_logging_policy_arn, ec2_ssh_public_key, allowed_admin_cidrs
@@ -212,8 +212,8 @@ sudo chown -R ssm-user:ssm-user /opt/twod-fim-deployment
 cd /opt/twod-fim-deployment
 cp example.cloud.env .env
 # Edit .env with terraform output values, passwords, and image tags
-python3 deploy/setup.py            # one-command: init databases + deploy services
-python3 deploy/setup.py --reset    # clean slate (drop + recreate + deploy)
+python3 deploy/setup.py             # initialize pipeline database
+python3 deploy/setup.py --reset    # drop and recreate from scratch
 ```
 
 ## Enterprise mode
@@ -234,14 +234,14 @@ IAM, ECR, and the resources gated by foundation's toggles can be skipped.
 | `vpce_security_group_id` | VPC interface endpoints security group ID - created, or existing SG passed through |
 | `prod_bucket_name` | Prod artifact S3 bucket name - created, or existing name passed through |
 | `test_bucket_name` | Test artifact S3 bucket name - created, or existing name passed through |
-| `dagster_bucket_name` | Dagster compute logs S3 bucket name - created, or existing name passed through |
+
 
 ## App outputs
 
 | Output | Provides |
 |---|---|
 | `orchestrator_instance_id` | EC2 orchestrator instance ID |
-| `orchestrator_private_ip` | Orchestrator private IP (SSH + Dagster UI via bastion/VPN) |
+| `orchestrator_private_ip` | Orchestrator private IP (SSH via bastion/VPN) |
 | `worker_instance_ids` | Worker instance IDs (empty if `worker_count = 0`) |
 | `worker_private_ips` | Worker private IPs (empty if `worker_count = 0`) |
 | `rds_endpoint` | RDS Postgres endpoint (host:port) |
@@ -249,7 +249,7 @@ IAM, ECR, and the resources gated by foundation's toggles can be skipped.
 | `rds_secret_arn` | Secrets Manager secret ARN for connection metadata (no password) |
 | `rds_master_user_secret_arn` | AWS-managed secret ARN holding the RDS master password |
 | `image_repos` | Resolved image repositories (ECR URLs when create_ecr = true, external registry URLs when false) |
-| `batch_job_queue_name` | Batch job queue name (for the Dagster sensor) |
+| `batch_job_queue_name` | Batch job queue name |
 | `batch_nd_job_definition_name` | ND scenario Batch job definition name |
 | `batch_kwse_job_definition_name` | KWSE scenario Batch job definition name |
 | `lambda_function_arn` | Batch completion handler Lambda ARN |
@@ -262,7 +262,6 @@ If Batch hosts also need Noble, a custom AMI with ECS agent, Docker, NVIDIA driv
 - EC2 instances have no public IP.
 SSM Session Manager is supported via `ssm_logging_policy_arn` (attaches the required policy to the EC2 role).
 SSH access is optional via `ec2_ssh_public_key` and `allowed_admin_cidrs`.
-- Dagster UI (port 3000) is accessible via SSM port forwarding or directly from a network with a route to private subnets (e.g. AWS Workspace) when `allowed_admin_cidrs` includes the source CIDR.
 - Additional VPC endpoints (ECR, ECS, CloudWatch Logs) would be needed if `enable_nat_gateway` is disabled.
 - Worker EC2 instances reuse the orchestrator's IAM role; there is no separate, scoped-down worker role yet.
 - Single-AZ NAT gateway is a sandbox cost optimization.

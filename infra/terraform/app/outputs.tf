@@ -23,7 +23,7 @@ output "orchestrator_instance_id" {
 }
 
 output "orchestrator_private_ip" {
-  description = "Private IP of orchestrator (SSH + Dagster UI via bastion/VPN)"
+  description = "Private IP of orchestrator (SSH via bastion/VPN)"
   value       = aws_instance.orchestrator.private_ip
 }
 
@@ -110,7 +110,7 @@ output "image_repos" {
 # --- Batch ---
 
 output "batch_job_queue_name" {
-  description = "Batch job queue name (for Dagster sensor)"
+  description = "Batch job queue name"
   value       = aws_batch_job_queue.scenarios.name
 }
 

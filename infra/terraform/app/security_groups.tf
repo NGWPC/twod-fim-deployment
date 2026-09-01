@@ -7,7 +7,7 @@
 # "ingress rules added by app stack" contract (see var.vpce_security_group_id).
 
 variable "allowed_admin_cidrs" {
-  description = "CIDR blocks allowed for SSH (:22) and Dagster UI (:3000) ingress. Empty for SSM-only access."
+  description = "CIDR blocks allowed for SSH (:22) ingress. Empty for SSM-only access."
   type        = list(string)
   default     = []
 
@@ -32,7 +32,7 @@ variable "vpce_security_group_id" {
 
 resource "aws_security_group" "ec2" {
   name_prefix = "${var.project_name}-ec2-"
-  description = "EC2 orchestrator: SSH + Dagster UI from admin CIDRs, all egress"
+  description = "EC2 orchestrator: SSH from admin CIDRs, all egress"
   vpc_id      = var.vpc_id
 
   tags = { Name = "${var.project_name}-ec2-sg" }
@@ -49,16 +49,6 @@ resource "aws_vpc_security_group_ingress_rule" "ec2_ssh" {
   cidr_ipv4         = var.allowed_admin_cidrs[count.index]
   from_port         = 22
   to_port           = 22
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "ec2_dagster_ui" {
-  count = length(var.allowed_admin_cidrs)
-
-  security_group_id = aws_security_group.ec2.id
-  cidr_ipv4         = var.allowed_admin_cidrs[count.index]
-  from_port         = 3000
-  to_port           = 3000
   ip_protocol       = "tcp"
 }
 

@@ -8,7 +8,6 @@ vpc_id             = "vpc-xxxxxxxxx"
 private_subnet_ids = ["subnet-aaa", "subnet-bbb"]
 prod_bucket_name   = "twod-fim-prod-123456789012"
 test_bucket_name   = "twod-fim-test-123456789012"
-dagster_s3_bucket  = "twod-fim-dagster-123456789012"
 
 # Required only if the VPC has interface endpoints with a shared security group.
 # Leave commented out if egress to AWS services routes through TGW or NAT.
@@ -34,7 +33,7 @@ kwse_image_tag = "sha-abc1234"       # git SHA or release tag
 # --- SSH access (optional, SSM-only by default) ---
 # ec2_ssh_public_key  = "ssh-ed25519 AAAA..."
 # Find your IP: curl -s https://api.ipify.org
-# allowed_admin_cidrs = ["10.x.x.0/24"]   # workspace CIDR for SSH (:22) + Dagster UI (:3000)
+# allowed_admin_cidrs = ["10.x.x.0/24"]   # workspace CIDR for SSH (:22)
 
 # --- SSM access (from account infra guide) ---
 # ssm_logging_policy_arn = "arn:aws:iam::<account-id>:policy/<policy-name>"
