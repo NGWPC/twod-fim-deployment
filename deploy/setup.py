@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""One-command setup: initialize databases and deploy Dagster services.
+"""One-command setup: initialize the pipeline database.
 
 Orchestrates the common steps (psql install, master password fetch)
-then calls init_db.py and deploy.py.
+then calls init_db.py to create users, databases, and apply schema.
 
 Usage:
-  python3 deploy/setup.py                    # init db + deploy
-  python3 deploy/setup.py --reset            # clean slate + deploy
-  python3 deploy/setup.py --skip-db          # redeploy without touching DB
+  python3 deploy/setup.py                    # idempotent DB setup
+  python3 deploy/setup.py --reset            # drop and recreate from scratch
 """
 
 import argparse
@@ -63,32 +62,24 @@ def fetch_master_password(env: dict[str, str]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--reset", action="store_true", help="Drop and recreate databases from scratch")
-    parser.add_argument("--skip-db", action="store_true", help="Skip database setup, only deploy services")
-    args, remaining = parser.parse_known_args()
+    parser.add_argument("--reset", action="store_true", help="Drop and recreate database from scratch")
+    args = parser.parse_args()
 
-    if not args.skip_db:
-        ensure_psql()
+    ensure_psql()
 
-        print("\nFetching RDS master password from Secrets Manager...")
-        env = read_env(ENV_FILE)
-        master_password = fetch_master_password(env)
-        print("  Master password retrieved.")
+    print("\nFetching RDS master password from Secrets Manager...")
+    env = read_env(ENV_FILE)
+    master_password = fetch_master_password(env)
+    print("  Master password retrieved.")
 
-        env = dict(os.environ, PGPASSWORD=master_password)
+    pg_env = dict(os.environ, PGPASSWORD=master_password)
 
-        init_cmd = [sys.executable, str(DEPLOY_DIR / "init_db.py")]
-        if args.reset:
-            init_cmd.append("--reset")
+    init_cmd = [sys.executable, str(DEPLOY_DIR / "init_db.py")]
+    if args.reset:
+        init_cmd.append("--reset")
 
-        print("\n--- Initializing databases ---")
-        result = subprocess.run(init_cmd, env=env)
-        if result.returncode != 0:
-            sys.exit(1)
-
-    print("\n--- Deploying services ---")
-    deploy_cmd = [sys.executable, str(DEPLOY_DIR / "deploy.py"), *remaining]
-    result = subprocess.run(deploy_cmd)
+    print("\n--- Initializing databases ---")
+    result = subprocess.run(init_cmd, env=pg_env)
     if result.returncode != 0:
         sys.exit(1)
 
