@@ -200,8 +200,8 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
         if isinstance(row, pd.DataFrame):
             # duplicate row
             continue
-        low = np.floor(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(int)
-        high = np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(int)
+        low = max(np.ceil(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(int), 1)
+        high = max(np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(int), 1)
         if pd.isna(low) or pd.isna(high):
             nan_bounds.append(reach_id)
             continue
@@ -212,7 +212,7 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
             r["q_lower_bound"] = low
             r["q_upper_bound"] = high
         rng = high - low
-        r[DQ_STEP_FIELD] = int(rng / 10)
+        r[DQ_STEP_FIELD] = max(int(rng / 10), 1)
     if duplicate_ids:
         raise RuntimeError(f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}")
     if missing_reaches:
