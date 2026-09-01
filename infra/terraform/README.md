@@ -212,8 +212,8 @@ sudo chown -R ssm-user:ssm-user /opt/twod-fim-deployment
 cd /opt/twod-fim-deployment
 cp example.cloud.env .env
 # Edit .env with terraform output values, passwords, and image tags
-python3 deploy/setup.py             # initialize pipeline database
-python3 deploy/setup.py --reset    # drop and recreate from scratch
+python3 deploy/init_db.py             # initialize pipeline database
+python3 deploy/init_db.py --reset    # drop and recreate from scratch
 ```
 
 ## Enterprise mode

@@ -121,12 +121,14 @@ Options for `seed.py`:
 | `POSTGRES_DB` | docker-compose, config.py | Pipeline database name |
 | `AWS_ACCESS_KEY_ID` | docker-compose, boto3 | S3/MinIO access key |
 | `AWS_SECRET_ACCESS_KEY` | docker-compose, boto3 | S3/MinIO secret key |
-| `AWS_ENDPOINT_URL` | docker-compose, storage.py | MinIO endpoint (`localhost` host / `minio` compose; omit for real S3) |
+| `AWS_ENDPOINT_URL` | docker-compose, config.py | MinIO endpoint (`localhost` host / `minio` compose; omit for real S3) |
 | `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
 | `MAJOR_VERSION` | config.py | Artifact path versioning |
-| `SEPEX_URL` | config.py, reconcile.py | SEPEX API base URL |
-| `POSTGRES_HOST_FOR_JOBS` | config.py | DB host for job payloads; falls back to `POSTGRES_HOST` if unset |
-| `AWS_ENDPOINT_URL_FOR_JOBS` | config.py | S3 endpoint for job containers; falls back to `AWS_ENDPOINT_URL` if unset |
+| `SEPEX_URL` | config.py | SEPEX API base URL |
+| `GPU_AVAILABLE` | check.py | Select GPU ND process variant; set to `true` for cloud Batch (default `false`) |
+| `VOLUME_CONVERGENCE_TOLERANCE` | config.py | Steady-state threshold for normal-depth runs (default `1e-3`) |
+| `HALT_AFTER_FAILURES` | config.py | Consecutive failures before a reach is parked (default `1`) |
+| `ALLOW_WATER_ON_EDGES` | config.py | Continue when water hits an invalid domain edge (default `true`) |
 
 See `example.env` for additional optional variables (Docker platform, local raster overrides, AWS session tokens).
 

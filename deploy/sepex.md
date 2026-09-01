@@ -6,7 +6,7 @@ It runs on a separate EC2 instance outside Terraform management.
 ## Prerequisites
 
 - twod-fim app stack deployed (`terraform apply` on `infra/terraform/app/`)
-- Orchestrator running on EC2 (`deploy/setup.py` completed) (see [README.md](README.md))
+- Orchestrator running on EC2 (`deploy/init_db.py` completed) (see [README.md](README.md))
 
 ### Variable reference
 
@@ -259,7 +259,7 @@ terraform destroy
 # 5. Rebuild
 terraform apply
 
-# 6. Deploy orchestrator (deploy/setup.py) and gather prereq values
+# 6. Deploy orchestrator (deploy/init_db.py) and gather prereq values
 #    (see Prerequisites section above)
 
 # 7. Follow this guide from "Create security group" onward

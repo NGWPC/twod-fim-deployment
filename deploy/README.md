@@ -18,8 +18,7 @@ Scripts for initializing the pipeline database and deploying SEPEX on EC2.
 
 | Script | Purpose |
 |---|---|
-| `setup.py` | One-command setup: installs psql, fetches master password, initializes database and schema |
-| `init_db.py` | Database only: creates user, database, schema, permissions |
+| `init_db.py` | Database setup: fetches RDS master password from SecretsManager, creates user, database, schema, permissions (idempotent) |
 | `setup_sepex.py` | SEPEX deployment: database, configure, image pull, start (see [sepex.md](sepex.md)) |
 
 ## Common workflows
@@ -48,8 +47,12 @@ cd /opt/twod-fim-deployment
 cp example.cloud.env .env
 # Edit .env with real values
 
+# Install psycopg (required by init_db.py)
+cd orchestrator && uv pip install -e .
+cd /opt/twod-fim-deployment
+
 # Initialize the database
-python3 deploy/setup.py
+python3 deploy/init_db.py
 
 # Deploy SEPEX (see deploy/sepex.md for full guide)
 python3 deploy/setup_sepex.py \
@@ -76,15 +79,6 @@ git pull
 ### Clean slate (reset database)
 
 ```bash
-python3 deploy/setup.py --reset
-```
-
-### Standalone usage
-
-```bash
-# Database init only (requires PGPASSWORD):
-export PGPASSWORD=<master-password>
-python3 deploy/init_db.py
 python3 deploy/init_db.py --reset
 ```
 
@@ -116,8 +110,10 @@ uv run python scripts/reconcile.py --forever
 
 ### Manual verification
 
+psql is not required by the deploy scripts but is useful for ad-hoc inspection.
+
 ```bash
-# Check DB state:
+# Check DB state (requires psql installed):
 psql -h <rds-address> -U twodfim_app -d twodfim -c \
   "SELECT state, count(*) FROM reach_status GROUP BY state ORDER BY state;"
 
@@ -130,6 +126,6 @@ aws s3 ls s3://<artifacts-bucket>/version=v1/ --recursive
 | Symptom | Likely cause |
 |---|---|
 | `RDS_SECRET_ARN env var is required` | Add `RDS_SECRET_ARN` to `.env` (get from `terraform output -raw rds_master_user_secret_arn`) |
-| `password authentication failed` | Wrong password in `.env`, or user not created (run `setup.py`) |
-| `database does not exist` | Run `setup.py` to initialize |
+| `password authentication failed` | Wrong password in `.env`, or user not created (run `init_db.py`) |
+| `database does not exist` | Run `init_db.py` to initialize |
 | SEPEX unreachable | Check SEPEX is running: `curl http://<sepex-ip>/` (see [sepex.md](sepex.md)) |
