@@ -3,7 +3,7 @@
 This is the loop. Everything else is a part of it — queue.py says which reach,
 observe.py records what the address intent implies holds, gap.py decides,
 processing.py writes the work notes, jobs.py hears back from the execution
-system. Nothing here knows about Dagster, notebooks, or any other caller.
+system. Nothing here knows about notebooks or any other caller.
 
 A check is short. It never waits for a job: it submits, writes down that it
 did, and ends. What the job produced is discovered by a later check looking at

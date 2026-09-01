@@ -13,14 +13,13 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ```
 ├── README.md
 ├── justfile
-├── compatibility_policy   	# placeholder for future document
-├── docker-compose.yml     	# for local deployment
+├── compatibility_policy   	 # placeholder for future document
+├── docker-compose-local.yml # for local deployment
 ├── example.env
-├── orchestrator/           #  the self contained dagster project
+├── orchestrator/            # reconciliation loop and job execution
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── recon/             	# tooling agnostic pkg for reconciliation loop
-│   ├── dagster_app/       	# dagster specific code
+│   ├── recon/             	 # reconciliation loop package
 │   ├── notebooks/
 │   ├── scripts/
 │   ├── testdata/
