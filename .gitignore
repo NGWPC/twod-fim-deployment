@@ -5,10 +5,8 @@ __pycache__/
 dist/
 .pytest_cache/
 
-# Dagster
+# Local dev
 *.db
-.tmp_dagster_home_*
-.dg/
 .logs_queue/
 .nux/
 
@@ -38,6 +36,5 @@ lambda_batch_status.zip
 # Local env overrides
 *.env
 !example.env
-!sepex_local.env
-!example.env
 !example.cloud.env
+!sepex_local.env

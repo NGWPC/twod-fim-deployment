@@ -47,31 +47,7 @@ services:
     env_file:
       - .env
     entrypoint: >
-      /bin/sh -c " mc alias set local http://minio:9000 $$AWS_ACCESS_KEY_ID $$AWS_SECRET_ACCESS_KEY && mc mb --ignore-existing local/$$DAGSTER_S3_BUCKET && mc mb --ignore-existing local/$$ARTIFACTS_S3_BUCKET && mc mb --ignore-existing local/$$SEPEX_STORAGE_BUCKET && echo 'Buckets ready.' "
-    networks:
-      - twodfim_net
-
-  orchestrator:
-    build:
-      context: ./orchestrator
-    container_name: twodfim-orchestrator
-    depends_on:
-      db:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: db
-      DAGSTER_PG_HOST: db
-      AWS_ENDPOINT_URL: http://minio:9000
-      DAGSTER_HOME: /opt/dagster
-    command: [ "dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-m", "dagster_app.definitions" ]
-    ports:
-      - "3000:3000"
-    healthcheck:
-      disable: true
+      /bin/sh -c " mc alias set local http://minio:9000 $$AWS_ACCESS_KEY_ID $$AWS_SECRET_ACCESS_KEY && mc mb --ignore-existing local/$$ARTIFACTS_S3_BUCKET && mc mb --ignore-existing local/$$SEPEX_STORAGE_BUCKET && echo 'Buckets ready.' "
     networks:
       - twodfim_net
 
