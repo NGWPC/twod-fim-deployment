@@ -31,8 +31,10 @@ compute_logs:
     bucket:
       env: DAGSTER_S3_BUCKET
     prefix: "dagster-logs/"
-    endpoint_url:
-      env: AWS_ENDPOINT_URL
+    # No endpoint_url: boto3 reads AWS_ENDPOINT_URL itself when it is set (MinIO
+    # locally), and resolves the endpoint per bucket when it is not. Naming the
+    # variable here would make it mandatory - dagster's `env:` fails to load when
+    # it is unset - which is exactly the state real-S3 deployments need.
     upload_interval: 30
 
 telemetry:

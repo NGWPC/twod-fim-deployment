@@ -130,26 +130,23 @@ locals {
     "${local.dagster_bucket_arn}/*",
   ]
 
-  external_source_bucket_arns_list = [
-    for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}"
-  ]
-
-  external_source_bucket_arns_objects = [
-    for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}/*"
-  ]
-
+  # Read on buckets this account does not own. Requester-pays needs no extra
+  # action - the charge follows the caller's credentials, not a permission - so
+  # GetObject is the whole grant, and the caller sends x-amz-request-payer via
+  # AWS_REQUEST_PAYER. Empty list yields no statements rather than an empty one,
+  # which IAM rejects.
   external_source_statements = length(var.external_source_bucket_names) == 0 ? [] : [
     {
       Sid      = "S3ExternalSourceList"
       Effect   = "Allow"
       Action   = "s3:ListBucket"
-      Resource = local.external_source_bucket_arns_list
+      Resource = [for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}"]
     },
     {
       Sid      = "S3ExternalSourceRead"
       Effect   = "Allow"
       Action   = "s3:GetObject"
-      Resource = local.external_source_bucket_arns_objects
+      Resource = [for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}/*"]
     },
   ]
 

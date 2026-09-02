@@ -16,10 +16,15 @@ dagster_s3_bucket  = "twod-fim-dagster-123456789012"
 
 # --- External read-only data sources (optional, default shown) ---
 # Third-party buckets the orchestrator role gets s3:GetObject/s3:ListBucket on.
-# usgs-landcover holds the NLCD land-cover raster build_model reads, is requester-pays
-# (transfer billed to this account), and lives in us-west-2 - so that region must be in
-# enabledRegions in the org's aws-accelerator-config, or the region-deny SCP rejects the
-# call before this policy is ever evaluated.
+# usgs-landcover holds the NLCD land-cover raster build_model reads, and is
+# requester-pays (transfer billed to this account).
+#
+# It lives in us-west-2, so the read leaves the VPC through NAT or TGW: the S3
+# gateway endpoint is regional and carries only this region's traffic. Set
+# enable_nat_gateway = true in the foundation stack, or route egress via TGW.
+#
+# Only applied when create_iam = true. With create_iam = false, add the same
+# read to the role named by existing_ec2_instance_profile_name.
 # external_source_bucket_names = ["usgs-landcover"]
 
 # --- App-specific (required) ---

@@ -169,4 +169,6 @@ aws s3 ls s3://<artifacts-bucket>/v1/ --recursive
 | `password authentication failed` | Wrong password in `.env`, or user not created (run `setup.py` without `--skip-db`) |
 | `database does not exist` | Run `setup.py` without `--skip-db` |
 | `AccessDenied on LULC raster` | The orchestrator role needs read on the source bucket - check `external_source_bucket_names` is applied in the app stack. Workaround: set `DOCKER_DATA_DIR` and `LULC_SOURCE` in `.env` to use a local raster |
-| `403 Forbidden` / `PermanentRedirect` on a requester-pays LULC read | `AWS_REQUEST_PAYER=requester` missing, `AWS_ENDPOINT_URL` pinned to the wrong region, or the bucket's region not in `enabledRegions` in `aws-accelerator-config` (region-deny SCP) |
+| `PermanentRedirect` on the LULC read | `AWS_ENDPOINT_URL` is set. Leave it unset against real S3 - pinning one region's endpoint breaks reads of the us-west-2 source bucket |
+| `403 Forbidden` on the LULC read | `AWS_REQUEST_PAYER=requester` missing from `.env`, or from the SEPEX `.env` as `BUILDMODEL_AWS_REQUEST_PAYER` |
+| Timeout / no route on the LULC read | Cross-region S3 does not use the regional gateway endpoint - the private subnet needs NAT or TGW egress |
