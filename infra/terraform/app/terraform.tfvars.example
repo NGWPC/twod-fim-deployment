@@ -13,6 +13,19 @@ test_bucket_name   = "twod-fim-test-123456789012"
 # Leave commented out if egress to AWS services routes through TGW or NAT.
 # vpce_security_group_id = "sg-xxxxxxxxx"
 
+# --- External read-only data sources (optional, default shown) ---
+# Third-party buckets the orchestrator role gets s3:GetObject/s3:ListBucket on.
+# usgs-landcover holds the NLCD land-cover mosaic a production lulc_source points
+# at, and is requester-pays (transfer billed to this account).
+#
+# It lives in us-west-2, so the read leaves the VPC through NAT or TGW: the S3
+# gateway endpoint is regional and carries only this region's traffic. Set
+# enable_nat_gateway = true in the foundation stack, or route egress via TGW.
+#
+# Only applied when create_iam = true. With create_iam = false, add the same
+# read to the role named by existing_ec2_instance_profile_name.
+# external_source_bucket_names = ["usgs-landcover"]
+
 # --- App-specific (required) ---
 ec2_ami_id     = "ami-xxxxxxxxx"     # Ubuntu Noble 24.04 or golden AMI
 nd_image_tag   = "sha-abc1234"       # git SHA or release tag
