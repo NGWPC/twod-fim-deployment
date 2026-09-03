@@ -83,7 +83,7 @@ STORAGE_LOGS_PREFIX='logs'
 
 # --- AWS
 AWS_REGION='us-east-1'
-BATCH_LOG_STREAM_GROUP='/aws/batch/job'
+BATCH_LOG_STREAM_GROUP='/aws/batch/twod-fim'
 
 # --- Auth (disabled for testing)
 AUTH_SERVICE=''

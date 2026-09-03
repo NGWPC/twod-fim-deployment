@@ -13,21 +13,22 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ```
 ├── README.md
 ├── justfile
-├── compatibility_policy   	# placeholder for future document
-├── docker-compose.yml     	# for local deployment
+├── compatibility_policy   	 # placeholder for future document
+├── docker-compose-local.yml # local infrastructure (db, minio, sepex)
 ├── example.env
-├── orchestrator/           #  the self contained dagster project
+├── example.cloud.env
+├── orchestrator/            # reconciliation loop and job execution
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── recon/             	# tooling agnostic pkg for reconciliation loop
-│   ├── dagster_app/       	# dagster specific code
+│   ├── recon/               # reconciliation loop package
+│   ├── scripts/             # reconcile.py, seed.py, bound_flows.py
 │   ├── notebooks/
-│   ├── scripts/
 │   ├── testdata/
 │   └── tests/
-├── db/                     # schema, triggers, seeds, migrate.sh
-├── infra/terraform/        # modules + envs/dev
-└── scripts/ 								# could also call tools
+├── deploy/                  # init_db, setup, SEPEX plugin configs
+├── sepex/                   # SEPEX local plugin configuration
+├── db/                      # schema SQL (includes triggers)
+└── infra/terraform/         # modules + envs/dev
 ```
 
 ## Justfile

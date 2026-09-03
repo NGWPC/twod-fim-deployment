@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run the reconciliation loop from a terminal. No notebook, no Dagster.
+"""Run the reconciliation loop from a terminal.
 
 One pass is two questions put to the database, in this order:
 

@@ -25,5 +25,6 @@ _Not an exhaustive list_
 
 ## Schema Execution
 
-Files are numbered for dependency order and are re-runnable (`IF NOT EXISTS`,
-generated-column / CHECK guards).  Docker entrypoint applies them in lexical order when database is first created.
+Files are numbered for dependency order and are re-runnable.
+Tables, indexes, and extensions use `IF NOT EXISTS`; views and triggers use drop-then-create (`DROP … IF EXISTS` followed by `CREATE`).
+Docker entrypoint applies them in lexical order when the database is first created.

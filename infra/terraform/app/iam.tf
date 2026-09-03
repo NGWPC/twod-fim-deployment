@@ -116,21 +116,17 @@ locals {
   prod_bucket_arn = "arn:${local.partition}:s3:::${var.prod_bucket_name}"
   test_bucket_arn = "arn:${local.partition}:s3:::${var.test_bucket_name}"
 
-  dagster_bucket_arn = "arn:${local.partition}:s3:::${var.dagster_s3_bucket}"
-
   artifact_bucket_arns_list = [
     local.prod_bucket_arn,
     local.test_bucket_arn,
-    local.dagster_bucket_arn,
   ]
 
   artifact_bucket_arns_objects = [
     "${local.prod_bucket_arn}/*",
     "${local.test_bucket_arn}/*",
-    "${local.dagster_bucket_arn}/*",
   ]
 
-  ec2_log_group_arn   = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"
+  ec2_log_group_arn           = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"
   batch_log_group_arn         = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/${var.project_name}:*"
   batch_default_log_group_arn = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/job:*"
 
@@ -139,12 +135,12 @@ locals {
   # No resource-level ARN scoping exists for batch:SubmitJob/TerminateJob's job-instance
   # target (jobs aren't known until submission), so this scopes to the account/region at
   # least, rather than a bare "*".
-  batch_job_arn_pattern    = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job/*"
+  batch_job_arn_pattern     = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job/*"
   batch_job_def_arn_pattern = "arn:${local.partition}:batch:${var.region}:${local.account_id}:job-definition/${var.project_name}-*"
 }
 
 # --- EC2 orchestrator role + instance profile ---
-# Drives the Dagster orchestrator: pushes/pulls images, submits Batch jobs, reads DB creds.
+# Drives the orchestrator: submits Batch jobs, accesses S3 artifacts, reads DB creds.
 
 resource "aws_iam_role" "ec2_orchestrator" {
   count = var.create_iam ? 1 : 0
@@ -237,7 +233,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Sid      = "BatchLogsRead"
         Effect   = "Allow"
         Action   = "logs:GetLogEvents"
-        Resource = local.batch_default_log_group_arn
+        Resource = local.batch_log_group_arn
       },
       {
         Sid      = "SecretsManagerDBCreds"
