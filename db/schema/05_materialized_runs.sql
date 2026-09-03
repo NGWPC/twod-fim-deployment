@@ -76,21 +76,54 @@ COMMENT ON COLUMN materialized_nd_runs.applied_revision IS 'The intent revision 
 -- ---------------------------------------------------------------------------
 -- materialized_kwse_runs
 -- ---------------------------------------------------------------------------
--- Same shape, minus the discharge set: a KWSE library is built at the ND
--- library's discharges, so the upstream reach reads those from the ND row.
--- Its upstream-end values are still needed, because the floor curve the reach
--- above consumes is the minimum across BOTH of this reach's tables — its KWSE
--- runs at low stages sit below its normal-depth run.
+-- Same shape as the nd table, minus the discharge set: a KWSE library is built
+-- at the ND library's discharges, so the upstream reach reads those from the ND
+-- row.
+--
+-- What it carries instead is the scenario index, and the reason is a mismatch
+-- nothing else in the schema exposes. Every KWSE run has TWO stage values:
+--
+--   imposed   the stage pushed onto this reach's DOWNSTREAM end — the job's
+--             input, handed down from the reach below. This is what names the
+--             folder: `kwse=223.0`.
+--   achieved  the stage the solver produced at this reach's UPSTREAM end, its
+--             stage transfer line. Reported as `nominal_wse` in the manifest.
+--
+-- They differ by however much the water surface rose across the reach, which
+-- depends on discharge, slope and roughness — so neither can be computed from
+-- the other without running the model.
+--
+-- The reach above matches on ACHIEVED, because that is the water level it will
+-- see at its own downstream end (DR-033), but it has to build a PATH from
+-- IMPOSED. Only a recorded pairing joins the two, and this column is it.
+--
+-- No us_wse_max or us_min_wse_curve here, unlike the nd table: both are
+-- derivable from the index — the ceiling is the largest achieved value, the
+-- floor curve the smallest achieved value within each discharge — and rule 9 of
+-- reconciliation-loop.md says nothing is stored that a check could derive. Kept
+-- as columns they would be a second answer free to disagree with the first. The
+-- nd table keeps its pair because it has no index to derive them from: one run
+-- per discharge leaves nothing to index.
 CREATE TABLE IF NOT EXISTS materialized_kwse_runs(
     reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
-    model_identity_hash char(8) NOT NULL CONSTRAINT materialized_kwse_runs_model_hash_chk CHECK (model_identity_hash ~ '^[0-9a-f]{8}$'),
+    -- The WHOLE model_id, domain code included, for the reason the nd table
+    -- gives: the job files results under the full id, so that is what the
+    -- address needs. An identity hash alone cannot name the folder.
+    model_id text NOT NULL CONSTRAINT materialized_kwse_runs_model_id_chk CHECK (model_id ~
+	'^[0-9a-f]{8}_N(0|[1-9][0-9]*)S(0|[1-9][0-9]*)E(0|[1-9][0-9]*)W(0|[1-9][0-9]*)$'),
     run_identity_hash char(8) NOT NULL CONSTRAINT materialized_kwse_runs_run_hash_chk CHECK (run_identity_hash ~ '^[0-9a-f]{8}$'),
-    us_wse_max double precision NOT NULL,
-    us_min_wse_curve jsonb NOT NULL CONSTRAINT materialized_kwse_runs_curve_chk CHECK (jsonb_typeof(us_min_wse_curve) = 'array'),
+    -- Every KWSE run this reach has, grouped by discharge:
+    --   [{"q": 900, "runs": [{"wse": 226.1, "bc": 223.0}, …]}, …]
+    -- ascending by q, and by wse within each q. `bc` is the number, never the
+    -- folder string, so the one place that knows how a scenario folder is
+    -- spelled stays storage.py beside the other path builders.
+    scenario_index jsonb NOT NULL CONSTRAINT materialized_kwse_runs_index_chk CHECK (jsonb_typeof(scenario_index) = 'array'),
     applied_revision integer NOT NULL,
     confirmed_at timestamptz NOT NULL DEFAULT now()
 );
 
 COMMENT ON TABLE materialized_kwse_runs IS 'Proof that a reach KWSE intent is materialized. No discharge set: the libraries sit at the ND library discharges.';
 
-COMMENT ON COLUMN materialized_kwse_runs.us_min_wse_curve IS 'Minimum WSE at this reach upstream end per discharge across its stage libraries. The upstream reach floor is the minimum of this and the ND curve, since low-stage KWSE runs sit below the normal-depth run.';
+COMMENT ON COLUMN materialized_kwse_runs.model_id IS 'Full model_id, domain code included, because results are filed under it. Same grain as materialized_nd_runs.';
+
+COMMENT ON COLUMN materialized_kwse_runs.scenario_index IS 'Every KWSE run by discharge: [{"q":…,"runs":[{"wse":…,"bc":…}]}]. wse is the stage achieved at this reach upstream end, which the reach above matches on; bc is the stage imposed at its downstream end, which names the folder. Ceiling and floor curve are derived from this, not stored.';

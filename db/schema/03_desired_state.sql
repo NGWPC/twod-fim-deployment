@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS desired_state_defaults(
     ld_q_max_extent_prcnt_delta double precision,
     ld_ds_z_delta double precision,
     kwse_upper_bound double precision,
-    revision integer NOT NULL DEFAULT 0 -- DB owned; see 09_triggers.sql
+    revision integer NOT NULL DEFAULT 0, -- DB owned; see 09_triggers.sql
+    CONSTRAINT desired_state_defaults_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25,
+	0.5, 1, 2, 5))
 );
 
 COMMENT ON TABLE desired_state_defaults IS 'One row. What every reach falls back to for any field it has not authored. Holds the model identity inputs, so the reconciler can predict where a model belongs.';
@@ -84,7 +86,14 @@ CREATE TABLE IF NOT EXISTS desired_state(
     CONSTRAINT desired_state_kwse_bounds_chk CHECK (kwse_upper_bound IS NULL OR kwse_upper_bound > 0),
     CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_q_mean_stage_delta IS NULL OR ld_q_mean_stage_delta > 0) AND
 	(ld_q_max_stage_delta IS NULL OR ld_q_max_stage_delta > 0) AND (ld_q_max_extent_prcnt_delta IS NULL OR
-	ld_q_max_extent_prcnt_delta > 0) AND (ld_ds_z_delta IS NULL OR ld_ds_z_delta > 0))
+	ld_q_max_extent_prcnt_delta > 0) AND (ld_ds_z_delta IS NULL OR ld_ds_z_delta > 0)),
+    -- DR-033 ALT-B picks the stage increment from a fixed menu, not a
+    -- continuum, and anchors the grid it builds to zero. The menu lives here
+    -- because it is a property of authored intent: a value off it would be
+    -- intent the system can never honour, and catching that at write time beats
+    -- discovering it when a library comes out the wrong shape.
+    CONSTRAINT desired_state_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25, 0.5, 1,
+	2, 5))
 );
 
 COMMENT ON TABLE desired_state IS 'Authored intent, one row per reach. NULL field = use default source; non-NULL = authored. Preserved at all cost.';
