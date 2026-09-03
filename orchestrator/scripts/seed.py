@@ -176,14 +176,19 @@ def load_lakes(gpkg_path: Path, layer: str = LAKES_LAYER) -> list[dict]:
         for _, r in gdf.iterrows()
     ]
 
+
 def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
     """Lookup and append flow bounds to the reach dataset."""
     bounds = pd.read_parquet(q_bound_parquet)
 
     if bounds.index.name != REACH_ID_FIELD:
-        raise RuntimeError(f"Q bound parquet file is indexed by {bounds.index.name} instead of {REACH_ID_FIELD}")
+        raise RuntimeError(
+            f"Q bound parquet file is indexed by {bounds.index.name} instead of {REACH_ID_FIELD}"
+        )
     if not pd.api.types.is_integer_dtype(bounds.index):
-        raise RuntimeError(f"Q bound parquet index must be integer, got {bounds.index.dtype}")
+        raise RuntimeError(
+            f"Q bound parquet index must be integer, got {bounds.index.dtype}"
+        )
 
     duplicate_ids = list(bounds.index[bounds.index.duplicated()])
 
@@ -200,8 +205,18 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
         if isinstance(row, pd.DataFrame):
             # duplicate row
             continue
-        low = max(np.ceil(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(int), 1)
-        high = max(np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(int), 1)
+        low = max(
+            np.ceil(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(
+                int
+            ),
+            1,
+        )
+        high = max(
+            np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(
+                int
+            ),
+            1,
+        )
         if pd.isna(low) or pd.isna(high):
             nan_bounds.append(reach_id)
             continue
@@ -214,12 +229,19 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> None:
         rng = high - low
         r[DQ_STEP_FIELD] = max(int(rng / 10), 1)
     if duplicate_ids:
-        raise RuntimeError(f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}")
+        raise RuntimeError(
+            f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}"
+        )
     if missing_reaches:
-        raise RuntimeError(f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}")
+        raise RuntimeError(
+            f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}"
+        )
     if nan_bounds:
-        raise RuntimeError(f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}")
+        raise RuntimeError(
+            f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}"
+        )
     return reaches
+
 
 def lake_polygon_uri(lake_id: str) -> str:
     """Where a lake's polygon lives in storage.
@@ -314,7 +336,9 @@ def export_lake_polygons(lakes: list[dict]) -> list[str]:
     return written
 
 
-def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Path) -> None:
+def seed(
+    network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Path
+) -> None:
     reaches = load_network(network_gpkg)
     reaches = load_q_bounds(q_bound_parquet, reaches)
     lakes = load_lakes(nhf_gpkg)
@@ -385,8 +409,8 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
     print(f"  land cover    {lulc_uri}")
     if summary["outlet_terminals"]:
         print(
-            "\nWARNING: outlet terminals have no boundary polygon source, so ND\n"
-            "         cannot be submitted for them. See reconciliation-loop.md."
+            "\nNOTE: outlet terminals have no lake or coast polygon; ND will let the\n"
+            "      job derive the boundary because outflow_area_polygon_path is optional."
         )
 
 

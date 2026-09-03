@@ -56,9 +56,8 @@ class Snapshot:
     ds_nd_ok: bool = False
     ds_kwse_ok: bool = False
     # Whether a terminal reach names the water body it drains into. Read only
-    # when is_terminal: a terminal's normal-depth boundary is that body's
-    # polygon, and one that names none (a clip edge, an unclassified outlet)
-    # has no boundary and never will until someone authors one.
+    # when is_terminal: a terminal may use the named body's polygon, while a
+    # terminal that names none lets the job derive its boundary.
     has_outflow_polygon: bool = False
     # Job already submitted for this reach and not yet accounted for.
     in_flight_step: str | None = None
@@ -130,21 +129,18 @@ def _model_rung(s: Snapshot) -> Decision | None:
 
 
 def _nd_rung(s: Snapshot) -> Decision | None:
-    """The normal-depth library, which needs a boundary to drain through.
+    """The normal-depth library and its downstream dependencies.
 
     A non-terminal reach uses the downstream reach's max-q inundation polygon,
-    so it waits for that library to be proved. A terminal reach drains into a
-    lake or the coast and uses that body's polygon — and one with no body named
-    has nothing to drain through at all.
+    so it waits for that library to be proved. A terminal reach may use a lake
+    or coast polygon, but the job can also derive its boundary when no body is
+    named.
     """
     if s.nd_ok:
         return None
     if s.in_flight_step is not None:
         return InFlight(step=s.in_flight_step)
     if s.is_terminal:
-        if not s.has_outflow_polygon:
-            return AwaitingInputs(
-                step=RUN_ND, reason="terminal reach names no lake or coast to drain into")
         return RunStep(step=RUN_ND)
     if not s.ds_nd_ok:
         return WaitingDownstream(reach_id=s.downstream_reach_id, step=RUN_ND)

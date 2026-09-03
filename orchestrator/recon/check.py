@@ -286,9 +286,7 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
             feature_id = wanted[f"{kind}_to_id"]
             if feature_id is not None:
                 return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id)}
-        raise RuntimeError(
-            f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
-            "lake or coast, so it has no outflow boundary")
+        return {}
 
     downstream = wanted["reach_to_id"]
     return {

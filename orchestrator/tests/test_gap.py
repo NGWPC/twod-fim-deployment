@@ -6,8 +6,8 @@ has leaked into gap.py that does not belong there.
 
 import pytest
 
-from recon.gap import (BUILD_MODEL, RUN_ND, AwaitingInputs, InFlight, NoGap,
-                       RunStep, Snapshot, WaitingDownstream, calculate)
+from recon.gap import (BUILD_MODEL, RUN_ND, InFlight, NoGap, RunStep, Snapshot,
+                       WaitingDownstream, calculate)
 
 
 def terminal(**kw) -> Snapshot:
@@ -58,11 +58,10 @@ def test_terminal_runs_nd_once_its_model_exists():
 def test_terminal_with_model_and_nd_is_satisfied():
     assert calculate(built(nd_ok=True)) == NoGap()
 
-def test_terminal_without_a_water_body_awaits_inputs_rather_than_submitting():
-    """No lake, no coast, no boundary to drain through — and no job will make
-    one. Submitting would fail on a missing input and burn the retry budget."""
+def test_terminal_without_a_water_body_runs_without_a_polygon():
+    """The job derives the boundary when the optional polygon is absent."""
     decision = calculate(built(has_outflow_polygon=False))
-    assert isinstance(decision, AwaitingInputs) and decision.step == RUN_ND
+    assert decision == RunStep(step=RUN_ND)
 
 def test_upstream_nd_waits_for_the_downstream_library():
     """The outflow polygon is the downstream reach's max-q inundated area, so
