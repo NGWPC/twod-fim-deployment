@@ -60,9 +60,13 @@ _SNAPSHOT = """
         COALESCE(dmm.applied_revision  >= dd.revision, FALSE) AS ds_model_ok,
         COALESCE(dnd.applied_revision  >= dd.revision, FALSE) AS ds_nd_ok,
         COALESCE(dkw.applied_revision  >= dd.revision, FALSE) AS ds_kwse_ok,
+        COALESCE(drn.is_terminal, FALSE) AS ds_is_terminal,
+        (COALESCE(d.ld_ds_z_delta, f.ld_ds_z_delta) IS NOT NULL) AS has_stage_increment,
         p.current_step
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
+    CROSS JOIN desired_state_defaults f
+    LEFT JOIN reach_network drn          ON drn.reach_id = rn.reach_to_id
     LEFT JOIN materialized_models    mm  ON mm.reach_id  = d.reach_id
     LEFT JOIN materialized_nd_runs   mnd ON mnd.reach_id = d.reach_id
     LEFT JOIN materialized_kwse_runs mkw ON mkw.reach_id = d.reach_id
@@ -97,6 +101,8 @@ def load_snapshot(
         ds_model_ok=row["ds_model_ok"],
         ds_nd_ok=row["ds_nd_ok"],
         ds_kwse_ok=row["ds_kwse_ok"],
+        ds_is_terminal=row["ds_is_terminal"],
+        has_stage_increment=row["has_stage_increment"],
         in_flight_step=row["current_step"],
     )
 
@@ -490,6 +496,15 @@ RUN_ND_PROCESSES = {
     ("lisflood", False): "runNdScenariosLisfloodCpu",
     ("lisflood", True):  "runNdScenariosLisfloodGpu",
 }
+RUN_KWSE_PROCESSES = {
+    ("lisflood", False): "runKwseScenariosLisfloodCpu",
+    ("lisflood", True):  "runKwseScenariosLisfloodGpu",
+}
+
+# The steps whose process depends on the solver and the hardware. build_model is
+# absent on purpose: it runs no solver, so it has one process whatever a reach
+# asks for.
+SOLVER_PROCESSES = {gap.RUN_ND: RUN_ND_PROCESSES, gap.RUN_KWSE: RUN_KWSE_PROCESSES}
 
 
 # Whether this machine can run a solver on a GPU.
@@ -526,18 +541,19 @@ def _process_id(step: str, reach_id: int) -> str:
     """
     if step == gap.BUILD_MODEL:
         return BUILD_MODEL_PROCESS
-    if step != gap.RUN_ND:
+    processes = SOLVER_PROCESSES.get(step)
+    if processes is None:
         raise RuntimeError(f"no SEPEX process for step {step!r}")
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
     key = (wanted["solver"], gpu_available())
-    if key not in RUN_ND_PROCESSES:
+    if key not in processes:
         raise RuntimeError(
             f"no {step} process for solver {wanted['solver']!r} "
             f"({GPU_AVAILABLE_ENV}={gpu_available()}); "
-            f"built variants are {sorted(RUN_ND_PROCESSES)}")
-    return RUN_ND_PROCESSES[key]
+            f"built variants are {sorted(processes)}")
+    return processes[key]
 
 
 def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:

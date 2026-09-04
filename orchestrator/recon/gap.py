@@ -14,8 +14,15 @@ DOWNSTREAM, because results transfer upstream along the network:
           uses the downstream max-q STL
   nd      needs this model, and downstream's nd — the outflow polygon is the
           downstream max-q polygon
-  kwse    needs this model and nd, and all three downstream; terminal reaches
-          have no downstream and get no KWSE at all          (next milestone)
+  kwse    needs this model and nd, and all three downstream — its stage
+          targets are bound to real downstream runs, which have to exist
+
+Terminal reaches get no KWSE at all: there is no downstream reach to bound a
+stage library with (ISU-013, until lake and coastal stages are decided). That
+cuts both ways, and the second way is easy to miss — a reach whose DOWNSTREAM
+neighbour is terminal must not wait for a KWSE library that will never be built
+there, or nothing in the network would ever reach the rung. A terminal
+downstream counts as satisfied, having nothing to satisfy.
 
 Terminal reaches skip every downstream condition — there is nothing below
 them — which is why a fresh network starts building at its outlets.
@@ -56,6 +63,16 @@ class Snapshot:
     ds_model_ok: bool = False
     ds_nd_ok: bool = False
     ds_kwse_ok: bool = False
+    # Whether the DOWNSTREAM reach is itself terminal, meaning its stage
+    # libraries are settled by having none rather than by being built. Read only
+    # by the kwse rung, and only once this reach is known not to be terminal:
+    # a reach with no downstream at all reports FALSE here, which says nothing
+    # true and is never looked at.
+    ds_is_terminal: bool = False
+    # Whether a stage increment resolves for this reach, from its own intent or
+    # the defaults row. Nothing derives it (DR-033 ALT-B picks from a fixed
+    # menu), so without one no stage grid exists to plan.
+    has_stage_increment: bool = False
     # Job already submitted for this reach and not yet accounted for.
     in_flight_step: str | None = None
 
@@ -149,6 +166,38 @@ def _nd_rung(s: Snapshot) -> Decision | None:
     return RunStep(step=RUN_ND)
 
 
+def _kwse_rung(s: Snapshot) -> Decision | None:
+    """The stage libraries, which need real downstream runs to be bound to.
+
+    Every target is forced by the water surface of an actual downstream
+    simulation (DR-031), so this rung waits on all three of that reach's steps
+    rather than just its nd library — a target may bind to either kind.
+
+    Terminal reaches return satisfied, not blocked. They have no downstream
+    reach to bound a library with, so there is no work here and never will be
+    until lake and coastal stages are decided (ISU-013). Calling that
+    AwaitingInputs would be wrong twice over: nothing a person authors on THIS
+    reach would unblock it, and it would leave every reach above it waiting.
+
+    The missing increment is checked before the downstream condition, matching
+    reach_status, because it is the answer a person can act on and it is true
+    regardless of what the network below is doing.
+    """
+    if s.is_terminal or s.kwse_ok:
+        return None
+    if s.in_flight_step is not None:
+        return InFlight(step=s.in_flight_step)
+    if not s.has_stage_increment:
+        return AwaitingInputs(
+            step=RUN_KWSE,
+            reason="no stage increment authored on this reach or in the defaults")
+    # All three downstream steps, judged against that reach's own revision. A
+    # terminal neighbour has no kwse library to prove and is settled without one.
+    if not (s.ds_model_ok and s.ds_nd_ok and (s.ds_is_terminal or s.ds_kwse_ok)):
+        return AwaitingDownstream(reach_id=s.downstream_reach_id, step=RUN_KWSE)
+    return RunStep(step=RUN_KWSE)
+
+
 def calculate(snapshot: Snapshot) -> Decision:
     """What, if anything, should happen to this reach now.
 
@@ -165,11 +214,8 @@ def calculate(snapshot: Snapshot) -> Decision:
     if decision is not None:
         return decision
 
-    # -- seam: the kwse rung attaches after nd -----------------------------
-    # if not snapshot.is_terminal and not snapshot.kwse_ok:
-    #     needs nd_ok here plus ds_model_ok, ds_nd_ok, ds_kwse_ok; bounds per
-    #     DR-032 ALT-D come from the downstream materialized rows.
-    #     Terminal reaches get no KWSE: there is no downstream to bound one.
-    # ----------------------------------------------------------------------
+    decision = _kwse_rung(snapshot)
+    if decision is not None:
+        return decision
 
     return NoGap()

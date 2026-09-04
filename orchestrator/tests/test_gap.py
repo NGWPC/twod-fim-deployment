@@ -6,7 +6,7 @@ has leaked into gap.py that does not belong there.
 
 import pytest
 
-from recon.gap import (BUILD_MODEL, RUN_ND, InFlight, NoGap,
+from recon.gap import (BUILD_MODEL, RUN_KWSE, RUN_ND, AwaitingInputs, InFlight, NoGap,
                        RunStep, Snapshot, AwaitingDownstream, calculate)
 
 
@@ -126,3 +126,63 @@ def test_same_inputs_same_answer(snap):
 def test_snapshot_cannot_be_edited():
     with pytest.raises(Exception):
         terminal().model_ok = True  # type: ignore[misc]
+
+
+# --- the kwse rung ------------------------------------------------------
+
+def ready(**kw) -> Snapshot:
+    """A non-terminal past model and nd, with everything downstream proved."""
+    return upstream(**{"model_ok": True, "nd_ok": True, "ds_model_ok": True,
+                       "ds_nd_ok": True, "ds_kwse_ok": True,
+                       "has_stage_increment": True, **kw})
+
+
+def test_kwse_runs_once_everything_below_is_proved():
+    assert calculate(ready()) == RunStep(step=RUN_KWSE)
+
+
+def test_kwse_satisfied_is_the_end_of_the_ladder():
+    assert calculate(ready(kwse_ok=True)) == NoGap()
+
+
+def test_a_terminal_reach_is_finished_after_nd_not_awaiting_kwse():
+    """ISU-013. Nothing below it can bound a stage library, and no job will
+    make one, so the ladder ends at nd rather than reporting a gap forever."""
+    assert calculate(terminal(model_ok=True, nd_ok=True)) == NoGap()
+
+
+def test_a_terminal_downstream_does_not_block_the_reach_above():
+    """The trap: a terminal neighbour never gets a kwse row, so waiting on one
+    would strand the whole network above it. It is settled by having none."""
+    snap = ready(ds_kwse_ok=False, ds_is_terminal=True)
+    assert calculate(snap) == RunStep(step=RUN_KWSE)
+
+
+def test_kwse_waits_for_the_downstream_stage_libraries():
+    decision = calculate(ready(ds_kwse_ok=False))
+    assert isinstance(decision, AwaitingDownstream) and decision.step == RUN_KWSE
+
+
+@pytest.mark.parametrize("missing", ["ds_model_ok", "ds_nd_ok"])
+def test_kwse_waits_if_the_downstream_reach_regresses(missing):
+    """model_ok and nd_ok here do not re-check downstream, so a neighbour that
+    lost its model is only caught at this rung."""
+    decision = calculate(ready(**{missing: False}))
+    assert isinstance(decision, AwaitingDownstream) and decision.step == RUN_KWSE
+
+
+def test_no_stage_increment_awaits_a_person_rather_than_submitting():
+    """Nothing derives it, so submitting would fail and burn the retry budget."""
+    decision = calculate(ready(has_stage_increment=False))
+    assert isinstance(decision, AwaitingInputs) and decision.step == RUN_KWSE
+
+
+def test_a_missing_increment_outranks_a_missing_downstream_library():
+    """Matches reach_status: report the answer a person can act on."""
+    decision = calculate(ready(has_stage_increment=False, ds_kwse_ok=False))
+    assert isinstance(decision, AwaitingInputs)
+
+
+def test_an_in_flight_job_suppresses_the_kwse_rung_too():
+    snap = ready(in_flight_step=RUN_KWSE)
+    assert calculate(snap) == InFlight(step=RUN_KWSE)
