@@ -69,11 +69,7 @@ SOLVER = "lisflood"
 # stage library is ever planned. It is set here so a seeded deployment can run
 # the whole ladder without anyone having to know that.
 #
-# 2 m is deliberately coarse. It is the cheapest increment that still produces a
-# multi-stage library, which is what you want while confirming the machinery is
-# right; tighten it per reach once fidelity rather than correctness is the
-# question.
-LD_DS_Z_DELTA = 2.0
+LD_DS_Z_DELTA = 1.0
 # Library resolution (DR-030), as the acceptance RANGE of each criterion, per the
 # contract agreed with the jobs repo. All three are measured over WET CELLS ONLY
 # and describe the increase between consecutive library discharges.
@@ -81,8 +77,8 @@ LD_DS_Z_DELTA = 2.0
 # Authored but not yet wired: nothing sends these to a job and nothing checks
 # them, pending the jobs-repo side. They are seeded now so the values are in one
 # place, under review, when that lands.
-LD_Q_MAX_DEPTH_INCREASE_RANGE = "[0.75,1.25]"        # m
-LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.25,0.5]"      # m
+LD_Q_MAX_DEPTH_INCREASE_RANGE = "[0.75,1.25]"  # m
+LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.25,0.5]"  # m
 LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[7.5,12.5]"  # percent, so 7.5 = 7.5%
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 # An address, not a mounted path: the raster is uploaded to storage by seed.py,
@@ -466,8 +462,9 @@ def author(scope: str, q_bound_parquet: Path) -> None:
         reaches = db.query(_NETWORK, conn=conn)
         if not reaches:
             sys.exit("reach_network is empty; run scripts/seed.py first")
-        authored = ({r["reach_id"] for r in reaches} if scope == "all"
-                    else set(E2E_REACHES))
+        authored = (
+            {r["reach_id"] for r in reaches} if scope == "all" else set(E2E_REACHES)
+        )
         covered = verify_scope(reaches, authored)
 
         in_scope = load_q_bounds(
@@ -526,7 +523,7 @@ def author(scope: str, q_bound_parquet: Path) -> None:
         # nobody reads these bounds back as the methodology — and say which
         # factors a tight reach had to give up to stay a valid range.
         was, factors = r.get("narrowed"), r.get("factors")
-        if factors is None:          # not the e2e scope; nothing was narrowed
+        if factors is None:  # not the e2e scope; nothing was narrowed
             note = ""
         elif was is None:
             note = "  (no room to narrow)"
@@ -534,7 +531,9 @@ def author(scope: str, q_bound_parquet: Path) -> None:
             note = f"  (from {was[0]}-{was[1]}, lower factor given up for room)"
         else:
             note = f"  (from {was[0]}-{was[1]})"
-        print(f"  {reach_id}  {rng:>16}, dq {r[DQ_STEP_FIELD]:>3}{note}  {', '.join(cases)}")
+        print(
+            f"  {reach_id}  {rng:>16}, dq {r[DQ_STEP_FIELD]:>3}{note}  {', '.join(cases)}"
+        )
     for case, why in UNCOVERABLE.items():
         print(f"  not covered   {case} ({why})")
 
@@ -548,7 +547,7 @@ def main() -> None:
         choices=("e2e", "all"),
         default="e2e",
         help="reaches to author for, and whether the range is narrowed "
-             "(default: e2e, seven reaches with bounds pulled inside DR-029)",
+        "(default: e2e, seven reaches with bounds pulled inside DR-029)",
     )
     ap.add_argument(
         "--q-bound-parquet",
@@ -564,8 +563,10 @@ def main() -> None:
     print(f"scope    {args.scope}")
     print(f"q bounds {args.q_bound_parquet}")
     if args.scope == "e2e":
-        print(f"bounds   narrowed to {E2E_Q_LOWER_FACTOR}x lower, "
-              f"{E2E_Q_UPPER_FACTOR}x upper (fixture only, not DR-029)")
+        print(
+            f"bounds   narrowed to {E2E_Q_LOWER_FACTOR}x lower, "
+            f"{E2E_Q_UPPER_FACTOR}x upper (fixture only, not DR-029)"
+        )
     print()
     author(args.scope, args.q_bound_parquet)
 

@@ -18,6 +18,10 @@ config:
   maxResources:
     cpus: 3
     memory: 2048
+    # The image is the CUDA build of lisflood. Without this the container starts
+    # with no device, CUDA fails to initialise, and lisflood exits within a
+    # second — long before any of the payload is wrong.
+    gpus: 1
   envVars:
     - RUNKWSESCENARIOSLISFLOODGPU_AWS_ENDPOINT_URL
     - RUNKWSESCENARIOSLISFLOODGPU_AWS_ACCESS_KEY_ID

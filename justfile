@@ -24,11 +24,39 @@ up-hybrid: network
 down-hybrid:
     docker compose -f docker-compose-local.yml down
 
-# Wipe all data (delete container-owned db files via a root container first)
-wipe: down-local
-    -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/db
-    -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/minio
+# Wipe sepex only
+wipe-sepex: down-local
     -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/sepex
+
+# Wipe db only
+wipe-db: down-local
+    -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/db
+
+# Delete ALL local data: database, bucket, SEPEX state (asks first)
+wipe confirm="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    DATA="{{justfile_directory()}}/.data"
+    if [ "{{confirm}}" != "force" ]; then
+      echo "About to permanently delete:"
+      for d in db minio sepex; do
+        [ -e "$DATA/$d" ] && echo "  .data/$d   $(du -sh "$DATA/$d" 2>/dev/null | cut -f1)"
+      done
+      if docker exec twodfim-db pg_isready -U twodfim -d twodfim >/dev/null 2>&1; then
+        docker exec twodfim-db psql -U twodfim -d twodfim -tAc \
+          "SELECT '  holding: '||(SELECT count(*) FROM materialized_models)||' model(s), '
+                  ||(SELECT count(*) FROM materialized_nd_runs)||' nd, '
+                  ||(SELECT count(*) FROM materialized_kwse_runs)||' kwse'" 2>/dev/null
+      fi
+      echo
+      read -r -p "Type 'wipe' to confirm: " reply
+      if [ "$reply" != "wipe" ]; then
+        echo "Aborted. Nothing deleted, stack untouched."
+        exit 1
+      fi
+    fi
+    just down-local
+    docker run --rm -v "$DATA":/data alpine rm -rf /data/db /data/minio /data/sepex
 
 # Load the network into the database and storage (truncates reach_network)
 seed:
