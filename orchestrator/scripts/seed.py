@@ -61,6 +61,20 @@ DQ_STEP_FIELD = "initial_dq_step_for_nd"
 # nothing it builds will be found where it looked.
 SDR_COMMIT = "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a"
 SOLVER = "lisflood"
+# Stage increment for the KWSE libraries, in metres. DR-033 ALT-B allows only
+# {0.25, 0.5, 1, 2, 5} and a CHECK constraint enforces it, because the grid it
+# builds is anchored to zero and nothing derives the value.
+#
+# Nothing else in the system supplies it either, so leaving it NULL is not a
+# neutral default: every non-terminal reach then reports awaiting_inputs and no
+# stage library is ever planned. It is set here so a seeded deployment can run
+# the whole ladder without anyone having to know that.
+#
+# 2 m is deliberately coarse. It is the cheapest increment that still produces a
+# multi-stage library, which is what you want while confirming the machinery is
+# right; tighten it per reach once fidelity rather than correctness is the
+# question.
+LD_DS_Z_DELTA = 2.0
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 # An address, not a mounted path: the raster is uploaded to storage by this
 # script, so a job reads it wherever it runs without a volume being arranged.
@@ -325,14 +339,15 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
         conn.execute(
             """INSERT INTO desired_state_defaults
                    (sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
-                    lulc_lookup, solver)
-               VALUES (%s, 10, 5070, %s, %s, %s, %s)""",
+                    lulc_lookup, solver, ld_ds_z_delta)
+               VALUES (%s, 10, 5070, %s, %s, %s, %s, %s)""",
             (
                 SDR_COMMIT,
                 DEM_SOURCE,
                 LULC_SOURCE,
                 json.dumps(LULC_LOOKUP),
                 SOLVER,
+                LD_DS_Z_DELTA,
             ),
         )
 
@@ -384,9 +399,12 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
     print(f"  network       {network_uri}")
     print(f"  land cover    {lulc_uri}")
     if summary["outlet_terminals"]:
+        # Not a warning any more. An outlet names no lake or coast, and needs
+        # none: the outflow polygon input is optional and the run job derives an
+        # area from the model's own domain and centreline when it is absent.
         print(
-            "\nWARNING: outlet terminals have no boundary polygon source, so ND\n"
-            "         cannot be submitted for them. See reconciliation-loop.md."
+            f"\nNote: {summary['outlet_terminals']} outlet terminal(s) name no water body.\n"
+            "      Their outflow area is derived by the run job from the model itself."
         )
 
 

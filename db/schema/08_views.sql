@@ -80,11 +80,17 @@ SELECT
         -- until a person acts is not a reach that is done.
         'awaiting_inputs'
     WHEN mm.applied_revision >= d.revision
-        AND nd.applied_revision >= d.revision THEN
-        -- Every implemented step satisfied at the current revision. Each step
-        -- carries its own revision and this is their conjunction, so a reach is
-        -- finished only when all of them are current. The kwse claim joins this
-        -- AND when that step is implemented.
+        AND nd.applied_revision >= d.revision
+        AND (rn.is_terminal
+            OR kw.applied_revision >= d.revision) THEN
+        -- Every step satisfied at the current revision. Each carries its own
+        -- revision and this is their conjunction, so a reach is finished only
+        -- when all of them are current.
+        --
+        -- Terminal reaches are excused the kwse claim rather than failing it.
+        -- They get no stage library at all (ISU-013), so no row will ever
+        -- appear, and requiring one would leave every outlet unfinished
+        -- forever — and with it every reach that waits on an outlet.
         --
         -- This outranks 'new' deliberately: a reach whose work is materialized
         -- and current is finished whether or not the loop has ever looked at
@@ -120,7 +126,9 @@ SELECT
     -- older intent" answer the same way, which is what the loop wants.
     (d.reach_id IS NOT NULL
         AND (COALESCE(mm.applied_revision, - 1) < d.revision
-            OR COALESCE(nd.applied_revision, - 1) < d.revision)) AS has_gap,
+            OR COALESCE(nd.applied_revision, - 1) < d.revision
+            OR (NOT rn.is_terminal
+                AND COALESCE(kw.applied_revision, - 1) < d.revision))) AS has_gap,
     -- Presence of a run row IS the proof that step is materialized, so these
     -- are booleans rather than counts of anything.
     (nd.reach_id IS NOT NULL) AS nd_materialized,
@@ -130,6 +138,10 @@ SELECT
     nd.us_wse_max AS nd_us_wse_max,
     nd.confirmed_at AS nd_confirmed_at,
     (kw.reach_id IS NOT NULL) AS kwse_materialized,
+    COALESCE(kw.applied_revision, - 1) AS kwse_applied_revision,
+    -- How many stage scenarios the library holds, across every discharge.
+    (SELECT count(*) FROM jsonb_array_elements(kw.scenario_index) g,
+                          jsonb_array_elements(g -> 'runs') r) AS kwse_scenarios,
     p.consecutive_failures,
     p.last_error,
     p.next_retry_at,

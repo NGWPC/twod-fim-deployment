@@ -20,8 +20,13 @@ from recon import db
 # noticed at all. Suppressing resubmission is the gap calculation's job, not
 # this query's.
 # "Intent moved" is judged against the materialized proofs, which is where the
-# satisfied revision lives now. Model and nd are judged here; kwse joins the OR
-# when that step arrives. Note what including a step costs: a reach stays due
+# satisfied revision lives now — all three steps.
+#
+# Kwse is asked only of non-terminal reaches. A terminal one gets no stage
+# library at all (ISU-013), so it never gets a row, and a clause that did not
+# exclude it would leave every outlet permanently due: checked on every sweep,
+# forever, for work that will never exist. Note what including a step costs: a
+# reach stays due
 # until that step is proved, so every reach still climbing the ladder is
 # re-checked each sweep. That is the documented design — a blocked reach stays a
 # candidate — and it is what lets a reach move the moment its downstream
@@ -35,16 +40,22 @@ _DUE = """
         d.revision,
         p.reach_id IS NULL                             AS never_checked,
         (COALESCE(mm.applied_revision,  -1) < d.revision
-         OR COALESCE(mnd.applied_revision, -1) < d.revision) AS intent_moved,
+         OR COALESCE(mnd.applied_revision, -1) < d.revision
+         OR (NOT rn.is_terminal
+             AND COALESCE(mkw.applied_revision, -1) < d.revision)) AS intent_moved,
         COALESCE(p.check_requested_at > p.last_checked_at, FALSE) AS outstanding_check_request,
         p.current_step
     FROM desired_state d
+    JOIN reach_network rn USING (reach_id)
     LEFT JOIN reach_processing p USING (reach_id)
-    LEFT JOIN materialized_models   mm  USING (reach_id)
+    LEFT JOIN materialized_models    mm  USING (reach_id)
     LEFT JOIN materialized_nd_runs   mnd USING (reach_id)
+    LEFT JOIN materialized_kwse_runs mkw USING (reach_id)
     WHERE (p.reach_id IS NULL
            OR COALESCE(mm.applied_revision,  -1) < d.revision
            OR COALESCE(mnd.applied_revision, -1) < d.revision
+           OR (NOT rn.is_terminal
+               AND COALESCE(mkw.applied_revision, -1) < d.revision)
            OR p.check_requested_at > p.last_checked_at)
       AND NOT COALESCE(p.halted, FALSE)
       AND (p.next_retry_at IS NULL OR p.next_retry_at <= now())
