@@ -24,7 +24,7 @@ import logging
 
 import psycopg
 
-from recon import db, identity, intent, storage
+from recon import db, identity, intent, scenarios, storage
 
 logger = logging.getLogger(__name__)
 
@@ -217,3 +217,112 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                or before["applied_revision"] != wanted["revision"])
     return {**out, "found": f"{len(discharges)} scenarios", "q_set": discharges,
             "us_wse_max": us_wse_max, "changed": changed, "refused": refused}
+
+
+def observe_kwse_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
+    """Reconcile materialized_kwse_runs for one reach against storage.
+
+    The address is a prediction all the way down, unlike the nd case. Intent
+    fixes the model and run identity, and the loop itself chose every stage
+    target, so there is nothing here to discover by listing — each scenario is
+    looked up at the exact folder the plan names.
+
+    WHAT IS ASKED FOR IS THE PLAN, NOT THE GRID. DR-033 skips a stage target
+    with no downstream run within Δz/2, so a check that looked for every stage
+    between the bounds could never be satisfied: it would find the library short
+    on every pass, resubmit forever with no backoff, and never let the reach
+    above it start. plan.py is a function of current state, so the plan
+    recomputed here is the plan the job was given, and a skipped target is
+    absent from both.
+
+    An empty plan is materialized, not pending. A reach whose whole envelope was
+    skipped, or whose ceiling sat below its floor, is asking for nothing and has
+    it — recording that unblocks the reach above rather than stalling it.
+
+    Anything short of every planned scenario writes no row. A row is proof, and
+    proof of a partial library is not a smaller proof, it is none.
+    """
+    out: dict = {"reach_id": reach_id, "step": "kwse", "found": None, "changed": False}
+    before = db.one("SELECT run_identity_hash, scenario_index, applied_revision"
+                    " FROM materialized_kwse_runs WHERE reach_id = %s",
+                    (reach_id,), conn=conn)
+
+    def retract(note: str) -> dict:
+        removed = bool(db.query(
+            "DELETE FROM materialized_kwse_runs WHERE reach_id = %s RETURNING reach_id",
+            (reach_id,), conn=conn))
+        return {**out, "changed": removed, "note": note}
+
+    wanted = intent.effective(reach_id, conn=conn)
+    if wanted is None:
+        return retract("no effective intent")
+
+    # Runs are addressed under the model they were run against, so a reach whose
+    # model intent is not itself materialized has nowhere to look.
+    _, predicted_model = identity.model_identity(wanted)
+    model = db.one("SELECT identity_hash FROM materialized_models WHERE reach_id = %s",
+                   (reach_id,), conn=conn)
+    if model is None:
+        return retract("no materialized model")
+    if model["identity_hash"] != predicted_model:
+        return retract(f"materialized model {model['identity_hash']} is not the "
+                       f"{predicted_model} intent now implies")
+
+    try:
+        context = scenarios.planned(reach_id, conn=conn)
+    except scenarios.NotPlannable as why:
+        # Includes the ordinary cases: a terminal reach, or a downstream
+        # neighbour still building. The gap calculation reports which.
+        return retract(str(why))
+
+    out["planned"] = len(context.plan.scenarios)
+    out["skipped"] = len(context.plan.skipped)
+
+    index: dict[int, list[dict]] = {}
+    refused = []
+    for scenario in context.plan.scenarios:
+        folder = scenarios.scenario_dir("KWSE", scenario.z, scenario.q)
+        path = storage.scenario_manifest_path(
+            reach_id, context.model_id, context.run_identity_hash, folder)
+        manifest = storage.read_json(path)
+        if manifest is None:
+            return {**retract(f"scenario kwse={scenario.z:g}/q={scenario.q} has no "
+                              "manifest yet"), "refused": refused}
+        problems = identity.verify_scenario_manifest(
+            manifest, reach_id, context.run_identity_hash, context.model_id, folder)
+        if problems:
+            refused.append({"scenario": folder, "problems": problems})
+            logger.warning("refused scenario manifest at %s: %s", path, problems)
+            return {**retract(f"scenario {folder} refused"), "refused": refused}
+        # The two stages this run carries: what it achieved at this reach's
+        # upstream end, which the reach above matches against, and what was
+        # imposed at its downstream end, which named the folder it sits in.
+        index.setdefault(scenario.q, []).append(
+            {"wse": float(manifest["properties"]["nominal_wse"]), "bc": scenario.z})
+
+    scenario_index = [{"q": q, "runs": sorted(runs, key=lambda r: r["wse"])}
+                      for q, runs in sorted(index.items())]
+
+    db.query(
+        """
+        INSERT INTO materialized_kwse_runs
+            (reach_id, model_id, run_identity_hash, scenario_index,
+             applied_revision, confirmed_at)
+        VALUES (%s, %s, %s, %s, %s, now())
+        ON CONFLICT (reach_id) DO UPDATE SET
+            model_id          = EXCLUDED.model_id,
+            run_identity_hash = EXCLUDED.run_identity_hash,
+            scenario_index    = EXCLUDED.scenario_index,
+            applied_revision  = EXCLUDED.applied_revision,
+            confirmed_at      = now()
+        """,
+        (reach_id, context.model_id, context.run_identity_hash,
+         json.dumps(scenario_index), wanted["revision"]),
+        conn=conn,
+    )
+    changed = (before is None
+               or before["run_identity_hash"] != context.run_identity_hash
+               or before["scenario_index"] != scenario_index
+               or before["applied_revision"] != wanted["revision"])
+    return {**out, "found": f"{len(context.plan.scenarios)} scenarios",
+            "changed": changed, "refused": refused}

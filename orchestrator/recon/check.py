@@ -18,8 +18,8 @@ from typing import Any
 import psycopg
 from shapely.geometry import shape
 
-from recon import (activity, db, gap, identity, intent, observe, plan,
-                   processing, queue, storage)
+from recon import (activity, db, gap, identity, intent, observe,
+                   processing, queue, scenarios, storage)
 from recon.config import settings
 from recon.execution import ExecutionService
 
@@ -342,63 +342,6 @@ def _run_nd_payload(reach_id: int) -> dict:
     }
 
 
-def _nd_slope(reach_id: int, model_id: str, run_hash: str) -> float:
-    """The slope naming this reach's own `nd=<slope>` folder.
-
-    Emergent — the job derives it from the reach's own DEM — so the folder the
-    job created is the only place it can be read. Recovering it is enough to
-    name that folder again, which is all a hotstart reference needs.
-    """
-    library = storage.nd_library_path(reach_id, model_id, run_hash)
-    if library is None:
-        raise RuntimeError(f"reach {reach_id} has no single nd=<slope> folder to seed from")
-    slope = identity.parse_nd_folder(library.rsplit("/", 1)[-1])
-    if slope is None:
-        raise RuntimeError(f"reach {reach_id} nd folder {library} does not name a slope")
-    return slope
-
-
-def _downstream_runs(downstream_id: int) -> list[plan.DownstreamRun]:
-    """Every scenario the downstream reach has, as candidate boundaries.
-
-    Assembled from BOTH of that reach's proofs, because a low target often binds
-    to its normal-depth run and a higher one to its stage libraries, and DR-033
-    draws no distinction — it takes whichever achieved stage sits nearest.
-
-    Each run contributes two different stages. The achieved one comes from the
-    materialized rows; the imposed one is what names the folder, and for a
-    normal-depth run that is the slope, read back from the folder itself.
-    """
-    nd = db.one("SELECT model_id, run_identity_hash, us_min_wse_curve"
-                " FROM materialized_nd_runs WHERE reach_id = %s", (downstream_id,))
-    if nd is None:
-        raise RuntimeError(f"downstream reach {downstream_id} has no materialized nd library")
-
-    # One ND run per discharge, so the per-discharge minimum IS that run's
-    # achieved stage — there is nothing else at that discharge to be lower.
-    slope = _nd_slope(downstream_id, nd["model_id"], nd["run_identity_hash"])
-    runs = [plan.DownstreamRun(q=int(point["q"]), wse=float(point["wse"]),
-                               bc_type="ND", bc_value=slope)
-            for point in nd["us_min_wse_curve"]]
-
-    kwse = db.one("SELECT scenario_index FROM materialized_kwse_runs WHERE reach_id = %s",
-                  (downstream_id,))
-    if kwse is not None:
-        runs += [plan.DownstreamRun(q=int(group["q"]), wse=float(r["wse"]),
-                                    bc_type="KWSE", bc_value=float(r["bc"]))
-                 for group in kwse["scenario_index"] for r in group["runs"]]
-    return runs
-
-
-def _scenario_href(reach_id: int, model_id: str, run_hash: str,
-                   run: plan.DownstreamRun) -> str:
-    """The manifest of one downstream scenario, addressed by its IMPOSED stage."""
-    folder = (identity.nd_folder(run.bc_value) if run.bc_type == "ND"
-              else identity.kwse_folder(run.bc_value))
-    return storage.scenario_manifest_path(
-        reach_id, model_id, run_hash, f"{folder}/{identity.q_folder(run.q)}")
-
-
 def _run_kwse_payload(reach_id: int) -> dict:
     """What run_kwse_scenarios needs to build the stage libraries intent asks for.
 
@@ -413,42 +356,18 @@ def _run_kwse_payload(reach_id: int) -> dict:
     every seed names a scenario earlier in the list, so reordering here would
     point a run at a depth grid that does not exist yet.
     """
-    wanted = intent.effective(reach_id)
-    if wanted is None:
-        raise RuntimeError(f"no effective intent for reach {reach_id}")
-    if wanted["ld_ds_z_delta"] is None:
-        raise RuntimeError(f"reach {reach_id} has no ld_ds_z_delta; kwse cannot be submitted")
-    if wanted["is_terminal"]:
-        # No downstream reach means no stage library can be bounded at all.
-        # ISU-013: closes when lake and coastal stages are decided (DR-036).
-        raise RuntimeError(f"reach {reach_id} is terminal, so it has no downstream stages")
+    try:
+        context = scenarios.planned(reach_id)
+    except scenarios.NotPlannable as why:
+        raise RuntimeError(str(why)) from why
 
-    model = db.one("SELECT model_id FROM materialized_models WHERE reach_id = %s",
-                   (reach_id,))
-    own_nd = db.one("SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
-                    " WHERE reach_id = %s", (reach_id,))
-    if model is None or own_nd is None:
-        raise RuntimeError(f"reach {reach_id} needs a materialized model and nd library first")
-
-    downstream_id = wanted["reach_to_id"]
-    downstream = _downstream_runs(downstream_id)
-    ds_nd = db.one("SELECT model_id, run_identity_hash FROM materialized_nd_runs"
-                   " WHERE reach_id = %s", (downstream_id,))
-
-    result = plan.plan(
-        q_set=list(own_nd["q_set"]),
-        dz=float(wanted["ld_ds_z_delta"]),
-        downstream=downstream,
-        nd_slope=_nd_slope(reach_id, own_nd["model_id"], own_nd["run_identity_hash"]),
-        kwse_upper_bound=(None if wanted["kwse_upper_bound"] is None
-                          else float(wanted["kwse_upper_bound"])),
-    )
-
-    scenarios = [{
+    payload_scenarios = [{
         "upstream_discharge": s.q,
         "bc_value": s.z,
-        "downstream_Scenario": _scenario_href(
-            downstream_id, ds_nd["model_id"], ds_nd["run_identity_hash"], s.downstream),
+        "downstream_Scenario": storage.scenario_manifest_path(
+            context.downstream_id, context.ds_model_id, context.ds_run_identity_hash,
+            scenarios.scenario_dir(s.downstream.bc_type, s.downstream.bc_value,
+                                   s.downstream.q)),
         "hotstart": {
             "upstream_discharge": s.seed.q,
             "bc_type": s.seed.bc_type,
@@ -456,14 +375,14 @@ def _run_kwse_payload(reach_id: int) -> dict:
             # Named rather than defaulted: the job's default is baked into its
             # image, and this is the hash the loop predicted and will later
             # observe against.
-            "identity_hash": own_nd["run_identity_hash"],
+            "identity_hash": context.run_identity_hash,
         },
-    } for s in result.scenarios]
+    } for s in context.plan.scenarios]
 
     return {
-        "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
+        "model_manifest_path": storage.model_artifact_path(reach_id, context.model_id),
         "model_results_base_path": storage.results_root(),
-        "scenarios": scenarios,
+        "scenarios": payload_scenarios,
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
     }
@@ -572,18 +491,22 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
     seen_nd = observe.observe_nd_runs(reach_id)
+    seen_kwse = observe.observe_kwse_runs(reach_id)
     # A change to this reach's nd proof changes what the reaches above it can
     # do: it is their outflow boundary, so one appearing unblocks them and one
     # being retracted invalidates work they may already have started. Told here
     # rather than at submission because this is the moment it becomes true —
     # and unlike submission, it also covers a library that has gone away.
-    if seen_nd.get("changed"):
+    # A kwse library counts for the same reason: the reach above reads the
+    # minimum across BOTH of this reach's tables to find its own floor, so a
+    # stage library appearing lowers that floor and widens what it can run.
+    if seen_nd.get("changed") or seen_kwse.get("changed"):
         queue.request_check_upstream(reach_id)
 
     # Work landing is what ends a failure streak. Adoption — a step's proof that
     # was not there before — is that signal; a retraction is not, which is why
     # `found` is tested alongside `changed`.
-    if any(o.get("changed") and o.get("found") for o in (seen, seen_nd)):
+    if any(o.get("changed") and o.get("found") for o in (seen, seen_nd, seen_kwse)):
         processing.clear_failures(reach_id)
 
     snapshot = load_snapshot(reach_id)
@@ -593,10 +516,11 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
         return CheckResult(reach_id, -1, "skipped", seen, note=note)
 
     event = activity.begin(reach_id, "check", snapshot.revision,
-                           {"model": seen.get("found"), "nd": seen_nd.get("found")})
+                           {"model": seen.get("found"), "nd": seen_nd.get("found"),
+                            "kwse": seen_kwse.get("found")})
     decision = gap.calculate(snapshot)
     result = CheckResult(reach_id, snapshot.revision, type(decision).__name__,
-                         {"model": seen, "nd": seen_nd})
+                         {"model": seen, "nd": seen_nd, "kwse": seen_kwse})
 
     try:
         if isinstance(decision, gap.NoGap):
