@@ -34,7 +34,7 @@ def job_scenario_out_dir(base_out_dir: str) -> str:
 def test_the_loop_looks_where_the_job_writes():
     """The whole point: one path, built two ways, must be the same string."""
     written = job_scenario_out_dir(storage.results_root())
-    looked_at = (f"{storage.nd_run_base_path(REACH, MODEL_ID, RUN_HASH)}"
+    looked_at = (f"{storage.run_base_path(REACH, MODEL_ID, RUN_HASH)}"
                  f"/{ND_FOLDER}/{Q_FOLDER}")
     assert written == looked_at
 
@@ -52,7 +52,7 @@ def test_runs_are_filed_under_the_whole_model_id():
     """Domain code included. A run is only ever verified against the exact
     model_id materialized now, so the address has to carry the same thing the
     verification compares."""
-    base = storage.nd_run_base_path(REACH, MODEL_ID, RUN_HASH)
+    base = storage.run_base_path(REACH, MODEL_ID, RUN_HASH)
     assert f"/{MODEL_ID}/" in base
     identity_hash, _, domain_code = MODEL_ID.partition("_")
     assert f"/{identity_hash}/{RUN_HASH}" not in base, (

@@ -63,8 +63,13 @@ def results_root() -> str:
     return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/results"
 
 
-def nd_run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
-    """Where one run identity's normal-depth work lives, above the nd=<slope> folder."""
+def run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
+    """Everything one run identity produced for this reach, above the scenario folders.
+
+    Not normal-depth specific. A run identity is the solver plus the methodology
+    pin, so a reach's `nd=<slope>` and every `kwse=<stage>` folder are siblings
+    under this one prefix.
+    """
     return f"{results_root()}/reach={reach_id}/{model_id}/{run_identity_hash}"
 
 
@@ -80,7 +85,7 @@ def nd_library_path(
     than exactly one nd=<slope> folder — more than one should not happen for
     a deterministic job and is logged rather than guessed at.
     """
-    base = nd_run_base_path(reach_id, model_id, run_identity_hash)
+    base = run_base_path(reach_id, model_id, run_identity_hash)
     found = list_subfolders(base, prefix="nd=")
     if len(found) != 1:
         if found:
@@ -176,3 +181,15 @@ def read_json(path: str) -> dict | None:
     import json
 
     return json.loads(body)
+
+
+def scenario_manifest_path(
+    reach_id: int, model_id: str, run_identity_hash: str, scenario_dir: str
+) -> str:
+    """The manifest of one scenario, given the folder its realization names.
+
+    `scenario_dir` is the `<nd=…|kwse=…>/q=…` pair, built by identity.py so that
+    the rendering of a boundary value lives in exactly one place.
+    """
+    return (f"{run_base_path(reach_id, model_id, run_identity_hash)}"
+            f"/{scenario_dir}/{SCENARIO_MANIFEST_FILENAME}")

@@ -198,6 +198,57 @@ def parse_q_folder(name: str) -> int | None:
         return None
 
 
+# The downstream half of a scenario folder. Mirrors format_downstream_string in
+# the jobs repo, whose precision constants are copied here for the same reason
+# the hashing recipe is: the loop has to name a folder the job will also name,
+# without launching a container to ask.
+RUN_NAME_KWSE_ROUNDING_PRECISION = 1
+RUN_NAME_SLOPE_ROUNDING_PRECISION = 1
+
+
+def kwse_folder(z: float) -> str:
+    """The `kwse=<stage>` folder for one KWSE scenario.
+
+    The stage is the one IMPOSED at this reach's downstream end — the grid
+    target — not whatever the run went on to achieve at its upstream end. One
+    decimal place, so a 0.25 m grid renders 224.25 as `kwse=224.2`; that is
+    lossy but consistent, because the loop and the job round identically and
+    neither ever parses a stage back out of a folder name.
+    """
+    return f"kwse={z:.{RUN_NAME_KWSE_ROUNDING_PRECISION}f}"
+
+
+def nd_folder(slope: float) -> str:
+    """The `nd=<slope>` folder holding a reach's normal-depth library.
+
+    Scientific notation with the sign stripped, which is what the job does. That
+    makes the rendering lossy in a way worth knowing: 1.2e4 and 1.2e-4 both come
+    out `nd=1.2E04`, so a folder name cannot tell you a slope's sign.
+    """
+    formatted = (
+        f"{slope:.{RUN_NAME_SLOPE_ROUNDING_PRECISION}e}"
+        .replace("-", "").replace("+", "").replace("e", "E")
+    )
+    return f"nd={formatted}"
+
+
+def parse_nd_folder(name: str) -> float | None:
+    """The slope an `nd=<value>` folder names, or None if it is not one.
+
+    Needed because the slope is emergent — the job derives it from the reach's
+    own DEM — so the only place the loop can read it is the folder the job
+    created. Recovering it is enough to name that folder again, which is all a
+    hotstart reference needs, even though the sign stripping above means the
+    value recovered is not necessarily the slope the job started from.
+    """
+    if not name.startswith("nd="):
+        return None
+    try:
+        return float(name[3:].replace("E", "e"))
+    except ValueError:
+        return None
+
+
 # The scenario's realization code and the folder it lives in are two renderings
 # of the same thing, produced by one pair of functions in the jobs repo
 # (utils/naming.py: get_scenario_code and get_scenario_dir_name share their

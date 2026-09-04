@@ -120,6 +120,6 @@ COMMENT ON COLUMN desired_state.ld_ds_z_delta IS 'Downstream KWSE standard stage
 
 COMMENT ON COLUMN desired_state.q_set IS 'Explicitly authored library discharges (cms); NULL = system computes via the adaptive sweep (DR-030).';
 
-COMMENT ON COLUMN desired_state.kwse_upper_bound IS 'Authored upper KWSE bound (m); lower bound is floored by normal-depth WSEL (DR-032). NULL = system computes.';
+COMMENT ON COLUMN desired_state.kwse_upper_bound IS 'Authored ceiling for the stage library (m). Only lowers the computed ceiling, never raises it: nothing can be modelled above a stage the downstream reach never reached. NULL = the system computes it as that reach''s highest upstream-end WSE, one value for every discharge (DR-032 ALT-D). No floor is authored: it comes per discharge from the downstream reach''s minimum, and is deliberately NOT floored by this reach''s own normal depth — that was ALT-C, superseded 2026-07-21 because a too-flat slope pushed normal-depth stages above the downstream reach''s own.';
 
 COMMENT ON COLUMN desired_state.revision IS 'DB owned, per reach: 0 on INSERT, +1 on any real UPDATE (09_triggers.sql). Counts how many times this reach''s intent has changed.';

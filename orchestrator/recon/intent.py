@@ -33,7 +33,17 @@ _EFFECTIVE = """
         COALESCE(d.solver,          f.solver)          AS solver,
         d.q_lower_bound,
         d.q_upper_bound,
-        d.initial_dq_step_for_nd
+        d.initial_dq_step_for_nd,
+        -- Authored library discharges. Per reach only: desired_state_defaults
+        -- has no q_set, because one deployment-wide list of discharges would
+        -- mean nothing across reaches of different size. NULL = the nd job's
+        -- adaptive sweep chooses, and the loop reads the result back from
+        -- materialized_nd_runs.
+        d.q_set,
+        -- KWSE fields. Both fall back to the defaults row like everything
+        -- above; the stage grid cannot be built without them.
+        COALESCE(d.ld_ds_z_delta,    f.ld_ds_z_delta)    AS ld_ds_z_delta,
+        COALESCE(d.kwse_upper_bound, f.kwse_upper_bound) AS kwse_upper_bound
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
     CROSS JOIN desired_state_defaults f
