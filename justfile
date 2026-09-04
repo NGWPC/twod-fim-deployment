@@ -29,3 +29,18 @@ wipe: down-local
     -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/db
     -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/minio
     -docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/sepex
+
+# Load the network into the database and storage (truncates reach_network)
+seed:
+    cd orchestrator && uv run python scripts/seed.py
+
+# Author intent for the seven-reach end-to-end scope
+author-intent:
+    cd orchestrator && uv run python scripts/author_intent.py
+
+# Author intent for every reach in the network
+author-intent-all:
+    cd orchestrator && uv run python scripts/author_intent.py --scope all
+
+# Seed the network and author the small end-to-end scope
+seed-e2e: seed author-intent

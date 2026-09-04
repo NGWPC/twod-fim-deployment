@@ -13,7 +13,7 @@ Design references: [`twod-fim-knowledge-base/system-design/`](https://github.com
 |---|---|
 | `recon/` | the reconciliation loop: gap calculation, checks, job submission, storage observation |
 | `notebooks/` | how the loop works, by running it |
-| `scripts/` | `reconcile.py` (the loop), `seed.py` (dev scaffolding) |
+| `scripts/` | `reconcile.py` (the loop), `seed.py` and `author_intent.py` (dev scaffolding) |
 
 Reading order: `recon/gap.py` (gap calculation) then `recon/check.py` (one check) then `recon/execution.py` (job submission).
 
@@ -92,13 +92,20 @@ Credentials are in `.env` / `example.env`.
 
 ### 4. Seed and run
 
-Seed the network and start the reconciler:
+Seeding is two steps, because the network and what is wanted of it are two
+different things. `seed.py` loads the network; `author_intent.py` says which of
+its reaches to build, and defaults to a seven-reach scope small enough to run
+end to end.
 
 ```bash
 cd orchestrator
 uv run python scripts/seed.py
+uv run python scripts/author_intent.py
 uv run python scripts/reconcile.py --forever
 ```
+
+Re-scoping later needs only the second: `seed.py` truncates `reach_network`,
+and every model and library cascades from it.
 
 Options for `reconcile.py`:
 - `--once` - a single pass, then exit
@@ -109,6 +116,10 @@ Options for `reconcile.py`:
 Options for `seed.py`:
 - `--network-gpkg PATH` - use a custom GeoPackage (default: `testdata/network.gpkg`)
 - `--nhf-gpkg PATH` - hydrofabric with lake polygons (default: `testdata/nhf.gpkg`)
+
+Options for `author_intent.py`:
+- `--scope e2e` - seven reaches chosen to take every branch the loop has (default)
+- `--scope all` - every reach in the network
 
 ## Env vars
 
