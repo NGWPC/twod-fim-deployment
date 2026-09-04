@@ -33,19 +33,21 @@ CREATE TABLE IF NOT EXISTS desired_state_defaults(
     -- Run identity is hash(sdr_commit + solver NAME).
     solver text NOT NULL DEFAULT 'lisflood' CONSTRAINT desired_state_defaults_solver_chk CHECK (solver IN
 	('lisflood', 'sfincs', 'triton')),
-    ld_q_mean_stage_delta double precision,
-    ld_q_max_stage_delta double precision,
-    ld_q_max_extent_delta double precision,
+    -- Library resolution (DR-030), one acceptance RANGE per criterion rather
+    -- than a single target, matching the contract agreed with the jobs repo.
+    -- numrange because the contract names one thing per criterion and a range
+    -- type enforces min < max for free; a caller sends lower(x) and upper(x).
+    --
+    -- All three are measured over WET CELLS ONLY, and describe the INCREASE
+    -- between consecutive library discharges.
+    ld_q_max_depth_increase_range numrange,
+    ld_q_median_depth_increase_range numrange,
+    ld_q_flooded_area_prcnt_increase_range numrange,
     ld_ds_z_delta double precision,
     kwse_upper_bound double precision,
     revision integer NOT NULL DEFAULT 0, -- DB owned; see 09_triggers.sql
     CONSTRAINT desired_state_defaults_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25,
-	0.5, 1, 2, 5)),
-    -- The same fraction guard the per-reach table carries. It belongs on BOTH:
-    -- this is the row the authoring script writes, so a percent typed here would
-    -- reach every reach in the deployment at once.
-    CONSTRAINT desired_state_defaults_ld_q_extent_fraction_chk CHECK (ld_q_max_extent_delta IS NULL OR
-	ld_q_max_extent_delta < 1)
+	0.5, 1, 2, 5))
 );
 
 COMMENT ON TABLE desired_state_defaults IS 'One row. What every reach falls back to for any field it has not authored. Holds the model identity inputs, so the reconciler can predict where a model belongs.';
@@ -80,32 +82,34 @@ CREATE TABLE IF NOT EXISTS desired_state(
     model_domain geometry(polygon, 5070),
     -- override system TBD
     override_id bigint,
-    ld_q_mean_stage_delta double precision, -- m
-    ld_q_max_stage_delta double precision, -- m
-    ld_q_max_extent_delta double precision, -- fraction, not percent
+    -- Library resolution (DR-030), one acceptance RANGE per criterion rather
+    -- than a single target, matching the contract agreed with the jobs repo.
+    -- numrange because the contract names one thing per criterion and a range
+    -- type enforces min < max for free; a caller sends lower(x) and upper(x).
+    --
+    -- All three are measured over WET CELLS ONLY, and describe the INCREASE
+    -- between consecutive library discharges.
+    ld_q_max_depth_increase_range numrange,
+    ld_q_median_depth_increase_range numrange,
+    ld_q_flooded_area_prcnt_increase_range numrange,
     ld_ds_z_delta double precision, -- m
     q_set integer[],
     kwse_upper_bound double precision, -- m
     revision integer NOT NULL DEFAULT 0, -- DB owned; per-reach counter set by 09_triggers.sql
     CONSTRAINT desired_state_flow_bounds_chk CHECK (q_lower_bound IS NULL OR q_upper_bound IS NULL OR q_lower_bound < q_upper_bound),
     CONSTRAINT desired_state_kwse_bounds_chk CHECK (kwse_upper_bound IS NULL OR kwse_upper_bound > 0),
-    CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_q_mean_stage_delta IS NULL OR ld_q_mean_stage_delta > 0) AND
-	(ld_q_max_stage_delta IS NULL OR ld_q_max_stage_delta > 0) AND (ld_q_max_extent_delta IS NULL OR
-	ld_q_max_extent_delta > 0) AND (ld_ds_z_delta IS NULL OR ld_ds_z_delta > 0)),
+    CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_ds_z_delta IS NULL OR ld_ds_z_delta > 0) AND
+	(ld_q_max_depth_increase_range IS NULL OR lower(ld_q_max_depth_increase_range) >= 0) AND
+	(ld_q_median_depth_increase_range IS NULL OR lower(ld_q_median_depth_increase_range) >= 0) AND
+	(ld_q_flooded_area_prcnt_increase_range IS NULL OR
+	    lower(ld_q_flooded_area_prcnt_increase_range) >= 0)),
     -- DR-033 ALT-B picks the stage increment from a fixed menu, not a
     -- continuum, and anchors the grid it builds to zero. The menu lives here
     -- because it is a property of authored intent: a value off it would be
     -- intent the system can never honour, and catching that at write time beats
     -- discovering it when a library comes out the wrong shape.
     CONSTRAINT desired_state_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25, 0.5, 1,
-	2, 5)),
-    -- A fraction of the inundated area, matching what the job reads. Authoring
-    -- 7.5 meaning "7.5 percent" would be taken as 750% — a bound nothing can
-    -- violate, so every step is accepted and the library comes out as coarse as
-    -- the starting increment makes it. Silent, and in the direction that looks
-    -- like it worked, which is why this is a constraint and not a comment.
-    CONSTRAINT desired_state_ld_q_extent_fraction_chk CHECK (ld_q_max_extent_delta IS NULL OR
-	ld_q_max_extent_delta < 1)
+	2, 5))
 );
 
 COMMENT ON TABLE desired_state IS 'Authored intent, one row per reach. NULL field = use default source; non-NULL = authored. Preserved at all cost.';
@@ -122,11 +126,14 @@ COMMENT ON COLUMN desired_state.model_domain IS 'Authored domain polygon (EPSG:5
 
 COMMENT ON COLUMN desired_state.override_id IS 'Active override pointer (overrides table TBD); NULL = no override.';
 
-COMMENT ON COLUMN desired_state.ld_q_mean_stage_delta IS 'Adaptive-stepping target: the MEDIAN cell-by-cell depth change between consecutive library discharges, m (DR-030). Despite the name the job measures a median, not a mean. Not yet checked at materialization: the achieved value exists solely in the job''s own loop, so nothing in storage can be judged against it.';
 
-COMMENT ON COLUMN desired_state.ld_q_max_stage_delta IS 'Adaptive-stepping target: the 95th-percentile cell-by-cell depth change between consecutive library discharges, m (DR-030). Despite the name the job measures a 95th percentile, not a maximum. Sent to the job as a stepping band; not yet checked at materialization, because a scenario manifest records nothing about how it compares to any other.';
 
-COMMENT ON COLUMN desired_state.ld_q_max_extent_delta IS 'Adaptive-stepping target: max change in inundated area between consecutive library discharges, as a FRACTION (0.1 = 10%), matching the units the job reads (DR-030). Not yet checked at materialization: the achieved value exists solely in the job''s own loop, so nothing in storage can be judged against it.';
+
+COMMENT ON COLUMN desired_state.ld_q_max_depth_increase_range IS 'Acceptance range for the increase in MAX depth between consecutive library discharges, metres, over wet cells only (DR-030). Authored intent, not yet wired: nothing sends it to the job and nothing checks it, pending the agreed jobs-repo contract.';
+
+COMMENT ON COLUMN desired_state.ld_q_median_depth_increase_range IS 'Acceptance range for the increase in MEDIAN depth between consecutive library discharges, metres, over wet cells only (DR-030). Authored intent, not yet wired.';
+
+COMMENT ON COLUMN desired_state.ld_q_flooded_area_prcnt_increase_range IS 'Acceptance range for the PERCENT increase in flooded area between consecutive library discharges, over wet cells only (DR-030) — 7.5 means 7.5%, not 0.075. Authored intent, not yet wired.';
 
 COMMENT ON COLUMN desired_state.ld_ds_z_delta IS 'Downstream KWSE standard stage-grid step, m (DR-033).';
 

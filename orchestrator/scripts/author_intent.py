@@ -74,14 +74,16 @@ SOLVER = "lisflood"
 # right; tighten it per reach once fidelity rather than correctness is the
 # question.
 LD_DS_Z_DELTA = 2.0
-# Library resolution (DR-030 ALT-C), as the TARGET of each acceptance band. The
-# payload turns each into a min/max pair, and these three are the values whose
-# bands reproduce the job image's own defaults exactly — so authoring them steps
-# every reach exactly as an unauthored deployment did, while putting the numbers
-# where the loop can read them and a person can change them.
-LD_Q_MAX_STAGE_DELTA = 1.0    # m, 95th-percentile cell-by-cell depth change
-LD_Q_MEAN_STAGE_DELTA = 0.5   # m, median cell-by-cell depth change
-LD_Q_MAX_EXTENT_DELTA = 0.1   # FRACTION of inundated area, not percent
+# Library resolution (DR-030), as the acceptance RANGE of each criterion, per the
+# contract agreed with the jobs repo. All three are measured over WET CELLS ONLY
+# and describe the increase between consecutive library discharges.
+#
+# Authored but not yet wired: nothing sends these to a job and nothing checks
+# them, pending the jobs-repo side. They are seeded now so the values are in one
+# place, under review, when that lands.
+LD_Q_MAX_DEPTH_INCREASE_RANGE = "[0.75,1.25]"        # m
+LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.25,0.5]"      # m
+LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[7.5,12.5]"  # percent, so 7.5 = 7.5%
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 # An address, not a mounted path: the raster is uploaded to storage by seed.py,
 # so a job reads it wherever it runs without a volume being arranged. It is also
@@ -397,7 +399,8 @@ _DEFAULTS = """
     INSERT INTO desired_state_defaults
         (id, sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
          lulc_lookup, solver, ld_ds_z_delta,
-         ld_q_max_stage_delta, ld_q_mean_stage_delta, ld_q_max_extent_delta)
+         ld_q_max_depth_increase_range, ld_q_median_depth_increase_range,
+         ld_q_flooded_area_prcnt_increase_range)
     VALUES (1, %s, 10, 5070, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (id) DO UPDATE SET
         sdr_commit      = EXCLUDED.sdr_commit,
@@ -408,9 +411,9 @@ _DEFAULTS = """
         lulc_lookup     = EXCLUDED.lulc_lookup,
         solver          = EXCLUDED.solver,
         ld_ds_z_delta   = EXCLUDED.ld_ds_z_delta,
-        ld_q_max_stage_delta  = EXCLUDED.ld_q_max_stage_delta,
-        ld_q_mean_stage_delta = EXCLUDED.ld_q_mean_stage_delta,
-        ld_q_max_extent_delta = EXCLUDED.ld_q_max_extent_delta
+        ld_q_max_depth_increase_range = EXCLUDED.ld_q_max_depth_increase_range,
+        ld_q_median_depth_increase_range = EXCLUDED.ld_q_median_depth_increase_range,
+        ld_q_flooded_area_prcnt_increase_range = EXCLUDED.ld_q_flooded_area_prcnt_increase_range
 """
 
 # Retract intent for anything that has left the scope. The AFTER DELETE trigger
@@ -470,9 +473,9 @@ def author(scope: str, q_bound_parquet: Path) -> None:
                 json.dumps(LULC_LOOKUP),
                 SOLVER,
                 LD_DS_Z_DELTA,
-                LD_Q_MAX_STAGE_DELTA,
-                LD_Q_MEAN_STAGE_DELTA,
-                LD_Q_MAX_EXTENT_DELTA,
+                LD_Q_MAX_DEPTH_INCREASE_RANGE,
+                LD_Q_MEDIAN_DEPTH_INCREASE_RANGE,
+                LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE,
             ),
         )
         retracted = [

@@ -40,13 +40,11 @@ _EFFECTIVE = """
         -- adaptive sweep chooses, and the loop reads the result back from
         -- materialized_nd_runs.
         d.q_set,
-        -- Library resolution (DR-030). Only the max-stage one is checked at
-        -- materialization; the other two are sent to the job as stepping bands
-        -- and never read back, because what the job achieved for them exists
-        -- only in its own loop.
-        COALESCE(d.ld_q_max_stage_delta,  f.ld_q_max_stage_delta)  AS ld_q_max_stage_delta,
-        COALESCE(d.ld_q_mean_stage_delta, f.ld_q_mean_stage_delta) AS ld_q_mean_stage_delta,
-        COALESCE(d.ld_q_max_extent_delta, f.ld_q_max_extent_delta) AS ld_q_max_extent_delta,
+        -- The ld_q_* resolution ranges are deliberately absent. They are
+        -- authored in desired_state and resolve like everything else, but
+        -- nothing sends them to a job or checks them yet — that waits on the
+        -- jobs-repo contract landing. Selecting them here would be reading a
+        -- value with no reader.
         -- KWSE fields. Both fall back to the defaults row like everything
         -- above; the stage grid cannot be built without them.
         COALESCE(d.ld_ds_z_delta,    f.ld_ds_z_delta)    AS ld_ds_z_delta,
