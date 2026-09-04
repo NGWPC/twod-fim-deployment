@@ -57,13 +57,18 @@ inputs:
       stage to impose, a path to the downstream scenario manifest supplying the
       water surface, and the seed to hot-start from. Order matters: the job runs
       them serially and every seed names a scenario earlier in the list.
+
+      maxOccurs is the LIBRARY SIZE, not one. SEPEX counts the elements of a
+      JSON array as occurrences, so a bound of 1 rejects every library with more
+      than a single scenario. A library is one run per discharge per stage, so
+      it reaches the hundreds on a reach with a fine stage increment.
     input:
       literalDataDomain:
         dataType: value
         valueDefinition:
           anyValue: true
     minOccurs: 1
-    maxOccurs: 1
+    maxOccurs: 10000
 
   - id: volume_convergence_tolerance
     title: volume_convergence_tolerance
