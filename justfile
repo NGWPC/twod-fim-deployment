@@ -42,5 +42,10 @@ author-intent:
 author-intent-all:
     cd orchestrator && uv run python scripts/author_intent.py --scope all
 
+# Author intent for the seven-reach end-to-end scope
+reconcile:
+    cd orchestrator && uv run python scripts/reconcile.py
+
+
 # Seed the network and author the small end-to-end scope
-seed-e2e: seed author-intent
+test-e2e: seed author-intent reconcile
