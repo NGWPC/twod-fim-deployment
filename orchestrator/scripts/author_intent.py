@@ -270,12 +270,30 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> list[dict]:
 #           │   └── 1269877088730144      headwater
 #           └── 1269877051885631          tributary branch (DA 19)
 #
-#   1269869556169965                      outlet terminal, and a headwater
+#   1269869447554114                      outlet terminal
 #
-# Chosen small as well as wisely: nothing here drains more than 156 km2, where
-# the network's other outlet carries 2607 km2 and would spend the whole run's
-# budget on one domain. Depth is kept instead — four rungs from the headwater
-# down to the lake, so results have somewhere to travel.
+#   1269874503448786                      lake terminal, nothing above it
+#
+# Chosen for the shape of the work, not the size of the river. The ladder is
+# four rungs from a headwater down to a lake, so results have somewhere to
+# travel, and every reach in it is small.
+#
+# The outlet terminal is the exception, and deliberately so. The extract has
+# exactly two, and the other — 1269869556169965 — is a 13.7 km single-reach
+# component whose centerline bounding box is 22 km2, three and a half times the
+# largest here, before any bankfull buffer. This one drains far more area, 2607
+# km2 against its 68, but its centerline is short and compact: 6 km2 of bounding
+# box, in line with the rest of the scope. Domain extent is what costs, and
+# drainage area only reaches it through the buffer.
+#
+# It earns its place twice over: it is the only reach here whose nd job is sent
+# no outflow polygon at all, and the only terminal with reaches above it, so
+# build_model picks a mainstem for a reach that has nothing below it.
+#
+# That last property is why the third component exists. The reach it replaced
+# was isolated — nothing above, nothing below — which is the shortest ladder the
+# loop can be asked to walk, and a case worth keeping. 1269874503448786 covers
+# it at a fifth of the cost: 2 km2 of bounding box, the second smallest here.
 E2E_REACHES = {
     1269876933415184: "drains into lake 120053033; nd gets that polygon",
     1269877024692972: "sits on a terminal, so its kwse has no kwse below to seed from",
@@ -283,7 +301,8 @@ E2E_REACHES = {
     1269877039396680: "the mainstem branch: full kwse, seeded from the library below it",
     1269877051885631: "the tributary branch: same rung, not the mainstem",
     1269877088730144: "nothing above it, so build_model is given no mainstem reach",
-    1269869556169965: "names no water body and has nothing above it: a component of one",
+    1269869447554114: "names no water body, so nd is sent no outflow polygon at all",
+    1269874503448786: "nothing above and nothing below: the shortest ladder there is",
 }
 
 # The forks a scope has to keep alive. Each is a branch the loop actually takes
