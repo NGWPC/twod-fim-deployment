@@ -304,6 +304,50 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     }
 
 
+# Turning one authored target into the acceptance band the job wants.
+#
+# DR-030 ALT-C's table has both a target and a band, but desired_state holds only
+# the target — one number per criterion rather than two — so the band is derived.
+# The ratios below reproduce the job image's own defaults exactly when the target
+# is its midpoint (1.0 m, 0.5 m, 0.1), which is what the seeder authors: sending
+# them changes nothing about how the stepper behaves, and authoring a different
+# target scales the band around it in proportion.
+#
+# These are thresholds the job compares against, never identity inputs, so the
+# float noise in a product like 0.1 * 0.75 costs nothing — no address depends on
+# them and no hash is taken of them.
+#
+# The floor matters as much as the ceiling. Too large a step is rejected as
+# coarse, too small a step is rejected as wasteful and grows the increment, so a
+# band with no floor would let the sweep crawl.
+_STEP_BANDS = {
+    "max_stage": (0.75, 1.25),
+    "median_stage": (0.5, 1.5),
+    "extent": (0.75, 1.25),
+}
+
+
+def _stepping_bands(wanted: dict) -> dict:
+    """The adaptive-stepping inputs implied by this reach's authored deltas.
+
+    An unauthored criterion is omitted rather than guessed at, leaving the job on
+    its own default — the same rule the rest of the payload follows.
+    """
+    targets = {
+        "max_stage": wanted["ld_q_max_stage_delta"],
+        "median_stage": wanted["ld_q_mean_stage_delta"],
+        "extent": wanted["ld_q_max_extent_delta"],
+    }
+    bands = {}
+    for name, target in targets.items():
+        if target is None:
+            continue
+        low, high = _STEP_BANDS[name]
+        bands[f"adaptive_step_algorithm_{name}_min_acceptable"] = float(target) * low
+        bands[f"adaptive_step_algorithm_{name}_max_acceptable"] = float(target) * high
+    return bands
+
+
 def _run_nd_payload(reach_id: int) -> dict:
     """What run_nd_scenarios needs to produce the library intent asks for.
 
@@ -337,6 +381,9 @@ def _run_nd_payload(reach_id: int) -> dict:
         "max_upstream_inflow": int(wanted["q_upper_bound"]),
         "delta_upstream_inflow": int(wanted["initial_dq_step_for_nd"]),
         **_nd_boundary(reach_id, wanted),
+        # The library's density is authored intent, so the job is told it rather
+        # than left on the defaults baked into its image.
+        **_stepping_bands(wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
     }

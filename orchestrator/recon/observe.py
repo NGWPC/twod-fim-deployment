@@ -106,11 +106,26 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     loop reads both back and judges them, via storage.nd_library_path for the
     slope and the q= listing below it.
 
-    Judged how: the library must SPAN the authored discharge range. Density
-    (the `ld_q_*` deltas guide.md also calls for) is not checked by default,
-    though the job now accepts those deltas as inputs (as of the solver
-    generalization PR) — tightening this to a real density check is a
-    follow-up, not a blocker.
+    Judged how: the library must SPAN the authored discharge range. Resolution
+    is NOT checked, and cannot be yet.
+
+    The `ld_q_*` deltas are sent to the job, so it steps towards the density
+    intent asks for. What it achieved is a different matter: the job computes a
+    95th-percentile and a median cell-by-cell depth change and a fractional
+    extent change for every step, and keeps all three in its return value. A
+    scenario manifest records none of them — its properties are convergence,
+    nominal_wse, sim_time, termination_condition, us_discharge and wall_time —
+    and rule 3 says a return value is not evidence. So there is nothing in
+    storage to judge resolution against.
+
+    Checking `nominal_wse` spacing instead would be measuring a different
+    quantity under the same name: the stage at one point rather than a statistic
+    over the domain. This waits for the job to persist what it already knows.
+
+    Rejected trials count towards the span. The adaptive stepper publishes every
+    scenario it tries, so more discharges are present than it labelled accepted,
+    and that is right: a rejected trial is still a valid run at a valid
+    discharge, and what makes a library usable is what is in it.
 
     Anything short of a whole, verified library writes no row. A row is proof,
     and proof of a partial library is not a smaller proof — it is none.

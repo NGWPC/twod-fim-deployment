@@ -136,3 +136,50 @@ def test_processes_are_not_step_names():
         assert pid not in allowed, (
             f"{pid} is a SEPEX process, not a step; it must never reach "
             "reach_processing.current_step")
+
+
+# --- library resolution reaches the job ---------------------------------
+
+def test_stepping_bands_reproduce_the_job_defaults():
+    """desired_state holds one target per criterion; the job wants a band.
+
+    The derivation must be a no-op against the values the seeder authors,
+    because those were chosen as the midpoints of the job image's own defaults.
+    Sending them must not change how any reach steps — only make the numbers
+    authored where the loop can read them.
+
+    Compared approximately: 0.1 * 0.75 is 0.07500000000000001, and these are
+    thresholds the job compares against, not identity inputs anything hashes, so
+    float noise costs nothing.
+    """
+    from recon.check import _stepping_bands
+    bands = _stepping_bands({"ld_q_max_stage_delta": 1.0,
+                             "ld_q_mean_stage_delta": 0.5,
+                             "ld_q_max_extent_delta": 0.1})
+    assert bands == pytest.approx({
+        "adaptive_step_algorithm_max_stage_min_acceptable": 0.75,
+        "adaptive_step_algorithm_max_stage_max_acceptable": 1.25,
+        "adaptive_step_algorithm_median_stage_min_acceptable": 0.25,
+        "adaptive_step_algorithm_median_stage_max_acceptable": 0.75,
+        "adaptive_step_algorithm_extent_min_acceptable": 0.075,
+        "adaptive_step_algorithm_extent_max_acceptable": 0.125,
+    })
+
+
+def test_an_unauthored_criterion_is_omitted_not_guessed():
+    """Leaving it out keeps the job on its own default, which is what NULL means
+    everywhere else in desired_state."""
+    from recon.check import _stepping_bands
+    assert _stepping_bands({"ld_q_max_stage_delta": None,
+                            "ld_q_mean_stage_delta": None,
+                            "ld_q_max_extent_delta": None}) == {}
+
+
+def test_a_tighter_target_scales_its_band_proportionally():
+    from recon.check import _stepping_bands
+    bands = _stepping_bands({"ld_q_max_stage_delta": 0.5,
+                             "ld_q_mean_stage_delta": None,
+                             "ld_q_max_extent_delta": None})
+    assert bands == pytest.approx(
+        {"adaptive_step_algorithm_max_stage_min_acceptable": 0.375,
+         "adaptive_step_algorithm_max_stage_max_acceptable": 0.625})
