@@ -79,7 +79,7 @@ LD_DS_Z_DELTA = 1.0
 # place, under review, when that lands.
 LD_Q_MAX_DEPTH_INCREASE_RANGE = "[0.75,1.25]"  # m
 LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.25,0.5]"  # m
-LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[7.5,12.5]"  # percent, so 7.5 = 7.5%
+LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[10,15]"  # percent
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 # An address, not a mounted path: the raster is uploaded to storage by seed.py,
 # so a job reads it wherever it runs without a volume being arranged. It is also

@@ -133,7 +133,7 @@ COMMENT ON COLUMN desired_state.ld_q_max_depth_increase_range IS 'Acceptance ran
 
 COMMENT ON COLUMN desired_state.ld_q_median_depth_increase_range IS 'Acceptance range for the increase in MEDIAN depth between consecutive library discharges, metres, over wet cells only (DR-030). Authored intent, not yet wired.';
 
-COMMENT ON COLUMN desired_state.ld_q_flooded_area_prcnt_increase_range IS 'Acceptance range for the PERCENT increase in flooded area between consecutive library discharges, over wet cells only (DR-030) — 7.5 means 7.5%, not 0.075. Authored intent, not yet wired.';
+COMMENT ON COLUMN desired_state.ld_q_flooded_area_prcnt_increase_range IS 'Acceptance range for the PERCENT increase in flooded area between consecutive library discharges, over wet cells only (DR-030) — 10 means 10%, not 0.1. Authored intent, not yet wired.';
 
 COMMENT ON COLUMN desired_state.ld_ds_z_delta IS 'Downstream KWSE standard stage-grid step, m (DR-033).';
 
