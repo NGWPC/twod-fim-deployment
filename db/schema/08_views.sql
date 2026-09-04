@@ -50,6 +50,36 @@ SELECT
     WHEN p.next_retry_at > now() THEN
         'resting'
     WHEN mm.applied_revision >= d.revision
+        AND nd.applied_revision >= d.revision
+        AND NOT rn.is_terminal
+        AND COALESCE(d.ld_ds_z_delta, f.ld_ds_z_delta) IS NULL THEN
+        -- Waiting on a person rather than on the network, which is the whole
+        -- reason this is named apart from awaiting_downstream: that one
+        -- resolves itself as the wave arrives, this one only when somebody
+        -- authors the missing value.
+        --
+        -- The condition it used to carry was a terminal reach naming no lake or
+        -- coast. That was right while such a reach had no outflow boundary and
+        -- no job could make one; the run job now derives an outflow area from
+        -- the model's own domain when none is supplied, so a plain outlet needs
+        -- nothing from anybody and the old test could only ever have been wrong.
+        --
+        -- What genuinely has no source is the stage increment. DR-033 ALT-B
+        -- picks it from a fixed menu and nothing derives it, so a reach with it
+        -- unauthored here AND in the defaults row can never have a KWSE library
+        -- planned. Terminals are excluded because they get none at all
+        -- (ISU-013), so the value would never be read for them.
+        --
+        -- Gated on model and nd being proved, which mirrors the gap
+        -- calculation: a reach that has not reached the kwse rung is not yet
+        -- waiting on this. That gate is also what keeps it from swallowing
+        -- awaiting_downstream, whose reaches have not got here.
+        --
+        -- Ranked ABOVE finished deliberately. Intent asks for a KWSE library on
+        -- every non-terminal reach (DR-001 ALT-A), and one that cannot be built
+        -- until a person acts is not a reach that is done.
+        'awaiting_inputs'
+    WHEN mm.applied_revision >= d.revision
         AND nd.applied_revision >= d.revision THEN
         -- Every implemented step satisfied at the current revision. Each step
         -- carries its own revision and this is their conjunction, so a reach is
@@ -60,30 +90,12 @@ SELECT
         -- and current is finished whether or not the loop has ever looked at
         -- it. That is the ordinary case after a database is rebuilt against a
         -- populated bucket, and calling it 'new' would suggest work is pending
-        -- when there is none. It outranks 'waiting_downstream' for the same
+        -- when there is none. It outranks 'awaiting_downstream' for the same
         -- reason — a satisfied reach is satisfied even if a wait pointer from
         -- an earlier rung was left behind.
         'finished'
-    WHEN rn.is_terminal
-        AND rn.lake_to_id IS NULL
-        AND rn.coast_to_id IS NULL
-        AND mm.applied_revision >= d.revision THEN
-        -- A terminal that names no water body has no normal-depth boundary to
-        -- drain through, and no job can produce one. Named for who it waits on,
-        -- because that is what separates it from 'waiting_downstream': that one
-        -- resolves itself as the wave arrives, this one only when a person
-        -- authors the missing data. Deliberately NOT called 'blocked' —
-        -- blocked_on_reach_id already means the other kind of waiting, and one
-        -- word covering both would be worse than useless to anyone reading it.
-        --
-        -- Gated on the model being proved so this mirrors the gap calculation,
-        -- which only reaches the nd rung once the model rung is satisfied.
-        -- Without that gate a fresh network would report reaches as awaiting
-        -- inputs while they still had a model to build — true of their nd step,
-        -- but misleading about whether the loop has work to do on them.
-        'awaiting_inputs'
     WHEN p.blocked_on_reach_id IS NOT NULL THEN
-        'waiting_downstream'
+        'awaiting_downstream'
     WHEN p.reach_id IS NULL THEN
         -- Never looked at, and nothing materialized to say otherwise.
         'new'
@@ -126,6 +138,7 @@ SELECT
 FROM
     reach_network rn
     LEFT JOIN desired_state d ON d.reach_id = rn.reach_id
+    LEFT JOIN desired_state_defaults f ON TRUE
     LEFT JOIN materialized_models mm ON mm.reach_id = rn.reach_id
     LEFT JOIN reach_processing p ON p.reach_id = rn.reach_id
     LEFT JOIN materialized_nd_runs nd ON nd.reach_id = rn.reach_id

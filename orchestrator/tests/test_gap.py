@@ -6,14 +6,13 @@ has leaked into gap.py that does not belong there.
 
 import pytest
 
-from recon.gap import (BUILD_MODEL, RUN_ND, AwaitingInputs, InFlight, NoGap,
-                       RunStep, Snapshot, WaitingDownstream, calculate)
+from recon.gap import (BUILD_MODEL, RUN_ND, InFlight, NoGap,
+                       RunStep, Snapshot, AwaitingDownstream, calculate)
 
 
 def terminal(**kw) -> Snapshot:
-    """An outlet reach that drains into a lake, so it has a boundary polygon."""
-    return Snapshot(**{"reach_id": 1, "revision": 0, "is_terminal": True,
-                       "has_outflow_polygon": True, **kw})
+    """A reach with nothing below it, whatever it drains into."""
+    return Snapshot(**{"reach_id": 1, "revision": 0, "is_terminal": True, **kw})
 
 
 def upstream(**kw) -> Snapshot:
@@ -33,14 +32,14 @@ def test_terminal_with_nothing_builds_at_once():
     assert calculate(terminal()) == RunStep(step=BUILD_MODEL)
 
 def test_upstream_waits_until_downstream_model_and_nd_exist():
-    assert calculate(upstream()) == WaitingDownstream(reach_id=9, step=BUILD_MODEL)
+    assert calculate(upstream()) == AwaitingDownstream(reach_id=9, step=BUILD_MODEL)
 
 def test_downstream_model_alone_is_not_enough():
     """The geometry transfer needs the downstream ND library, not just its model."""
-    assert calculate(upstream(ds_model_ok=True)) == WaitingDownstream(reach_id=9, step=BUILD_MODEL)
+    assert calculate(upstream(ds_model_ok=True)) == AwaitingDownstream(reach_id=9, step=BUILD_MODEL)
 
 def test_downstream_nd_alone_is_not_enough():
-    assert calculate(upstream(ds_nd_ok=True)) == WaitingDownstream(reach_id=9, step=BUILD_MODEL)
+    assert calculate(upstream(ds_nd_ok=True)) == AwaitingDownstream(reach_id=9, step=BUILD_MODEL)
 
 def test_upstream_builds_once_downstream_model_and_nd_are_proven():
     assert calculate(upstream(ds_model_ok=True, ds_nd_ok=True)) == RunStep(step=BUILD_MODEL)
@@ -58,17 +57,21 @@ def test_terminal_runs_nd_once_its_model_exists():
 def test_terminal_with_model_and_nd_is_satisfied():
     assert calculate(built(nd_ok=True)) == NoGap()
 
-def test_terminal_without_a_water_body_awaits_inputs_rather_than_submitting():
-    """No lake, no coast, no boundary to drain through — and no job will make
-    one. Submitting would fail on a missing input and burn the retry budget."""
-    decision = calculate(built(has_outflow_polygon=False))
-    assert isinstance(decision, AwaitingInputs) and decision.step == RUN_ND
+def test_terminal_naming_no_water_body_still_runs():
+    """A plain outlet drains into neither a lake nor the coast, and needs to.
+
+    It used to be held here for want of an outflow polygon. The run job now
+    derives an outflow area from the model's own domain and centerline when none
+    is supplied, so the reach has everything it needs and blocking it would
+    strand every reach above it for no reason.
+    """
+    assert calculate(built()) == RunStep(step=RUN_ND)
 
 def test_upstream_nd_waits_for_the_downstream_library():
     """The outflow polygon is the downstream reach's max-q inundated area, so
     its library has to be proved before this one can start."""
     snap = upstream(model_ok=True, ds_model_ok=True)
-    assert calculate(snap) == WaitingDownstream(reach_id=9, step=RUN_ND)
+    assert calculate(snap) == AwaitingDownstream(reach_id=9, step=RUN_ND)
 
 def test_upstream_runs_nd_once_the_downstream_library_is_proved():
     snap = upstream(model_ok=True, ds_model_ok=True, ds_nd_ok=True)
@@ -79,11 +82,9 @@ def test_upstream_nd_does_not_wait_on_downstream_kwse():
     snap = upstream(model_ok=True, ds_model_ok=True, ds_nd_ok=True, ds_kwse_ok=False)
     assert calculate(snap) == RunStep(step=RUN_ND)
 
-def test_a_non_terminal_needs_no_polygon_of_its_own():
-    """has_outflow_polygon describes water bodies and is read only for
-    terminals; upstream reaches get their boundary from downstream."""
-    snap = upstream(model_ok=True, ds_model_ok=True, ds_nd_ok=True,
-                    has_outflow_polygon=False)
+def test_a_non_terminal_gets_its_boundary_from_downstream():
+    """Nothing about a water body enters an upstream reach's decision."""
+    snap = upstream(model_ok=True, ds_model_ok=True, ds_nd_ok=True)
     assert calculate(snap) == RunStep(step=RUN_ND)
 
 
@@ -117,7 +118,6 @@ def test_waiting_reach_with_marker_reports_in_flight():
 @pytest.mark.parametrize("snap", [
     terminal(), built(), built(nd_ok=True), upstream(),
     upstream(ds_model_ok=True, ds_nd_ok=True),
-    built(has_outflow_polygon=False),
     upstream(model_ok=True, in_flight_step=BUILD_MODEL),
 ])
 def test_same_inputs_same_answer(snap):

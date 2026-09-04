@@ -54,7 +54,6 @@ _SNAPSHOT = """
         d.revision,
         rn.is_terminal,
         rn.reach_to_id AS downstream_reach_id,
-        (rn.lake_to_id IS NOT NULL OR rn.coast_to_id IS NOT NULL) AS has_outflow_polygon,
         COALESCE(mm.applied_revision  >= d.revision,  FALSE) AS model_ok,
         COALESCE(mnd.applied_revision >= d.revision,  FALSE) AS nd_ok,
         COALESCE(mkw.applied_revision >= d.revision,  FALSE) AS kwse_ok,
@@ -98,7 +97,6 @@ def load_snapshot(
         ds_model_ok=row["ds_model_ok"],
         ds_nd_ok=row["ds_nd_ok"],
         ds_kwse_ok=row["ds_kwse_ok"],
-        has_outflow_polygon=row["has_outflow_polygon"],
         in_flight_step=row["current_step"],
     )
 
@@ -262,8 +260,9 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
                     discharge of its library — the largest wetted footprint it
                     produces, so it bounds every scenario this reach will run
       terminal      the lake or coast it drains into, published once per water
-                    body and shared by every reach ending there
-                    — DR-006 ALT-E
+                    body and shared by every reach ending there — DR-006 ALT-E.
+                    A plain outlet drains into neither and sends no polygon at
+                    all, leaving the job to derive one from the model itself
 
     The downstream address is read from that reach's proof rather than
     predicted, because the discharge in it is emergent: the adaptive step
@@ -286,9 +285,11 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
             feature_id = wanted[f"{kind}_to_id"]
             if feature_id is not None:
                 return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id)}
-        raise RuntimeError(
-            f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
-            "lake or coast, so it has no outflow boundary")
+        # A plain outlet names no water body, and needs none. The input is
+        # optional and the job derives an outflow area from the model's own
+        # domain and centerline when it is absent, so sending nothing is the
+        # correct instruction rather than a missing one.
+        return {}
 
     downstream = wanted["reach_to_id"]
     return {
@@ -592,7 +593,7 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
         elif isinstance(decision, gap.InFlight):
             result.note = f"{decision.step} already running, left alone"
 
-        elif isinstance(decision, gap.WaitingDownstream):
+        elif isinstance(decision, gap.AwaitingDownstream):
             processing.wait_on(reach_id, decision.reach_id)
             result.note = f"{decision.step} waits on reach {decision.reach_id}"
 
@@ -630,7 +631,7 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
 
     # One activity outcome for both kinds of not-proceeding; the decision name
     # in the detail says which, and reach_status keeps them apart as states.
-    outcome = ("blocked" if isinstance(decision, (gap.WaitingDownstream, gap.AwaitingInputs))
+    outcome = ("blocked" if isinstance(decision, (gap.AwaitingDownstream, gap.AwaitingInputs))
                else "ok")
     activity.end(event, outcome, {"decision": result.decision, "note": result.note})
     logger.info("%s", result)
