@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 BUILD_MODEL = "build_model"
 RUN_ND = "run_nd_scenarios"
+RUN_KWSE = "run_kwse_scenarios"
 
 
 @dataclass(frozen=True)
