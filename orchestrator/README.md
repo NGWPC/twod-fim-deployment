@@ -118,7 +118,7 @@ Options for `seed.py`:
 - `--nhf-gpkg PATH` - hydrofabric with lake polygons (default: `testdata/nhf.gpkg`)
 
 Options for `author_intent.py`:
-- `--scope e2e` - seven reaches chosen to take every branch the loop has (default)
+- `--scope e2e` - seven reaches only to save on time and compute
 - `--scope all` - every reach in the network
 
 ## Env vars

@@ -41,12 +41,12 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 from recon import db, storage
 
 TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
@@ -102,11 +102,70 @@ LULC_LOOKUP = {
 # hand. These are desired_state columns — intent — which is why the formula
 # lives here. seed.py imports it only because the reach network parquet carries
 # the same three columns; drop them from that file and the import goes with them.
+#
 Q_LOWER_BOUND_SRC_FIELD = "high_flow_threshold"
-Q_LOWER_BOUND_MULTIPLIER = 0.9
+Q_LOWER_BOUND_MULTIPLIER = 1.0
 Q_UPPER_BOUND_SRC_FIELD = "f100year"
-Q_UPPER_BOUND_MULTIPLIER = 1.5
+Q_UPPER_BOUND_MULTIPLIER = 1.0
 DQ_STEP_FIELD = "initial_dq_step_for_nd"
+
+# How far the e2e scope pulls its discharge bounds inside the DR-029 range.
+#
+# NOT methodology, and deliberately not in the decision record: DR-029 ALT-D
+# says the library runs from the high flow threshold to the 100-year discharge,
+# and `--scope all` authors exactly that. This is a fixture concern. The
+# end-to-end run exists to prove the machinery works, and what it costs is set
+# by how far the adaptive sweep has to travel, so a shorter journey is a shorter
+# run of the same shape.
+E2E_Q_LOWER_FACTOR = 1.3
+E2E_Q_UPPER_FACTOR = 0.7
+
+
+def narrow_for_e2e(reaches: list[dict]) -> list[dict]:
+    """Pull the discharge bounds inward, for the end-to-end scope only.
+
+    The step is deliberately NOT recomputed. It is an absolute increment in cms,
+    and leaving it at the value the full range implied is the whole point: the
+    sweep then crosses a shorter distance in the same size paces, which is fewer
+    runs. Rescaling it to the new range would restore the original count in
+    smaller steps and save nothing.
+
+    Both roundings go inward — up at the bottom, down at the top — so the result
+    is never wider than the factors ask for.
+
+    A narrow enough reach has no room for both factors, and gives them up one at
+    a time rather than all at once. The lower factor goes first: raising the
+    floor drops the smallest discharges, which are the cheapest to simulate,
+    while lowering the ceiling drops the largest, which wet the most cells and
+    cost the most. Whatever room a reach has is worth spending on the ceiling.
+
+    Giving up both leaves the authored range, which is the one outcome that must
+    stay reachable: desired_state_flow_bounds_chk requires lower < upper, so
+    bounds that crossed would abort the whole authoring run, and an inverted
+    range describes no library anyone could build.
+    """
+    # Tried in order, first fit wins. The last is the authored range itself, so
+    # the ladder always lands somewhere.
+    concessions = (
+        (E2E_Q_LOWER_FACTOR, E2E_Q_UPPER_FACTOR),
+        (1.0, E2E_Q_UPPER_FACTOR),
+        (1.0, 1.0),
+    )
+    for r in reaches:
+        authored = (r["q_lower_bound"], r["q_upper_bound"])
+        for lower_factor, upper_factor in concessions:
+            low = max(math.ceil(authored[0] * lower_factor), 1)
+            high = max(math.floor(authored[1] * upper_factor), 1)
+            if low < high:
+                break
+        else:  # pragma: no cover - the last concession is the authored range
+            low, high = authored
+        r["q_lower_bound"], r["q_upper_bound"] = low, high
+        # What the report needs to say how far this reach got: the range it came
+        # from, and which factors survived.
+        r["narrowed"] = None if (low, high) == authored else authored
+        r["factors"] = (lower_factor, upper_factor)
+    return reaches
 
 
 def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> list[dict]:
@@ -114,9 +173,13 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> list[dict]:
     bounds = pd.read_parquet(q_bound_parquet)
 
     if bounds.index.name != REACH_ID_FIELD:
-        raise RuntimeError(f"Q bound parquet file is indexed by {bounds.index.name} instead of {REACH_ID_FIELD}")
+        raise RuntimeError(
+            f"Q bound parquet file is indexed by {bounds.index.name} instead of {REACH_ID_FIELD}"
+        )
     if not pd.api.types.is_integer_dtype(bounds.index):
-        raise RuntimeError(f"Q bound parquet index must be integer, got {bounds.index.dtype}")
+        raise RuntimeError(
+            f"Q bound parquet index must be integer, got {bounds.index.dtype}"
+        )
 
     duplicate_ids = list(bounds.index[bounds.index.duplicated()])
 
@@ -133,8 +196,18 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> list[dict]:
         if isinstance(row, pd.DataFrame):
             # duplicate row
             continue
-        low = max(np.ceil(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(int), 1)
-        high = max(np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(int), 1)
+        low = max(
+            np.ceil(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(
+                int
+            ),
+            1,
+        )
+        high = max(
+            np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(
+                int
+            ),
+            1,
+        )
         if pd.isna(low) or pd.isna(high):
             nan_bounds.append(reach_id)
             continue
@@ -147,11 +220,17 @@ def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> list[dict]:
         rng = high - low
         r[DQ_STEP_FIELD] = max(int(rng / 10), 1)
     if duplicate_ids:
-        raise RuntimeError(f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}")
+        raise RuntimeError(
+            f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}"
+        )
     if missing_reaches:
-        raise RuntimeError(f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}")
+        raise RuntimeError(
+            f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}"
+        )
     if nan_bounds:
-        raise RuntimeError(f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}")
+        raise RuntimeError(
+            f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}"
+        )
     return reaches
 
 
@@ -342,33 +421,55 @@ _AUTHOR = """
 """
 
 
-def author(authored: set[int] | None, q_bound_parquet: Path) -> None:
-    """Write the defaults row and one desired_state row per reach in scope."""
+def author(scope: str, q_bound_parquet: Path) -> None:
+    """Write the defaults row and one desired_state row per reach in scope.
+
+    The scope decides two things, and only one of them is which reaches: `e2e`
+    also pulls the discharge bounds inside what DR-029 asks for, to keep the run
+    short. `all` authors the methodology as written.
+    """
     with db.connect() as conn:
         reaches = db.query(_NETWORK, conn=conn)
         if not reaches:
             sys.exit("reach_network is empty; run scripts/seed.py first")
-        if authored is None:
-            authored = {r["reach_id"] for r in reaches}
+        authored = ({r["reach_id"] for r in reaches} if scope == "all"
+                    else set(E2E_REACHES))
         covered = verify_scope(reaches, authored)
 
         in_scope = load_q_bounds(
-            q_bound_parquet, [r for r in reaches if r["reach_id"] in authored])
+            q_bound_parquet, [r for r in reaches if r["reach_id"] in authored]
+        )
+        if scope == "e2e":
+            in_scope = narrow_for_e2e(in_scope)
 
         # Revisions as they stand, so the report can say what actually moved
         # rather than what was written over.
-        before = {r["reach_id"]: r["revision"]
-                  for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)}
+        before = {
+            r["reach_id"]: r["revision"]
+            for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)
+        }
 
-        conn.execute(_DEFAULTS, (SDR_COMMIT, DEM_SOURCE, LULC_SOURCE,
-                                 json.dumps(LULC_LOOKUP), SOLVER, LD_DS_Z_DELTA))
-        retracted = [r["reach_id"] for r in
-                     db.query(_RETRACT, (sorted(authored),), conn=conn)]
+        conn.execute(
+            _DEFAULTS,
+            (
+                SDR_COMMIT,
+                DEM_SOURCE,
+                LULC_SOURCE,
+                json.dumps(LULC_LOOKUP),
+                SOLVER,
+                LD_DS_Z_DELTA,
+            ),
+        )
+        retracted = [
+            r["reach_id"] for r in db.query(_RETRACT, (sorted(authored),), conn=conn)
+        ]
         for r in in_scope:
             conn.execute(_AUTHOR, r)
 
-        after = {r["reach_id"]: r["revision"]
-                 for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)}
+        after = {
+            r["reach_id"]: r["revision"]
+            for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)
+        }
 
     new = [r for r in after if r not in before]
     moved = [r for r in after if r in before and after[r] != before[r]]
@@ -380,8 +481,23 @@ def author(authored: set[int] | None, q_bound_parquet: Path) -> None:
     if retracted:
         print(f"  retracted     {len(retracted)} (claims withdrawn, observations kept)")
     print()
+    bounds = {r["reach_id"]: r for r in in_scope}
     for reach_id, cases in covered.items():
-        print(f"  {reach_id}  {', '.join(cases)}")
+        r = bounds[reach_id]
+        rng = f"{r['q_lower_bound']}-{r['q_upper_bound']} cms"
+        # Say so when the range on the row is not the one DR-029 implies, so
+        # nobody reads these bounds back as the methodology — and say which
+        # factors a tight reach had to give up to stay a valid range.
+        was, factors = r.get("narrowed"), r.get("factors")
+        if factors is None:          # not the e2e scope; nothing was narrowed
+            note = ""
+        elif was is None:
+            note = "  (no room to narrow)"
+        elif factors[0] == 1.0:
+            note = f"  (from {was[0]}-{was[1]}, lower factor given up for room)"
+        else:
+            note = f"  (from {was[0]}-{was[1]})"
+        print(f"  {reach_id}  {rng:>16}, dq {r[DQ_STEP_FIELD]:>3}{note}  {', '.join(cases)}")
     for case, why in UNCOVERABLE.items():
         print(f"  not covered   {case} ({why})")
 
@@ -394,7 +510,8 @@ def main() -> None:
         "--scope",
         choices=("e2e", "all"),
         default="e2e",
-        help="which reaches to author intent for (default: e2e, a seven-reach subset)",
+        help="reaches to author for, and whether the range is narrowed "
+             "(default: e2e, seven reaches with bounds pulled inside DR-029)",
     )
     ap.add_argument(
         "--q-bound-parquet",
@@ -408,8 +525,12 @@ def main() -> None:
         sys.exit(f"No such flow bounds parquet: {args.q_bound_parquet}")
 
     print(f"scope    {args.scope}")
-    print(f"q bounds {args.q_bound_parquet}\n")
-    author(None if args.scope == "all" else set(E2E_REACHES), args.q_bound_parquet)
+    print(f"q bounds {args.q_bound_parquet}")
+    if args.scope == "e2e":
+        print(f"bounds   narrowed to {E2E_Q_LOWER_FACTOR}x lower, "
+              f"{E2E_Q_UPPER_FACTOR}x upper (fixture only, not DR-029)")
+    print()
+    author(args.scope, args.q_bound_parquet)
 
 
 if __name__ == "__main__":
