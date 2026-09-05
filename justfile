@@ -58,6 +58,23 @@ wipe confirm="":
     just down-local
     docker run --rm -v "$DATA":/data alpine rm -rf /data/db /data/minio /data/sepex
 
+# Re-register plugin definitions after editing a plugin yml (keeps db, bucket, job history)
+reload-plugins:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # SEPEX copies the mounted definitions into its data dir on first load and
+    # then refuses to start if that copy is still there, so a plain restart
+    # exits fatal. Removing only the copy is what a reload needs -- `just wipe`
+    # would also take the database and the bucket with it.
+    docker stop sepex >/dev/null
+    docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/sepex/plugins
+    docker start sepex >/dev/null
+    for _ in $(seq 60); do
+      curl -sf localhost:5050/processes >/dev/null && break
+      sleep 1
+    done
+    curl -s localhost:5050/processes | grep -o '"id":"[^"]*"'
+
 # Load the network into the database and storage (truncates reach_network)
 seed:
     cd orchestrator && uv run python scripts/seed.py

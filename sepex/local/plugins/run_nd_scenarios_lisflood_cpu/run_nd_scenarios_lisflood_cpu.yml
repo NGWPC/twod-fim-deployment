@@ -116,6 +116,49 @@ inputs:
     minOccurs: 0
     maxOccurs: 1
 
+  - id: ld_q_max_depth_increase_range
+    title: ld_q_max_depth_increase_range
+    description: >-
+      [min, max] increase in max depth, in metres, between consecutive
+      discharge scenarios. Below min the step was too small and grows, above
+      max it was too large and shrinks.
+
+      maxOccurs is 2 because the value is a two-element JSON array and SEPEX
+      counts array elements as occurrences, so a bound of 1 rejects the range.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 2
+
+  - id: ld_q_median_depth_increase_range
+    title: ld_q_median_depth_increase_range
+    description: >-
+      [min, max] increase in median depth, in metres, between consecutive
+      discharge scenarios.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 2
+
+  - id: ld_q_flooded_area_prcnt_increase_range
+    title: ld_q_flooded_area_prcnt_increase_range
+    description: >-
+      [min, max] percent increase in inundated area between consecutive
+      discharge scenarios, where 10 means 10 percent.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 2
+
 outputs:
   - id: plugin_results
     title: plugin_results
