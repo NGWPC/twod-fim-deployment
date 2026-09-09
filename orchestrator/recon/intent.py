@@ -40,11 +40,17 @@ _EFFECTIVE = """
         -- adaptive sweep chooses, and the loop reads the result back from
         -- materialized_nd_runs.
         d.q_set,
-        -- The ld_q_* resolution ranges are deliberately absent. They are
-        -- authored in desired_state and resolve like everything else, but
-        -- nothing sends them to a job or checks them yet — that waits on the
-        -- jobs-repo contract landing. Selecting them here would be reading a
-        -- value with no reader.
+        -- The resolution the library must achieve, read back by
+        -- observe_nd_runs. Still not sent to the job: it carries its own
+        -- defaults, and the loop's business is judging the result rather than
+        -- dictating how the sweep reaches it.
+        COALESCE(d.ld_q_max_depth_increase_range,
+                 f.ld_q_max_depth_increase_range) AS ld_q_max_depth_increase_range,
+        COALESCE(d.ld_q_median_depth_increase_range,
+                 f.ld_q_median_depth_increase_range) AS ld_q_median_depth_increase_range,
+        COALESCE(d.ld_q_flooded_area_prcnt_increase_range,
+                 f.ld_q_flooded_area_prcnt_increase_range)
+                 AS ld_q_flooded_area_prcnt_increase_range,
         -- KWSE fields. Both fall back to the defaults row like everything
         -- above; the stage grid cannot be built without them.
         COALESCE(d.ld_ds_z_delta,    f.ld_ds_z_delta)    AS ld_ds_z_delta,

@@ -21,10 +21,13 @@ reported, never adopted.
 
 import json
 import logging
+import math
+from typing import NamedTuple
 
 import psycopg
 
 from recon import db, identity, intent, scenarios, storage
+from recon.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,158 @@ def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> d
             "was": before["model_id"] if before else None}
 
 
+class Adoption(NamedTuple):
+    """The library adopted from what storage holds, and what it cost to say so."""
+
+    q_set: list[int]
+    # Steps over a ceiling, wider apart than the finest resolution intent
+    # allows. The library does not meet intent here, so the reach does not
+    # prove. Why the sweep produced them is not this function's concern: it
+    # observes what is in storage and judges it against what was asked for.
+    holes: list[str]
+    # Everything else worth saying out loud: surplus passed over, unavoidable
+    # steps taken, near-duplicates adopted because nothing better existed.
+    notes: list[str]
+
+
+def _bands(wanted: db.Row) -> list[tuple[str, str, float, float, bool]]:
+    """The authored resolution, as (label, manifest key, floor, ceiling, relative).
+
+    A range nobody authored, on either desired_state or the defaults row, asks
+    for nothing and takes no part in any verdict.
+    """
+    authored = (
+        ("max depth", "max_depth", wanted["ld_q_max_depth_increase_range"], False),
+        ("median depth", "median_depth",
+         wanted["ld_q_median_depth_increase_range"], False),
+        ("flooded area", "flooded_area",
+         wanted["ld_q_flooded_area_prcnt_increase_range"], True),
+    )
+    return [(label, key, float(band.lower), float(band.upper), relative)
+            for label, key, band, relative in authored
+            if band is not None and band.lower is not None and band.upper is not None]
+
+
+def _change(earlier: dict, later: dict, key: str, relative: bool) -> float:
+    if not relative:
+        return later[key] - earlier[key]
+    base = earlier[key]
+    return (later[key] - base) / base * 100 if base > 0 else 0.0
+
+
+def _verdict(earlier: dict, later: dict, bands: list) -> tuple[str, str]:
+    """The sweep's own rule, asked of any two scenarios rather than consecutive
+    ones. Returns the verdict and which criteria decided it.
+
+    A criterion moving backwards is not a special case: it simply failed to
+    reach its floor, which is `reject_low` like any other change too small to be
+    worth keeping.
+    """
+    over = [f"{label} {_change(earlier, later, key, rel):+.3g} over {ceiling:.3g}"
+            for label, key, _, ceiling, rel in bands
+            if _change(earlier, later, key, rel) > ceiling]
+    if over:
+        return "reject_high", "; ".join(over)
+    inside = [label for label, key, floor, ceiling, rel in bands
+              if floor <= _change(earlier, later, key, rel) <= ceiling]
+    if inside:
+        return "accept", ", ".join(inside)
+    return "reject_low", ""
+
+
+def _off_centre(earlier: dict, later: dict, bands: list) -> float:
+    """How far a step lands from the middle of the bands, summed over all three.
+
+    Only ever a tie-break. Two libraries of the same length are not equally
+    good: one whose steps sit centred has room for the next scenario to be
+    slightly off without breaching anything.
+    """
+    total = 0.0
+    for _, key, floor, ceiling, rel in bands:
+        middle = (floor + ceiling) / 2
+        total += ((_change(earlier, later, key, rel) - middle) / middle) ** 2
+    return total
+
+
+def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
+    """The cheapest library, out of everything present, that satisfies intent.
+
+    Storage may hold more scenarios than intent asked for, and they need not
+    have come from one sweep — run identity does not capture the job version, so
+    a changed algorithm writes alongside its predecessor. None of that is
+    consulted here. Every scenario is judged only on the three readings in its
+    own manifest, against the authored bands, exactly as the sweep judges a
+    trial against its reference.
+
+    The search is over every PAIR rather than consecutive ones, which is what
+    lets it step over a scenario that leads nowhere instead of committing to it.
+    Sorted by discharge with edges pointing one way, it is a shortest path
+    through a DAG: `best[j]` is the cheapest way to reach scenario j from the
+    first, and the answer is read back through parent pointers from the last.
+
+    Cost is compared in order — unavoidable gaps first, then how many scenarios
+    the library costs, then how centred its steps are. A step over a ceiling is
+    only allowed between neighbours: anywhere else there is a scenario in
+    between to route through, and without that rule the cheapest answer is a
+    single enormous stride from the bottom of the range to the top.
+    """
+    bands = _bands(wanted)
+    order = [entry["q"] for entry in metrics]
+    if not bands or len(metrics) < 2:
+        return Adoption(order, [], [])
+
+    infinite = (math.inf, math.inf, math.inf)
+    best: list[tuple[float, float, float]] = [infinite] * len(metrics)
+    parent = [-1] * len(metrics)
+    best[0] = (0.0, 0.0, 0.0)
+    for j in range(1, len(metrics)):
+        for i in range(j):
+            if best[i] == infinite:
+                continue
+            verdict, _ = _verdict(metrics[i], metrics[j], bands)
+            if verdict == "reject_high" and j != i + 1:
+                continue
+            step = (0.0 if verdict == "accept" else 1.0, 1.0,
+                    _off_centre(metrics[i], metrics[j], bands))
+            through = tuple(a + b for a, b in zip(best[i], step))
+            if through < best[j]:
+                best[j], parent[j] = through, i  # type: ignore[assignment]
+
+    if best[-1] == infinite:
+        return Adoption(order, ["no route through the library satisfies intent"], [])
+
+    path: list[int] = []
+    node = len(metrics) - 1
+    while node != -1:
+        path.append(node)
+        node = parent[node]
+    path.reverse()
+
+    holes, notes = [], []
+    for i, j in zip(path, path[1:]):
+        verdict, why = _verdict(metrics[i], metrics[j], bands)
+        gap = metrics[j]["q"] - metrics[i]["q"]
+        where = f"q={metrics[i]['q']} to q={metrics[j]['q']}"
+        if verdict == "reject_high":
+            if gap > settings.adaptive_step_min_delta_q:
+                holes.append(f"{where} is {gap} cms and moved {why}; the library "
+                             f"is coarser than intent asks for here")
+            else:
+                notes.append(f"{where} is only {gap} cms and still moved {why}; "
+                             f"the reach changes faster than the smallest step")
+        elif verdict == "reject_low":
+            notes.append(f"{where} moved less than the bands ask, but nothing "
+                         f"better reaches the end of the range")
+
+    dropped = len(metrics) - len(path)
+    if dropped:
+        notes.append(
+            f"{len(metrics)} scenarios present, {len(path)} adopted, {dropped} "
+            f"passed over. Every adopted discharge costs a KWSE stage grid, so "
+            f"the surplus is worth deleting from storage.")
+    return Adoption([metrics[i]["q"] for i in path], holes, notes)
+
+
 def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
     """Reconcile materialized_nd_runs for one reach against storage.
 
@@ -107,20 +262,14 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     slope and the q= listing below it.
 
     Judged how: the library must SPAN the authored discharge range. Resolution
-    is NOT checked, and cannot be yet.
-
-    The `ld_q_*` deltas are sent to the job, so it steps towards the density
-    intent asks for. What it achieved is a different matter: the job computes a
-    95th-percentile and a median cell-by-cell depth change and a fractional
-    extent change for every step, and keeps all three in its return value. A
-    scenario manifest records none of them — its properties are convergence,
-    nominal_wse, sim_time, termination_condition, us_discharge and wall_time —
-    and rule 3 says a return value is not evidence. So there is nothing in
-    storage to judge resolution against.
-
-    Checking `nominal_wse` spacing instead would be measuring a different
-    quantity under the same name: the stage at one point rather than a statistic
-    over the domain. This waits for the job to persist what it already knows.
+    is not a pass/fail — it decides what gets ADOPTED. `q_set` is the smallest
+    set of discharges meeting the authored `ld_q_*` ranges, and it is the
+    library as far as everything downstream is concerned. Storage may hold
+    more, and the loop does not care: an earlier sweep's runs share the folder
+    because run identity does not capture the job version. Metrics come from
+    the scenario manifests, which carry max_depth, median_depth and
+    flooded_area, so this judges what was published rather than what the job
+    reported. See `adopt`.
 
     Rejected trials count towards the span. The adaptive stepper publishes every
     scenario it tries, so more discharges are present than it labelled accepted,
@@ -183,7 +332,7 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
     # Every scenario must be readable and sound before any of them counts. The
     # job publishes the max-q run last, so a library caught mid-publish usually
     # fails the span check above and never reaches this loop.
-    curve, refused = [], []
+    curve, metrics, refused = [], [], []
     # The realization directory as it appears under the run identity:
     # `<nd|kwse>=<value>/q=<value>`. A scenario manifest claims one of these in
     # its scenario_code, and verification is that claim against this location.
@@ -200,7 +349,22 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
             refused.append({"q": q, "problems": problems})
             logger.warning("refused scenario manifest at %s: %s", path, problems)
             return {**retract(f"scenario q={q} refused"), "refused": refused}
-        curve.append({"q": q, "wse": float(manifest["properties"]["nominal_wse"])})
+        props = manifest["properties"]
+        curve.append({"q": q, "wse": float(props["nominal_wse"])})
+        metrics.append({"q": q, "max_depth": float(props["max_depth"]),
+                        "median_depth": float(props["median_depth"]),
+                        "flooded_area": float(props["flooded_area"])})
+
+    adoption = adopt(metrics, wanted)
+    for note in adoption.notes:
+        logger.warning("reach %s nd library: %s", reach_id, note)
+    for hole in adoption.holes:
+        logger.error("reach %s nd library: %s", reach_id, hole)
+    if adoption.holes:
+        # No proof. The library in storage does not meet the resolution intent
+        # asks for, and a row here would tell every later step that it does.
+        return {**retract(adoption.holes[0]), "refused": refused}
+    adopted = adoption.q_set
 
     # The values the reach ABOVE will need, at this reach's upstream end. One
     # ND run per discharge, so the minimum WSE at a discharge is simply that
@@ -222,15 +386,17 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
             applied_revision    = EXCLUDED.applied_revision,
             confirmed_at        = now()
         """,
-        (reach_id, model["model_id"], run_hash, discharges,
+        (reach_id, model["model_id"], run_hash, adopted,
          us_wse_max, json.dumps(curve), wanted["revision"]),
         conn=conn,
     )
     changed = (before is None
                or before["run_identity_hash"] != run_hash
-               or list(before["q_set"]) != discharges
+               or list(before["q_set"]) != adopted
                or before["applied_revision"] != wanted["revision"])
-    return {**out, "found": f"{len(discharges)} scenarios", "q_set": discharges,
+    return {**out, "found": f"{len(adopted)} discharges adopted "
+                            f"of {len(discharges)} in storage",
+            "q_set": adopted, "resolution_notes": adoption.notes,
             "us_wse_max": us_wse_max, "changed": changed, "refused": refused}
 
 

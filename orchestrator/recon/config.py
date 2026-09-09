@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # end to end. Treat any library produced this way as provisional — the
     # inundation is bounded by the domain rather than by the terrain.
     allow_water_on_edges: bool = True
+
+    # The finest discharge step the nd sweep will refine towards. It is NOT
+    # sent to the job — the job carries its own default — but the resolution
+    # check needs it, because a pair this close together is the floor rather
+    # than a band failure: where a reach changes faster than this, the sweep
+    # takes an out-of-band step because nothing finer is available. Checking
+    # such a pair would refuse a library that cannot be improved on. Keep in
+    # step with the job's adaptive_step_min_delta_q default.
+    adaptive_step_min_delta_q: int = 10
     # The execution layer. Required: the loop has no other way to run a job.
     # Needs a scheme — urllib rejects a bare host:port — and SEPEX's port, 5050.
     sepex_url: str
