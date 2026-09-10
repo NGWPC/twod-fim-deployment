@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg
-from shapely.geometry import shape
 
 from recon import (activity, db, gap, identity, intent, observe,
                    processing, queue, scenarios, storage)
@@ -130,28 +129,6 @@ def _downstream_max_q_dir(downstream: int) -> str:
     return f"{library}/{identity.q_folder(max(proof['q_set']))}"
 
 
-def _geojson_wkt(path: str) -> list[str]:
-    """Every geometry in a GeoJSON document, as WKT.
-
-    build_model takes geometries, not references, so this is the one place the
-    loop hands a job DATA rather than an address. WKT via shapely for the same
-    reason identity hashing goes through shapely: it is the representation the
-    job itself round-trips through geopandas.
-    """
-    doc = storage.read_json(path)
-    if doc is None:
-        raise RuntimeError(f"expected a geometry at {path}, found nothing")
-    if doc.get("type") == "FeatureCollection":
-        geoms = [f["geometry"] for f in doc.get("features", []) if f.get("geometry")]
-    elif doc.get("type") == "Feature":
-        geoms = [doc["geometry"]] if doc.get("geometry") else []
-    else:
-        geoms = [doc]
-    if not geoms:
-        raise RuntimeError(f"no geometry in {path}")
-    return [shape(g).wkt for g in geoms]
-
-
 def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
     """Geometry the model domain must contain besides the reach itself.
 
@@ -163,6 +140,19 @@ def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
 
     Terminal reaches have nothing below them and pass none.
 
+    Passed as an ADDRESS. The job takes either a WKT string or a path to a
+    GeoJSON and reads the same geometry out of both — verified equal coordinate
+    for coordinate, so the domain this produces is the one the inlined WKT
+    produced. What changes is where the geometry travels: a stage transfer line
+    is a few kilobytes of WKT and grows with the reach, and the payload rides on
+    the job container's command line.
+
+    Nothing here reads the file, so a transfer line that is missing fails inside
+    the job rather than before it is submitted. gap.py already holds the reach
+    until the downstream nd library is proved, and _downstream_max_q_dir raises
+    when that proof or its nd= folder is absent, so what is left uncovered is
+    narrow: a proved library whose stage transfer line was never written.
+
     NOTE these geometries are NOT part of model identity. They move the domain,
     so they change domain_code and not identity_hash — meaning a model built
     without them still satisfies intent and will still be adopted. Changing
@@ -170,7 +160,7 @@ def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
     """
     if wanted["is_terminal"]:
         return []
-    return _geojson_wkt(f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}")
+    return [f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}"]
 
 
 # The reaches draining into one reach, and which of them is the mainstem.
