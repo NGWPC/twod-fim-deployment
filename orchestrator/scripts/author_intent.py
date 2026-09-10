@@ -114,6 +114,15 @@ Q_LOWER_BOUND_MULTIPLIER = 1.0
 Q_UPPER_BOUND_SRC_FIELD = "f100year"
 Q_UPPER_BOUND_MULTIPLIER = 1.0
 DQ_STEP_FIELD = "initial_dq_step_for_nd"
+Q_GRID_FIELD = "q_grid_resolution"
+# The discharge axis a library may land on, cms, anchored to zero (DR-041).
+Q_GRID_MENU = (2, 5, 10, 50, 100)
+# Seeding never picks coarser than this. Beyond it a grid stops being a
+# resolution floor and starts dictating the library's shape.
+Q_GRID_SEED_CEILING = 10
+# A range with fewer lines than this cannot describe a library, so the grid is
+# refined until it fits or the menu runs out.
+Q_GRID_MIN_LINES = 10
 
 # How far the e2e scope pulls its discharge bounds inside the DR-029 range.
 #
@@ -171,6 +180,59 @@ def narrow_for_e2e(reaches: list[dict]) -> list[dict]:
         # from, and which factors survived.
         r["narrowed"] = None if (low, high) == authored else authored
         r["factors"] = (lower_factor, upper_factor)
+    return reaches
+
+
+def choose_q_grid(low: int, high: int) -> int:
+    """The discharge grid this reach's range can carry.
+
+    The coarsest option seeding will pick, no coarser than
+    `Q_GRID_SEED_CEILING`, that still leaves `Q_GRID_MIN_LINES` lines between
+    the bounds. A coarse grid is cheap where the range is wide, but a narrow
+    range needs a fine one or the library has nowhere to put its entries — so
+    the menu is walked from coarse to fine and the first that fits wins.
+
+    When nothing fits, the finest option is used and the range is simply too
+    narrow to describe a library; `report` says so.
+    """
+    for grid in sorted((g for g in Q_GRID_MENU if g <= Q_GRID_SEED_CEILING),
+                       reverse=True):
+        if (high - low) // grid >= Q_GRID_MIN_LINES:
+            return grid
+    return min(Q_GRID_MENU)
+
+
+def snap_to_grid(value: int, grid: int) -> int:
+    """The nearest grid line, never zero.
+
+    Zero discharge is not a scenario anyone can run, so a value that rounds
+    down to the anchor takes the first line above it instead.
+    """
+    return max(round(value / grid) * grid, grid)
+
+
+def place_on_q_grid(reaches: list[dict]) -> list[dict]:
+    """Put every reach's bounds and opening step on its own discharge grid.
+
+    Done after the bounds are known and after any narrowing, because the grid
+    is chosen from the range that survived. Snapping is to the NEAREST line: a
+    bound is a statistic with its own error, and moving it to the closer line
+    respects that better than always widening.
+    """
+    for r in reaches:
+        low, high = r.get("q_lower_bound"), r.get("q_upper_bound")
+        if low is None or high is None:
+            continue
+        grid = choose_q_grid(low, high)
+        r[Q_GRID_FIELD] = grid
+        r["q_lower_bound"] = snap_to_grid(low, grid)
+        r["q_upper_bound"] = snap_to_grid(high, grid)
+        if r["q_upper_bound"] <= r["q_lower_bound"]:
+            # The range collapsed onto one line. Give it a single interval so
+            # the row still describes something, and let the report flag it.
+            r["q_upper_bound"] = r["q_lower_bound"] + grid
+        if r.get(DQ_STEP_FIELD):
+            r[DQ_STEP_FIELD] = snap_to_grid(r[DQ_STEP_FIELD], grid)
     return reaches
 
 
@@ -442,12 +504,15 @@ _RETRACT = "DELETE FROM desired_state WHERE reach_id <> ALL(%s) RETURNING reach_
 # invalidated.
 _AUTHOR = """
     INSERT INTO desired_state
-        (reach_id, q_lower_bound, q_upper_bound, initial_dq_step_for_nd)
-    VALUES (%(reach_id)s, %(q_lower_bound)s, %(q_upper_bound)s, %(initial_dq_step_for_nd)s)
+        (reach_id, q_lower_bound, q_upper_bound, initial_dq_step_for_nd,
+         q_grid_resolution)
+    VALUES (%(reach_id)s, %(q_lower_bound)s, %(q_upper_bound)s, %(initial_dq_step_for_nd)s,
+            %(q_grid_resolution)s)
     ON CONFLICT (reach_id) DO UPDATE SET
         q_lower_bound          = EXCLUDED.q_lower_bound,
         q_upper_bound          = EXCLUDED.q_upper_bound,
-        initial_dq_step_for_nd = EXCLUDED.initial_dq_step_for_nd
+        initial_dq_step_for_nd = EXCLUDED.initial_dq_step_for_nd,
+        q_grid_resolution      = EXCLUDED.q_grid_resolution
 """
 
 
@@ -472,6 +537,9 @@ def author(scope: str, q_bound_parquet: Path) -> None:
         )
         if scope == "e2e":
             in_scope = narrow_for_e2e(in_scope)
+        # Last, so the grid is chosen from the range that actually survived and
+        # the bounds written to the row are the ones on it.
+        in_scope = place_on_q_grid(in_scope)
 
         # Revisions as they stand, so the report can say what actually moved
         # rather than what was written over.

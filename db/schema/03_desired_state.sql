@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS desired_state(
     q_lower_bound integer, -- cms (whole-number flows only)
     q_upper_bound integer, -- cms (whole-number flows only)
     initial_dq_step_for_nd integer, -- cms
+    -- The discharge axis every library entry for this reach must land on, cms,
+    -- anchored to zero, from the menu below (DR-041). It is the finest step the
+    -- sweep can take, so it is what makes "nothing finer exists" a fact about
+    -- the axis rather than a guess about how the sweep was feeling. Per reach
+    -- only: one deployment-wide grid would be far too coarse for a small reach
+    -- and needlessly fine for a large one, so there is no defaults row entry
+    -- and seeding derives it from the reach's own range.
+    q_grid_resolution integer, -- cms
     solver text,
     CONSTRAINT desired_state_solver_chk CHECK (solver IS NULL OR solver IN ('lisflood', 'sfincs', 'triton')),
     -- Identity inputs, overridable per reach. Rarely authored — a reach needing
@@ -109,7 +117,18 @@ CREATE TABLE IF NOT EXISTS desired_state(
     -- intent the system can never honour, and catching that at write time beats
     -- discovering it when a library comes out the wrong shape.
     CONSTRAINT desired_state_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25, 0.5, 1,
-	2, 5))
+	2, 5)),
+    -- Same reasoning as the stage menu above: a discharge grid off the menu is
+    -- intent the system can never honour.
+    CONSTRAINT desired_state_q_grid_menu_chk CHECK (q_grid_resolution IS NULL
+	OR q_grid_resolution IN (2, 5, 10, 50, 100)),
+    -- Both bounds and the opening step must sit on the grid, or the sweep
+    -- cannot honour them and the loop cannot verify what it produced.
+    CONSTRAINT desired_state_q_on_grid_chk CHECK (q_grid_resolution IS NULL OR (
+	(q_lower_bound IS NULL OR q_lower_bound % q_grid_resolution = 0) AND
+	(q_upper_bound IS NULL OR q_upper_bound % q_grid_resolution = 0) AND
+	(initial_dq_step_for_nd IS NULL
+	    OR initial_dq_step_for_nd % q_grid_resolution = 0)))
 );
 
 COMMENT ON TABLE desired_state IS 'Authored intent, one row per reach. NULL field = use default source; non-NULL = authored. Preserved at all cost.';
@@ -118,7 +137,9 @@ COMMENT ON COLUMN desired_state.q_lower_bound IS 'Lower discharge bound for the 
 
 COMMENT ON COLUMN desired_state.q_upper_bound IS 'Upper discharge bound for the library (cms); NULL = system default.';
 
-COMMENT ON COLUMN desired_state.initial_dq_step_for_nd IS 'Initial discharge step for the normal-depth adaptive sweep (cms); NULL = default.';
+COMMENT ON COLUMN desired_state.initial_dq_step_for_nd IS 'Initial discharge step for the normal-depth adaptive sweep (cms); NULL = default. Must be a multiple of q_grid_resolution.';
+
+COMMENT ON COLUMN desired_state.q_grid_resolution IS 'The discharge grid every library entry must land on (cms), anchored to zero, one of 2/5/10/50/100 (DR-041). The finest step the sweep may take, and what lets the loop tell an unavoidable step from a skipped one. Derived from the reach range at seeding; no deployment-wide default.';
 
 COMMENT ON COLUMN desired_state.solver IS 'Hydraulic engine; NULL = system default, currently lisflood.';
 

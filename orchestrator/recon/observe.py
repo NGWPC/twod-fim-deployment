@@ -102,19 +102,15 @@ class Adoption(NamedTuple):
     """The library adopted from what storage holds, and what it cost to say so."""
 
     q_set: list[int]
-    # Steps over a ceiling, wider apart than the finest resolution intent
-    # allows. The library does not meet intent here, so the reach does not
-    # prove. Why the sweep produced them is not this function's concern: it
-    # observes what is in storage and judges it against what was asked for.
+    # Why no library could be adopted at all. The reach does not prove.
     holes: list[str]
     # Steps worth saying out loud: a near-duplicate the library had to spend an
     # entry on because nothing better reached the end of the range.
     notes: list[str]
-    # Steps no closer together than `adaptive_step_min_delta_q` that still break
-    # a ceiling. This is the exemption DR-030 grants, not a finding: the reach
-    # changes faster than the discharge grid can follow, no re-run improves on
-    # it, and it is why such a reach can prove at all. Recorded for anyone
-    # tuning the bands, never raised as a problem.
+    # Steps between ADJACENT grid lines that still break a ceiling. Not a
+    # finding: the reach changes faster than its discharge grid can follow, so
+    # nothing finer exists to put between them and no re-run improves on it
+    # (DR-030, DR-041). Recorded for anyone tuning the bands or the grid.
     expected: list[str]
     # How many scenarios in storage the library does not need. Expected rather
     # than alarming -- the sweep publishes the maximum whatever its verdict, so
@@ -182,6 +178,24 @@ def _off_centre(earlier: dict, later: dict, bands: list) -> float:
     return total
 
 
+def _nothing_finer(earlier: int, later: int, grid: int | None, apart: int) -> bool:
+    """Whether any discharge could have gone between these two.
+
+    On a grid this is a fact about the axis: two adjacent lines have nothing
+    between them, and any wider pair skipped lines that could have been run. A
+    step over a ceiling is tolerable in the first case and is a library the
+    sweep left unfinished in the second — and the difference is decidable
+    without knowing anything about how the sweep behaved (DR-041).
+
+    Without a grid nothing is decidable, and adjacency in storage is the only
+    thing left to go on. It cannot tell the two apart, which is the whole reason
+    the grid exists.
+    """
+    if grid is None:
+        return apart == 1
+    return later - earlier <= grid
+
+
 def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
     """The cheapest library, out of everything present, that satisfies intent.
 
@@ -208,6 +222,10 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
     order = [entry["q"] for entry in metrics]
     if not bands or len(metrics) < 2:
         return Adoption(order, [], [], [], 0)
+    # The discharge axis this library had to land on. Without one there is no
+    # way to tell a step nothing could improve on from a stretch the sweep
+    # skipped, so adjacency in storage is the only fallback available.
+    grid = wanted["q_grid_resolution"]
 
     infinite = (math.inf, math.inf, math.inf)
     best: list[tuple[float, float, float]] = [infinite] * len(metrics)
@@ -218,7 +236,8 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
             if best[i] == infinite:
                 continue
             verdict, _ = _verdict(metrics[i], metrics[j], bands)
-            if verdict == "reject_high" and j != i + 1:
+            if verdict == "reject_high" and not _nothing_finer(
+                    metrics[i]["q"], metrics[j]["q"], grid, j - i):
                 continue
             step = (0.0 if verdict == "accept" else 1.0, 1.0,
                     _off_centre(metrics[i], metrics[j], bands))
@@ -242,12 +261,9 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
         gap = metrics[j]["q"] - metrics[i]["q"]
         where = f"q={metrics[i]['q']} to q={metrics[j]['q']}"
         if verdict == "reject_high":
-            if gap > settings.adaptive_step_min_delta_q:
-                holes.append(f"{where} is {gap} cms and moved {why}; the library "
-                             f"is coarser than intent asks for here")
-            else:
-                expected.append(f"{where} is only {gap} cms and still moved {why}; "
-                                f"the reach changes faster than the smallest step")
+            expected.append(f"{where} is one grid line of {grid} cms and still "
+                            f"moved {why}; the reach changes faster than its "
+                            f"discharge grid can follow")
         elif verdict == "reject_low" and j != len(metrics) - 1:
             # The final step is exempt: the maximum discharge is published
             # whatever its verdict, because the KWSE stage grid is built from

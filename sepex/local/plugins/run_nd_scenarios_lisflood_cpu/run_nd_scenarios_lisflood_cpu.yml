@@ -116,6 +116,21 @@ inputs:
     minOccurs: 0
     maxOccurs: 1
 
+  - id: q_grid_resolution
+    title: q_grid_resolution
+    description: >-
+      Discharge grid every scenario must land on, whole cms, anchored to zero.
+      It is the finest step the sweep may take, so a step between two adjacent
+      grid lines is one nothing could improve on -- which is what lets the loop
+      tell an unavoidable step from a stretch the sweep skipped.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
   - id: ld_q_max_depth_increase_range
     title: ld_q_max_depth_increase_range
     description: >-

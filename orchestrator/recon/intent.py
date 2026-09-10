@@ -34,6 +34,10 @@ _EFFECTIVE = """
         d.q_lower_bound,
         d.q_upper_bound,
         d.initial_dq_step_for_nd,
+        -- The discharge axis this reach's library must land on (DR-041). Per
+        -- reach only, so no fallback: a NULL here means seeding never placed
+        -- the reach on a grid, and the loop cannot verify its resolution.
+        d.q_grid_resolution,
         -- Authored library discharges. Per reach only: desired_state_defaults
         -- has no q_set, because one deployment-wide list of discharges would
         -- mean nothing across reaches of different size. NULL = the nd job's

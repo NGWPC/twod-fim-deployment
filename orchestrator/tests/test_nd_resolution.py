@@ -17,6 +17,10 @@ WANTED = {
     "ld_q_max_depth_increase_range": Range(0.75, 1.25),
     "ld_q_median_depth_increase_range": Range(0.25, 0.5),
     "ld_q_flooded_area_prcnt_increase_range": Range(10, 15),
+    # The discharge axis the library had to land on. Two entries one line apart
+    # have nothing between them; anything wider skipped lines that could have
+    # been run.
+    "q_grid_resolution": 10,
 }
 
 
@@ -80,42 +84,31 @@ def test_a_step_over_a_ceiling_is_only_allowed_between_neighbours():
     assert result.q_set == [100, 150, 200, 300], "must not leap 100 to 300"
 
 
-def test_a_gap_wider_than_the_minimum_step_is_a_hole():
-    """Neighbours 100 cms apart whose step breaks a ceiling: a finer scenario
-    would have closed it, so the library is unfinished."""
-    library = depths((100, 2.0), (200, 4.0))
-    result = adopt(library, WANTED)
-    assert result.q_set == [100, 200]
-    assert len(result.holes) == 1 and "coarser than intent" in result.holes[0]
+def test_a_step_over_a_ceiling_across_skipped_grid_lines_leaves_no_library():
+    """100 and 200 are ten grid lines apart and the step breaks a ceiling. Every
+    line between them could have been run, so the edge is illegal, there is no
+    route across the library, and the reach does not prove."""
+    result = adopt(depths((100, 2.0), (200, 4.0)), WANTED)
+    assert result.holes and "no route" in result.holes[0]
 
 
-def test_the_final_step_is_never_reported_as_too_small():
-    """The maximum discharge is published whatever its verdict, so a small step
-    into it is the rule working, not a fault. 200 cannot be dropped here --
-    100 to 210 would break the ceiling -- so the library really does end on a
-    step below the floor, and that is fine."""
-    result = adopt(depths((100, 2.0), (200, 3.0), (210, 3.4)), WANTED)
-    assert result.q_set == [100, 200, 210]
-    assert result.notes == [], "the step into the maximum is exempt"
-
-
-def test_a_step_too_small_ANYWHERE_ELSE_is_reported():
-    """The same step, no longer last, is worth knowing about: the library had
-    to spend an entry that carries almost nothing to reach the top."""
-    result = adopt(depths((100, 2.0), (200, 3.0), (210, 3.4), (310, 4.4)), WANTED)
-    assert result.q_set == [100, 200, 210, 310]
-    assert any("moved less than the bands ask" in n for n in result.notes)
-
-
-def test_a_gap_at_the_minimum_step_is_not_a_hole():
-    """Neighbours 10 cms apart that still overshoot: the reach changes faster
-    than the smallest step allowed, and no re-run improves on it."""
-    library = depths((100, 2.0), (110, 4.0))
-    result = adopt(library, WANTED)
+def test_a_step_over_a_ceiling_between_adjacent_grid_lines_is_accepted():
+    """The same breach one grid line apart: nothing finer exists on the axis,
+    so no re-run improves on it and the library stands."""
+    result = adopt(depths((100, 2.0), (110, 4.0)), WANTED)
     assert result.q_set == [100, 110]
     assert result.holes == []
-    assert any("faster than the smallest step" in n for n in result.expected)
+    assert any("faster than its discharge grid" in n for n in result.expected)
     assert result.notes == [], "the exemption is not a finding"
+
+
+def test_without_a_grid_only_storage_adjacency_is_left():
+    """A reach seeding never placed on a grid. Nothing can be decided about what
+    was skipped, so neighbours in storage are all there is to go on."""
+    wanted = {**WANTED, "q_grid_resolution": None}
+    result = adopt(depths((100, 2.0), (200, 4.0)), wanted)
+    assert result.q_set == [100, 200], "adjacent in storage, so tolerated"
+    assert result.holes == []
 
 
 def test_median_depth_alone_can_carry_a_step():

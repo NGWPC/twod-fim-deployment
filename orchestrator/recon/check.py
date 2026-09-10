@@ -323,7 +323,8 @@ def _run_nd_payload(reach_id: int) -> dict:
                    (reach_id,))
     if model is None:
         raise RuntimeError(f"reach {reach_id} has no materialized model to run against")
-    for field in ("q_lower_bound", "q_upper_bound", "initial_dq_step_for_nd"):
+    for field in ("q_lower_bound", "q_upper_bound", "initial_dq_step_for_nd",
+                  "q_grid_resolution"):
         if wanted[field] is None:
             raise RuntimeError(f"reach {reach_id} has no {field}; nd cannot be submitted")
     return {
@@ -336,6 +337,10 @@ def _run_nd_payload(reach_id: int) -> dict:
         "min_upstream_inflow": int(wanted["q_lower_bound"]),
         "max_upstream_inflow": int(wanted["q_upper_bound"]),
         "delta_upstream_inflow": int(wanted["initial_dq_step_for_nd"]),
+        # The axis every scenario must land on. The job snaps its own proposals
+        # to it, which is what makes "nothing finer exists" checkable when the
+        # library is read back.
+        "q_grid_resolution": int(wanted["q_grid_resolution"]),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
