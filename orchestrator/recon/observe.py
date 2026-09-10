@@ -107,9 +107,20 @@ class Adoption(NamedTuple):
     # prove. Why the sweep produced them is not this function's concern: it
     # observes what is in storage and judges it against what was asked for.
     holes: list[str]
-    # Everything else worth saying out loud: surplus passed over, unavoidable
-    # steps taken, near-duplicates adopted because nothing better existed.
+    # Steps worth saying out loud: a near-duplicate the library had to spend an
+    # entry on because nothing better reached the end of the range.
     notes: list[str]
+    # Steps no closer together than `adaptive_step_min_delta_q` that still break
+    # a ceiling. This is the exemption DR-030 grants, not a finding: the reach
+    # changes faster than the discharge grid can follow, no re-run improves on
+    # it, and it is why such a reach can prove at all. Recorded for anyone
+    # tuning the bands, never raised as a problem.
+    expected: list[str]
+    # How many scenarios in storage the library does not need. Expected rather
+    # than alarming -- the sweep publishes the maximum whatever its verdict, so
+    # the accepted entry just below it is usually redundant -- but each one is a
+    # KWSE stage grid that need not be built, and storage that can be reclaimed.
+    passed_over: int
 
 
 def _bands(wanted: db.Row) -> list[tuple[str, str, float, float, bool]]:
@@ -196,7 +207,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
     bands = _bands(wanted)
     order = [entry["q"] for entry in metrics]
     if not bands or len(metrics) < 2:
-        return Adoption(order, [], [])
+        return Adoption(order, [], [], [], 0)
 
     infinite = (math.inf, math.inf, math.inf)
     best: list[tuple[float, float, float]] = [infinite] * len(metrics)
@@ -216,7 +227,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
                 best[j], parent[j] = through, i  # type: ignore[assignment]
 
     if best[-1] == infinite:
-        return Adoption(order, ["no route through the library satisfies intent"], [])
+        return Adoption(order, ["no route through the library satisfies intent"], [], [], 0)
 
     path: list[int] = []
     node = len(metrics) - 1
@@ -225,7 +236,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
         node = parent[node]
     path.reverse()
 
-    holes, notes = [], []
+    holes, notes, expected = [], [], []
     for i, j in zip(path, path[1:]):
         verdict, why = _verdict(metrics[i], metrics[j], bands)
         gap = metrics[j]["q"] - metrics[i]["q"]
@@ -235,19 +246,19 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
                 holes.append(f"{where} is {gap} cms and moved {why}; the library "
                              f"is coarser than intent asks for here")
             else:
-                notes.append(f"{where} is only {gap} cms and still moved {why}; "
-                             f"the reach changes faster than the smallest step")
-        elif verdict == "reject_low":
+                expected.append(f"{where} is only {gap} cms and still moved {why}; "
+                                f"the reach changes faster than the smallest step")
+        elif verdict == "reject_low" and j != len(metrics) - 1:
+            # The final step is exempt: the maximum discharge is published
+            # whatever its verdict, because the KWSE stage grid is built from
+            # the top of the envelope. A small step into it is the rule working,
+            # not a fault, and saying so on every reach on every pass buries the
+            # findings that matter.
             notes.append(f"{where} moved less than the bands ask, but nothing "
                          f"better reaches the end of the range")
 
-    dropped = len(metrics) - len(path)
-    if dropped:
-        notes.append(
-            f"{len(metrics)} scenarios present, {len(path)} adopted, {dropped} "
-            f"passed over. Every adopted discharge costs a KWSE stage grid, so "
-            f"the surplus is worth deleting from storage.")
-    return Adoption([metrics[i]["q"] for i in path], holes, notes)
+    return Adoption([metrics[i]["q"] for i in path], holes, notes, expected,
+                    len(metrics) - len(path))
 
 
 def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
@@ -356,6 +367,11 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                         "flooded_area": float(props["flooded_area"])})
 
     adoption = adopt(metrics, wanted)
+    if adoption.passed_over:
+        logger.debug("reach %s nd library: %s of %s scenarios adopted, %s not needed",
+                     reach_id, len(adoption.q_set), len(metrics), adoption.passed_over)
+    for note in adoption.expected:
+        logger.debug("reach %s nd library: %s", reach_id, note)
     for note in adoption.notes:
         logger.warning("reach %s nd library: %s", reach_id, note)
     for hole in adoption.holes:

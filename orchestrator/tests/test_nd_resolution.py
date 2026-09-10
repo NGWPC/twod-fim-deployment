@@ -45,7 +45,7 @@ def test_a_redundant_scenario_is_passed_over():
     library = depths((100, 2.0), (150, 2.2), (200, 3.0))
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200]
-    assert any("passed over" in n for n in result.notes)
+    assert result.passed_over == 1
 
 
 def test_a_load_bearing_scenario_is_kept():
@@ -89,6 +89,24 @@ def test_a_gap_wider_than_the_minimum_step_is_a_hole():
     assert len(result.holes) == 1 and "coarser than intent" in result.holes[0]
 
 
+def test_the_final_step_is_never_reported_as_too_small():
+    """The maximum discharge is published whatever its verdict, so a small step
+    into it is the rule working, not a fault. 200 cannot be dropped here --
+    100 to 210 would break the ceiling -- so the library really does end on a
+    step below the floor, and that is fine."""
+    result = adopt(depths((100, 2.0), (200, 3.0), (210, 3.4)), WANTED)
+    assert result.q_set == [100, 200, 210]
+    assert result.notes == [], "the step into the maximum is exempt"
+
+
+def test_a_step_too_small_ANYWHERE_ELSE_is_reported():
+    """The same step, no longer last, is worth knowing about: the library had
+    to spend an entry that carries almost nothing to reach the top."""
+    result = adopt(depths((100, 2.0), (200, 3.0), (210, 3.4), (310, 4.4)), WANTED)
+    assert result.q_set == [100, 200, 210, 310]
+    assert any("moved less than the bands ask" in n for n in result.notes)
+
+
 def test_a_gap_at_the_minimum_step_is_not_a_hole():
     """Neighbours 10 cms apart that still overshoot: the reach changes faster
     than the smallest step allowed, and no re-run improves on it."""
@@ -96,7 +114,8 @@ def test_a_gap_at_the_minimum_step_is_not_a_hole():
     result = adopt(library, WANTED)
     assert result.q_set == [100, 110]
     assert result.holes == []
-    assert any("faster than the smallest step" in n for n in result.notes)
+    assert any("faster than the smallest step" in n for n in result.expected)
+    assert result.notes == [], "the exemption is not a finding"
 
 
 def test_median_depth_alone_can_carry_a_step():
