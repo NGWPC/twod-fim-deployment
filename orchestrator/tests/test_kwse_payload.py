@@ -97,8 +97,12 @@ def test_downstream_address_uses_the_imposed_stage_not_the_achieved_one(wired):
 
 
 def test_downstream_address_is_under_the_downstream_reach_and_model(wired):
+    """Addressed by the downstream model's IDENTITY hash, with no domain code:
+    the same grain the job writes at (guide.md)."""
     s = check._run_kwse_payload(UPSTREAM)["scenarios"][0]
-    assert f"/reach={DOWNSTREAM}/{DS_MODEL}/{RUN_HASH}/" in s["downstream_Scenario"]
+    ds_identity, _, ds_domain = DS_MODEL.partition("_")
+    assert f"/reach={DOWNSTREAM}/{ds_identity}/{RUN_HASH}/" in s["downstream_Scenario"]
+    assert ds_domain not in s["downstream_Scenario"]
 
 
 def test_first_scenario_of_each_discharge_seeds_from_this_reach_nd_run(wired):

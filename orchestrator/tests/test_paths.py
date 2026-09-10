@@ -3,7 +3,7 @@
 The run job builds its own output path from the base it is handed:
 
     RunScenarioInputs.scenario_out_dir
-      = f"{base_out_dir}/reach={reach_id}/{model_id}/{run_identity_hash}/{scenario_dir_name}"
+      = f"{base_out_dir}/reach={reach_id}/{model_identity_hash}/{run_identity_hash}/{scenario_dir_name}"
 
 with base_out_dir = inputs.model_results_base_path. Every segment the loop adds
 to that base is therefore written into the path TWICE, and every segment it
@@ -26,9 +26,13 @@ ND_FOLDER = "nd=1.0E03"
 Q_FOLDER = "q=1000"
 
 
+IDENTITY_HASH, _, DOMAIN_CODE = MODEL_ID.partition("_")
+
+
 def job_scenario_out_dir(base_out_dir: str) -> str:
     """RunScenarioInputs.scenario_out_dir, reproduced from the jobs repo."""
-    return f"{base_out_dir}/reach={REACH}/{MODEL_ID}/{RUN_HASH}/{ND_FOLDER}/{Q_FOLDER}"
+    return (f"{base_out_dir}/reach={REACH}/{IDENTITY_HASH}/{RUN_HASH}"
+            f"/{ND_FOLDER}/{Q_FOLDER}")
 
 
 def test_the_loop_looks_where_the_job_writes():
@@ -48,16 +52,15 @@ def test_the_base_handed_to_the_job_adds_nothing_of_its_own():
     assert root.endswith("/results")
 
 
-def test_runs_are_filed_under_the_whole_model_id():
-    """Domain code included. A run is only ever verified against the exact
-    model_id materialized now, so the address has to carry the same thing the
-    verification compares."""
+def test_runs_are_filed_under_the_model_identity_hash_alone():
+    """Domain code EXCLUDED (guide.md: "runs file under identity, not under id
+    which will have domain code"). The domain is a realization: widening it
+    gives the reach a new model_id, and results addressed by model_id would all
+    be stranded by that."""
     base = storage.run_base_path(REACH, MODEL_ID, RUN_HASH)
-    assert f"/{MODEL_ID}/" in base
-    identity_hash, _, domain_code = MODEL_ID.partition("_")
-    assert f"/{identity_hash}/{RUN_HASH}" not in base, (
-        "filed by identity hash alone; the job files by full model_id")
-    assert domain_code in base
+    assert f"/{IDENTITY_HASH}/{RUN_HASH}" in base
+    assert DOMAIN_CODE not in base, "domain code leaked into the results address"
+    assert f"/{MODEL_ID}/" not in base
 
 
 def test_reach_appears_exactly_once():

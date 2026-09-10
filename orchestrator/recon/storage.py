@@ -47,20 +47,34 @@ def results_root() -> str:
     """The `model_results_base_path` the run jobs take. Bare on purpose.
 
     The job builds the rest of the address itself — it appends
-    `reach=<id>/<model_id>/<run_identity_hash>/<scenario point>/` — so anything
-    added here is a segment written twice. Sending a per-reach prefix is what
-    produced paths with `reach=` in them twice, at which point nothing the loop
-    predicted could be found.
+    `reach=<id>/<model identity hash>/<run_identity_hash>/<scenario point>/` —
+    so anything added here is a segment written twice. Sending a per-reach
+    prefix is what produced paths with `reach=` in them twice, at which point
+    nothing the loop predicted could be found.
 
-    Note the grain: results hang off the whole model_id, DOMAIN CODE INCLUDED,
-    so a rebuild that moves the domain files its runs somewhere new. That is
-    the job's choice and the loop follows it, but it is also the stricter and
-    more honest of the two, because a run is only ever verified against the
-    exact model_id currently materialized (identity.verify_scenario_manifest).
-    Filing by identity alone kept older runs reachable while the verification
-    refused them anyway.
+    Note the grain: results hang off the model's IDENTITY hash, without the
+    domain code, per system-design/guide.md — "runs file under identity, not
+    under id which will have domain code". The domain is a realization, so
+    widening it must not strand every run the reach already has.
+
+    One coupling this does NOT fix on its own: verify_scenario_manifest still
+    refuses a manifest whose model_id is not the one currently materialized. So
+    runs from a previous domain sit in the right folder and are still refused.
+    Until that check compares identity halves, a reach that changes domain has
+    old and new runs mixed in one folder, and the old ones fail its library.
     """
     return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/results"
+
+
+def model_identity_hash(model_id: str) -> str:
+    """The identity half of a model_id, without the domain code.
+
+    model_id is `<identity_hash>_<domain_code>`. Callers hold whole model_ids —
+    that is what materialized_models records — so the split happens here rather
+    than at each of them, and mirrors RunScenarioInputs.model_identity_hash in
+    the jobs repo, which is what actually names the folder.
+    """
+    return model_id.partition("_")[0]
 
 
 def run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
@@ -69,8 +83,12 @@ def run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
     Not normal-depth specific. A run identity is the solver plus the methodology
     pin, so a reach's `nd=<slope>` and every `kwse=<stage>` folder are siblings
     under this one prefix.
+
+    Takes a whole model_id and uses only its identity half: see results_root()
+    for why the domain code is not in this address.
     """
-    return f"{results_root()}/reach={reach_id}/{model_id}/{run_identity_hash}"
+    return (f"{results_root()}/reach={reach_id}"
+            f"/{model_identity_hash(model_id)}/{run_identity_hash}")
 
 
 def nd_library_path(
