@@ -26,7 +26,11 @@ CREATE TABLE IF NOT EXISTS desired_state_defaults(
     epsg_code integer NOT NULL,
     dem_source text NOT NULL,
     lulc_source text NOT NULL,
-    lulc_lookup jsonb NOT NULL,
+    -- An address, like the two sources above it, not the mapping itself. The
+    -- job takes a path here and hashes the mapping it reads out of it, so
+    -- identity follows the FILE'S CONTENT while the database holds only where
+    -- to find it. seed.py writes that file.
+    lulc_lookup text NOT NULL,
     -- ------------------------------------------------------------------
     -- Defaults for everything desired_state can author per reach.
     -- ------------------------------------------------------------------
@@ -54,7 +58,7 @@ COMMENT ON TABLE desired_state_defaults IS 'One row. What every reach falls back
 
 COMMENT ON COLUMN desired_state_defaults.sdr_commit IS 'Methodology version pin. Part of model identity: changing it means every reach wants a new model.';
 
-COMMENT ON COLUMN desired_state_defaults.lulc_lookup IS 'Land-cover to roughness mapping. Hashed into model identity, so an edit here invalidates every model.';
+COMMENT ON COLUMN desired_state_defaults.lulc_lookup IS 'Path to the land-cover to roughness mapping JSON, written by seed.py. Model identity hashes the file CONTENT, not this path, so editing the file invalidates every model without changing this row.';
 
 COMMENT ON COLUMN desired_state_defaults.revision IS 'DB owned. Changing any default bumps this AND every reach revision (09_triggers.sql), because every reach effective intent changed.';
 
@@ -86,7 +90,9 @@ CREATE TABLE IF NOT EXISTS desired_state(
     epsg_code integer,
     dem_source text,
     lulc_source text,
-    lulc_lookup jsonb,
+    -- A path, as in the defaults row. A reach that wants its own mapping points
+    -- at its own file rather than carrying a copy of one here.
+    lulc_lookup text,
     model_domain geometry(polygon, 5070),
     -- override system TBD
     override_id bigint,

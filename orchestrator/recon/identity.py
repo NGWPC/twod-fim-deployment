@@ -18,10 +18,10 @@ Two representation details are load-bearing, learned from the job's own types:
   grid_resolution is a FLOAT in the identity (pydantic field), so it must
   serialize as 10.0, never 10 — "10.0" and "10" hash differently.
 
-  lulc_lookup is hashed with INT keys (dict[int, float]); jsonb returns string
-  keys, and json.dumps sorts by the original key type before stringifying, so
-  {"100": ..} and {100: ..} sort differently once codes pass two digits. Keys
-  are coerced back to int before hashing.
+  lulc_lookup is hashed with INT keys (dict[int, float]); the JSON it is read
+  from has string keys, and json.dumps sorts by the original key type before
+  stringifying, so {"100": ..} and {100: ..} sort differently once codes pass
+  two digits. Keys are coerced back to int before hashing.
 """
 
 import hashlib
@@ -68,14 +68,38 @@ def reach_geom_hash(geom_wkb: bytes) -> str:
     return hash_str(shapely_wkb.loads(bytes(geom_wkb)).wkt)
 
 
+def lulc_lookup_mapping(path: str) -> dict[int, float]:
+    """The land-cover to roughness mapping a path resolves to.
+
+    The database holds the address; identity is over the CONTENT, because that
+    is what the job hashes — it reads the same file and hashes the mapping, not
+    the string it was handed. So predicting an address means reading the file,
+    and this is the one place the recipe below reaches storage.
+
+    Read on every call rather than cached. A cache would be nearly free, since
+    this is one small deployment-wide file, but a reconciler holding a stale
+    mapping predicts addresses the job will not write to, and would go on doing
+    it until restart. If the reads ever matter, cache them here, where the
+    staleness window is visible.
+    """
+    from recon import storage  # local: storage imports config, and this is the
+                               # only function in this module that needs either
+
+    doc = storage.read_json(path)
+    if doc is None:
+        raise RuntimeError(f"no land-cover lookup at {path}")
+    return {int(k): float(v) for k, v in doc.items()}
+
+
 def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     """The identity object and hash this reach's effective intent implies.
 
     `intent` needs: sdr_commit, grid_resolution, epsg_code, dem_source,
-    lulc_source, lulc_lookup (jsonb dict), geom_wkb. Field construction mirrors
-    jobs/build_model.py line for line.
+    lulc_source, lulc_lookup (a path), geom_wkb. Field construction mirrors
+    jobs/build_model.py line for line — including that the lookup is resolved
+    from its path first, which is what the job does with the same input.
     """
-    lulc_lookup = {int(k): float(v) for k, v in intent["lulc_lookup"].items()}
+    lulc_lookup = lulc_lookup_mapping(intent["lulc_lookup"])
     identity = {
         "sdr_commit": intent["sdr_commit"],
         "reach_geom_hash": reach_geom_hash(intent["geom_wkb"]),

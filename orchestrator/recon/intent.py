@@ -29,13 +29,11 @@ _EFFECTIVE = """
         COALESCE(d.epsg_code,       f.epsg_code)       AS epsg_code,
         COALESCE(d.dem_source,      f.dem_source)      AS dem_source,
         COALESCE(d.lulc_source,     f.lulc_source)     AS lulc_source,
+        -- A path to the mapping, not the mapping. Identity is over the file's
+        -- content, so predicting an address reads it; the payload just passes
+        -- the address through. A reach overriding the default overrides which
+        -- FILE it points at, which needs no special handling anywhere.
         COALESCE(d.lulc_lookup,     f.lulc_lookup)     AS lulc_lookup,
-        -- Whether the mapping above came from this reach rather than the
-        -- defaults row. The build payload sends the published lulc_lookup.json
-        -- by address, and that file holds the DEFAULTS; a reach that overrides
-        -- them has to have its own mapping sent inline or it would be built
-        -- against someone else's.
-        (d.lulc_lookup IS NOT NULL) AS lulc_lookup_overridden,
         COALESCE(d.solver,          f.solver)          AS solver,
         d.q_lower_bound,
         d.q_upper_bound,

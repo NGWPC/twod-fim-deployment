@@ -40,7 +40,6 @@ Usage:
 """
 
 import argparse
-import json
 import math
 import sys
 from pathlib import Path
@@ -86,6 +85,15 @@ DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/
 # a model IDENTITY input — the string is hashed — so changing it moves every
 # model's address and invalidates what is already built.
 LULC_SOURCE = storage.lulc_path()
+# What desired_state_defaults records: the address, not the mapping. Identity is
+# over the file's CONTENT, so this path is not itself hashed — which means an
+# edit to the mapping below changes every model's identity while leaving this
+# row untouched, and the revision bump that an intent edit normally triggers
+# does not fire. Re-seed and re-author together, and expect the rebuild.
+LULC_LOOKUP_PATH = storage.lulc_lookup_path()
+# The mapping itself, published to LULC_LOOKUP_PATH by seed.py. It lives here,
+# with the other authored values, because it IS intent — storage is only where
+# it is put so a job can read it.
 LULC_LOOKUP = {
     "11": 0.04,
     "21": 0.04,
@@ -554,7 +562,7 @@ def author(scope: str, q_bound_parquet: Path) -> None:
                 SDR_COMMIT,
                 DEM_SOURCE,
                 LULC_SOURCE,
-                json.dumps(LULC_LOOKUP),
+                LULC_LOOKUP_PATH,
                 SOLVER,
                 LD_DS_Z_DELTA,
                 LD_Q_MAX_DEPTH_INCREASE_RANGE,
