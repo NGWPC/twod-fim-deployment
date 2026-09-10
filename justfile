@@ -62,16 +62,22 @@ wipe confirm="":
 reload-plugins:
     #!/usr/bin/env bash
     set -euo pipefail
-    # SEPEX copies the mounted definitions into its data dir on first load and
-    # then refuses to start if that copy is still there, so a plain restart
-    # exits fatal. Removing only the copy is what a reload needs -- `just wipe`
-    # would also take the database and the bucket with it.
+    # SEPEX imports the mounted definitions ONCE, into its own data folder, and
+    # thereafter serves from that copy. Reimporting needs BOTH halves: the copy
+    # gone, and PLUGINS_LOAD_DIR set to say where to read from. Miss the second
+    # and it starts with no processes at all; miss the first and it exits fatal.
+    # sepex_local.env keeps the variable commented for exactly that reason, so
+    # this turns it on for the reload boot and puts it back afterwards.
+    ENV="{{justfile_directory()}}/sepex_local.env"
+    restore() { sed -i "s|^PLUGINS_LOAD_DIR=|# PLUGINS_LOAD_DIR=|" "$ENV"; }
+    trap restore EXIT
+    sed -i "s|^# PLUGINS_LOAD_DIR=|PLUGINS_LOAD_DIR=|" "$ENV"
     docker stop sepex >/dev/null
     docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/sepex/plugins
-    docker start sepex >/dev/null
+    docker compose -f docker-compose-local.yml up -d sepex >/dev/null
     for _ in $(seq 60); do
       curl -sf localhost:5050/processes >/dev/null && break
-      sleep 1
+      sleep 2
     done
     curl -s localhost:5050/processes | grep -o '"id":"[^"]*"'
 
@@ -90,6 +96,13 @@ author-intent-all:
 # Author intent for the seven-reach end-to-end scope
 reconcile:
     cd orchestrator && uv run python scripts/reconcile.py
+
+
+# Publish everything materialized for flows2fim: scenarios db, library, AEP VRTs
+f2f:
+    cd orchestrator && uv run python scripts/export_f2f_db.py
+    cd orchestrator && uv run python scripts/export_f2f_library.py
+    cd orchestrator && uv run python scripts/create_aep_f2f_vrts.py
 
 
 # Seed the network and author the small end-to-end scope

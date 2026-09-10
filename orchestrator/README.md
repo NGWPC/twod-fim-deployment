@@ -13,7 +13,7 @@ Design references: [`twod-fim-knowledge-base/system-design/`](https://github.com
 |---|---|
 | `recon/` | the reconciliation loop: gap calculation, checks, job submission, storage observation |
 | `notebooks/` | how the loop works, by running it |
-| `scripts/` | `reconcile.py` (the loop), `seed.py` and `author_intent.py` (dev scaffolding) |
+| `scripts/` | `reconcile.py` (the loop), `seed.py` and `author_intent.py` (dev scaffolding), `export_f2f_*.py` / `create_aep_f2f_vrts.py` (publish for flows2fim) |
 
 Reading order: `recon/gap.py` (gap calculation) then `recon/check.py` (one check) then `recon/execution.py` (job submission).
 
@@ -120,6 +120,56 @@ Options for `seed.py`:
 Options for `author_intent.py`:
 - `--scope e2e` - seven reaches only to save on time and compute
 - `--scope all` - every reach in the network
+
+### 5. Publish for flows2fim
+
+Three steps, in order, turning what the loop has materialized into what
+flows2fim reads:
+
+```bash
+cd orchestrator
+uv run python scripts/export_f2f_db.py        # scenarios.db, from the database
+uv run python scripts/export_f2f_library.py   # the depth grids that db names
+uv run python scripts/create_aep_f2f_vrts.py  # 5/50/100yr controls and VRTs
+```
+
+Or `just f2f` from the repo root, which runs all three in order.
+
+Everything lands in `testdata/outputs/f2f`, which is inside the gitignored
+`testdata/outputs/*`.
+
+The first step reads `materialized_nd_runs` and `materialized_kwse_runs`, not
+the results tree, and that is the whole point of the split. A reach's adopted
+library is its `q_set`; storage may also hold runs from an earlier sweep that
+the loop passed over, and those have a normal-depth grid but no stage library.
+Since flows2fim matches a forecast on flow before stage, adopting the surplus
+would quietly map backwater-controlled reaches at normal depth. Only the
+database tells the two apart, so the library is copied from the database's list
+rather than by walking the tree.
+
+The one thing the database cannot supply is the `nd=<slope>` folder, because
+the job computes the slope from the reach's own DEM. `export_f2f_db.py` reads
+the results tree only to discover it, and records the grid locations in a
+`scenario_sources` table so the library step needs no database connection.
+
+Controls are traced upstream from the reaches with nowhere left to drain.
+Naming a mid-network reach as a start would be wrong, not just wasteful:
+`controls -scs` defaults to `nd`, so that reach would be told to sit at normal
+depth instead of at the stage its downstream neighbour holds.
+
+Forecast discharges are **cms**, the unit the whole system is authored in.
+flows2fim's help says cfs, but it never converts -- it matches the value
+against `us_flow` in the scenarios table.
+
+The last step runs flows2fim in docker, since it shells out to GDAL, pulling
+`ghcr.io/ngwpc/flows2fim:0.5.0` if it is not already local.
+
+Options:
+- `export_f2f_db.py --results-dir PATH` - results tree to address (default: `testdata/outputs/results`)
+- `export_f2f_library.py --prune` - delete library grids the database no longer names
+- `export_f2f_library.py --results-dir PATH` - copy from somewhere other than the recorded root
+- `create_aep_f2f_vrts.py --recurrence-intervals 10 25` - other `f<N>year` columns
+- all three: `--db PATH`; the last two: `--lib PATH`
 
 ## Env vars
 
