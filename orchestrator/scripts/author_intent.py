@@ -47,6 +47,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from recon import db, storage
+from recon.config import settings
 
 TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
 DEFAULT_Q_BOUNDS_PARQUET = TESTDATA / "min_max_network_flows.parquet"
@@ -68,7 +69,7 @@ SOLVER = "lisflood"
 # stage library is ever planned. It is set here so a seeded deployment can run
 # the whole ladder without anyone having to know that.
 #
-LD_DS_Z_DELTA = 1.0
+LD_DS_Z_DELTA = 2.0
 # Library resolution (DR-030), as the acceptance RANGE of each criterion, per the
 # contract agreed with the jobs repo. All three are measured over WET CELLS ONLY
 # and describe the increase between consecutive library discharges.
@@ -76,9 +77,9 @@ LD_DS_Z_DELTA = 1.0
 # Authored but not yet wired: nothing sends these to a job and nothing checks
 # them, pending the jobs-repo side. They are seeded now so the values are in one
 # place, under review, when that lands.
-LD_Q_MAX_DEPTH_INCREASE_RANGE = "[0.75,1.25]"  # m
-LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.25,0.5]"  # m
-LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[10,15]"  # percent
+LD_Q_MAX_DEPTH_INCREASE_RANGE = "[1.5,2.5]"  # m
+LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.75,1.5]"  # m
+LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[10,30]"  # percent
 DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
 # An address, not a mounted path: the raster is uploaded to storage by seed.py,
 # so a job reads it wherever it runs without a volume being arranged. It is also
@@ -203,8 +204,9 @@ def choose_q_grid(low: int, high: int) -> int:
     When nothing fits, the finest option is used and the range is simply too
     narrow to describe a library; `report` says so.
     """
-    for grid in sorted((g for g in Q_GRID_MENU if g <= Q_GRID_SEED_CEILING),
-                       reverse=True):
+    for grid in sorted(
+        (g for g in Q_GRID_MENU if g <= Q_GRID_SEED_CEILING), reverse=True
+    ):
         if (high - low) // grid >= Q_GRID_MIN_LINES:
             return grid
     return min(Q_GRID_MENU)
@@ -486,7 +488,7 @@ _DEFAULTS = """
          lulc_lookup, solver, ld_ds_z_delta,
          ld_q_max_depth_increase_range, ld_q_median_depth_increase_range,
          ld_q_flooded_area_prcnt_increase_range)
-    VALUES (1, %s, 10, 5070, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (id) DO UPDATE SET
         sdr_commit      = EXCLUDED.sdr_commit,
         grid_resolution = EXCLUDED.grid_resolution,
@@ -560,6 +562,8 @@ def author(scope: str, q_bound_parquet: Path) -> None:
             _DEFAULTS,
             (
                 SDR_COMMIT,
+                settings.grid_resolution,
+                settings.epsg_code,
                 DEM_SOURCE,
                 LULC_SOURCE,
                 LULC_LOOKUP_PATH,
