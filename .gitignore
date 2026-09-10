@@ -39,3 +39,4 @@ lambda_batch_status.zip
 !example.hybrid.env
 !example.cloud.env
 !sepex_local.env
+orchestrator/testdata/outputs/*
