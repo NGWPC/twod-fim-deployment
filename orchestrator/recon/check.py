@@ -304,6 +304,25 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     }
 
 
+def _library_scenarios(reach_id: int, model_id: str, wanted: db.Row) -> list[str]:
+    """Scenario manifests already published under this reach's run identity.
+
+    Everything, not just what a previous attempt adopted: a discharge rejected
+    against one reference is often accepted against the next, and the job
+    re-judges all of them against the bands in force now. An empty list is the
+    normal answer the first time a reach is swept.
+    """
+    _, run_hash = identity.run_identity(wanted)
+    library = storage.nd_library_path(reach_id, model_id, run_hash)
+    if library is None:
+        return []
+    return [f"{library}/{identity.q_folder(q)}/{storage.SCENARIO_MANIFEST_FILENAME}"
+            for q in sorted(
+                q for q in (identity.parse_q_folder(name)
+                            for name in storage.list_subfolders(library))
+                if q is not None)]
+
+
 def _run_nd_payload(reach_id: int) -> dict:
     """What run_nd_scenarios needs to produce the library intent asks for.
 
@@ -341,6 +360,12 @@ def _run_nd_payload(reach_id: int) -> dict:
         # to it, which is what makes "nothing finer exists" checkable when the
         # library is read back.
         "q_grid_resolution": int(wanted["q_grid_resolution"]),
+        # What the library already holds. Simulating is the expensive part of a
+        # scenario; the three readings the sweep needs are on the manifest and
+        # cost nothing to read. Listing storage is this loop's job, not the
+        # job's, so it is told rather than left to go looking -- and being told
+        # is what makes a retry cheap and the sweep idempotent.
+        "existing_scenarios": _library_scenarios(reach_id, model["model_id"], wanted),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,

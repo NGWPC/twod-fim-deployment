@@ -17,9 +17,9 @@ WANTED = {
     "ld_q_max_depth_increase_range": Range(0.75, 1.25),
     "ld_q_median_depth_increase_range": Range(0.25, 0.5),
     "ld_q_flooded_area_prcnt_increase_range": Range(10, 15),
-    # The discharge axis the library had to land on. Two entries one line apart
-    # have nothing between them; anything wider skipped lines that could have
-    # been run.
+    # The discharge axis the library had to land on. Two entries a single grid
+    # step apart have nothing between them; anything wider skipped values that
+    # could have been run.
     "q_grid_resolution": 10,
 }
 
@@ -40,7 +40,7 @@ def test_a_library_that_already_fits_is_adopted_whole():
     library = depths((100, 2.0), (200, 3.0), (300, 4.0))
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200, 300]
-    assert result.holes == [] and result.notes == []
+    assert result.holes == [] and result.expected == []
 
 
 def test_a_redundant_scenario_is_passed_over():
@@ -84,22 +84,21 @@ def test_a_step_over_a_ceiling_is_only_allowed_between_neighbours():
     assert result.q_set == [100, 150, 200, 300], "must not leap 100 to 300"
 
 
-def test_a_step_over_a_ceiling_across_skipped_grid_lines_leaves_no_library():
-    """100 and 200 are ten grid lines apart and the step breaks a ceiling. Every
-    line between them could have been run, so the edge is illegal, there is no
+def test_a_step_over_a_ceiling_across_skipped_grid_values_leaves_no_library():
+    """100 and 200 are ten grid steps apart and the step breaks a ceiling. Every
+    grid value between them could have been run, so the edge is illegal, there is no
     route across the library, and the reach does not prove."""
     result = adopt(depths((100, 2.0), (200, 4.0)), WANTED)
     assert result.holes and "no route" in result.holes[0]
 
 
-def test_a_step_over_a_ceiling_between_adjacent_grid_lines_is_accepted():
-    """The same breach one grid line apart: nothing finer exists on the axis,
+def test_a_step_over_a_ceiling_a_single_grid_step_apart_is_accepted():
+    """The same breach a single grid step apart: nothing finer exists on the axis,
     so no re-run improves on it and the library stands."""
     result = adopt(depths((100, 2.0), (110, 4.0)), WANTED)
     assert result.q_set == [100, 110]
     assert result.holes == []
     assert any("faster than its discharge grid" in n for n in result.expected)
-    assert result.notes == [], "the exemption is not a finding"
 
 
 def test_without_a_grid_only_storage_adjacency_is_left():
@@ -117,7 +116,7 @@ def test_median_depth_alone_can_carry_a_step():
     library = [entry(100, 2.0, 0.50, 1.00), entry(200, 2.1, 0.85, 1.02)]
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200]
-    assert result.holes == [] and result.notes == []
+    assert result.holes == [] and result.expected == []
 
 
 def test_flooded_area_alone_can_carry_a_step():
@@ -126,7 +125,7 @@ def test_flooded_area_alone_can_carry_a_step():
     library = [entry(100, 2.0, 0.50, 1.00), entry(200, 2.1, 0.55, 1.12)]
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200]
-    assert result.holes == [] and result.notes == []
+    assert result.holes == [] and result.expected == []
 
 
 def test_any_criterion_over_its_ceiling_vetoes_a_step():
@@ -147,7 +146,7 @@ def test_an_unauthored_band_takes_no_part():
     library = depths((100, 2.0), (150, 2.01), (200, 9.0))
     result = adopt(library, wanted)
     assert result.q_set == [100, 150, 200]
-    assert result.holes == [] and result.notes == []
+    assert result.holes == [] and result.expected == []
 
 
 def test_a_single_scenario_library_is_returned_untouched():
@@ -161,3 +160,14 @@ def test_adoption_never_reorders_or_invents_discharges():
     assert result.q_set == sorted(result.q_set)
     assert set(result.q_set) <= {e["q"] for e in library}
     assert result.q_set[0] == 100 and result.q_set[-1] == 400
+
+
+def test_a_step_too_small_is_expected_not_a_finding():
+    """The sweep publishes the nearest line whenever no line clears a floor, so
+    a too-small step in the adopted library is the normal state wherever the
+    bands and the grid disagree -- not something to raise on every pass. 200 and
+    210 cannot be dropped: 100 to 210 would break the ceiling."""
+    result = adopt(depths((100, 2.0), (200, 3.0), (210, 3.4), (310, 4.4)), WANTED)
+    assert result.q_set == [100, 200, 210, 310]
+    assert result.holes == []
+    assert any("no line clears a floor" in n for n in result.expected)

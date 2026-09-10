@@ -203,10 +203,10 @@ def choose_q_grid(low: int, high: int) -> int:
 
 
 def snap_to_grid(value: int, grid: int) -> int:
-    """The nearest grid line, never zero.
+    """The nearest grid value, never zero.
 
     Zero discharge is not a scenario anyone can run, so a value that rounds
-    down to the anchor takes the first line above it instead.
+    down to the anchor takes the first grid value above it instead.
     """
     return max(round(value / grid) * grid, grid)
 

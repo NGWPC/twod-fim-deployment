@@ -117,12 +117,30 @@ inputs:
     minOccurs: 0
     maxOccurs: 1
 
+  - id: existing_scenarios
+    title: existing_scenarios
+    description: >-
+      Scenario manifests already published under this reach's run identity. The
+      job reads their metrics instead of re-simulating those discharges, and
+      re-judges them against the bands in force now.
+
+      maxOccurs is the LIBRARY SIZE, not one. SEPEX counts the elements of a
+      JSON array as occurrences, so a low bound rejects any reach that has been
+      swept more than a handful of times.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 10000
+
   - id: q_grid_resolution
     title: q_grid_resolution
     description: >-
       Discharge grid every scenario must land on, whole cms, anchored to zero.
       It is the finest step the sweep may take, so a step between two adjacent
-      grid lines is one nothing could improve on -- which is what lets the loop
+      grid values is one nothing could improve on -- which is what lets the loop
       tell an unavoidable step from a stretch the sweep skipped.
     input:
       literalDataDomain:

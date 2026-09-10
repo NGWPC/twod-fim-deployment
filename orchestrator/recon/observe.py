@@ -104,18 +104,18 @@ class Adoption(NamedTuple):
     q_set: list[int]
     # Why no library could be adopted at all. The reach does not prove.
     holes: list[str]
-    # Steps worth saying out loud: a near-duplicate the library had to spend an
-    # entry on because nothing better reached the end of the range.
-    notes: list[str]
-    # Steps between ADJACENT grid lines that still break a ceiling. Not a
-    # finding: the reach changes faster than its discharge grid can follow, so
-    # nothing finer exists to put between them and no re-run improves on it
-    # (DR-030, DR-041). Recorded for anyone tuning the bands or the grid.
+    # Steps the bands would not have chosen, which nothing can improve on.
+    # Either the reach changes faster than its discharge grid can follow, or it
+    # changes so little that no line clears a floor -- both mean the grid cannot
+    # express what the bands ask for, and the sweep took the nearest line
+    # (DR-030, DR-041). Not findings: this is the normal state of a library
+    # wherever the bands and the grid disagree. Recorded for anyone tuning
+    # either of them.
     expected: list[str]
-    # How many scenarios in storage the library does not need. Expected rather
-    # than alarming -- the sweep publishes the maximum whatever its verdict, so
-    # the accepted entry just below it is usually redundant -- but each one is a
-    # KWSE stage grid that need not be built, and storage that can be reclaimed.
+    # How many scenarios in storage the library does not need. Not reported:
+    # the sweep publishes every trial it runs so that a later attempt can reuse
+    # it, so surplus is the normal state of a folder rather than a finding. Kept
+    # for anyone measuring how much of the bucket is reclaimable.
     passed_over: int
 
 
@@ -181,8 +181,9 @@ def _off_centre(earlier: dict, later: dict, bands: list) -> float:
 def _nothing_finer(earlier: int, later: int, grid: int | None, apart: int) -> bool:
     """Whether any discharge could have gone between these two.
 
-    On a grid this is a fact about the axis: two adjacent lines have nothing
-    between them, and any wider pair skipped lines that could have been run. A
+    On a grid this is a fact about the axis: two adjacent grid values have
+    nothing between them, and any wider pair skipped values that could have
+    been run. A
     step over a ceiling is tolerable in the first case and is a library the
     sweep left unfinished in the second — and the difference is decidable
     without knowing anything about how the sweep behaved (DR-041).
@@ -221,7 +222,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
     bands = _bands(wanted)
     order = [entry["q"] for entry in metrics]
     if not bands or len(metrics) < 2:
-        return Adoption(order, [], [], [], 0)
+        return Adoption(order, [], [], 0)
     # The discharge axis this library had to land on. Without one there is no
     # way to tell a step nothing could improve on from a stretch the sweep
     # skipped, so adjacency in storage is the only fallback available.
@@ -246,7 +247,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
                 best[j], parent[j] = through, i  # type: ignore[assignment]
 
     if best[-1] == infinite:
-        return Adoption(order, ["no route through the library satisfies intent"], [], [], 0)
+        return Adoption(order, ["no route through the library satisfies intent"], [], 0)
 
     path: list[int] = []
     node = len(metrics) - 1
@@ -255,25 +256,20 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
         node = parent[node]
     path.reverse()
 
-    holes, notes, expected = [], [], []
+    holes, expected = [], []
     for i, j in zip(path, path[1:]):
         verdict, why = _verdict(metrics[i], metrics[j], bands)
         gap = metrics[j]["q"] - metrics[i]["q"]
         where = f"q={metrics[i]['q']} to q={metrics[j]['q']}"
         if verdict == "reject_high":
-            expected.append(f"{where} is one grid line of {grid} cms and still "
+            expected.append(f"{where} is a single {grid} cms grid step and still "
                             f"moved {why}; the reach changes faster than its "
                             f"discharge grid can follow")
-        elif verdict == "reject_low" and j != len(metrics) - 1:
-            # The final step is exempt: the maximum discharge is published
-            # whatever its verdict, because the KWSE stage grid is built from
-            # the top of the envelope. A small step into it is the rule working,
-            # not a fault, and saying so on every reach on every pass buries the
-            # findings that matter.
-            notes.append(f"{where} moved less than the bands ask, but nothing "
-                         f"better reaches the end of the range")
+        elif verdict == "reject_low":
+            expected.append(f"{where} moved less than the bands ask; no line "
+                            f"clears a floor, so the sweep took the nearest one")
 
-    return Adoption([metrics[i]["q"] for i in path], holes, notes, expected,
+    return Adoption([metrics[i]["q"] for i in path], holes, expected,
                     len(metrics) - len(path))
 
 
@@ -383,13 +379,8 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                         "flooded_area": float(props["flooded_area"])})
 
     adoption = adopt(metrics, wanted)
-    if adoption.passed_over:
-        logger.debug("reach %s nd library: %s of %s scenarios adopted, %s not needed",
-                     reach_id, len(adoption.q_set), len(metrics), adoption.passed_over)
     for note in adoption.expected:
         logger.debug("reach %s nd library: %s", reach_id, note)
-    for note in adoption.notes:
-        logger.warning("reach %s nd library: %s", reach_id, note)
     for hole in adoption.holes:
         logger.error("reach %s nd library: %s", reach_id, hole)
     if adoption.holes:
@@ -428,7 +419,8 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
                or before["applied_revision"] != wanted["revision"])
     return {**out, "found": f"{len(adopted)} discharges adopted "
                             f"of {len(discharges)} in storage",
-            "q_set": adopted, "resolution_notes": adoption.notes,
+            "q_set": adopted, "expected": adoption.expected,
+            "passed_over": adoption.passed_over,
             "us_wse_max": us_wse_max, "changed": changed, "refused": refused}
 
 
