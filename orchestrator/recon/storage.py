@@ -96,6 +96,7 @@ def nd_library_path(
 
 REACH_NETWORK_FILENAME = "reach_network.parquet"
 LULC_FILENAME = "lulc.tif"
+LULC_LOOKUP_FILENAME = "lulc_lookup.json"
 
 
 def reference_data_path(filename: str) -> str:
@@ -118,6 +119,25 @@ def lulc_path() -> str:
     supplied by its SEPEX process definition.
     """
     return reference_data_path(LULC_FILENAME)
+
+
+def lulc_lookup_path() -> str:
+    """The land-cover to Manning's n mapping, published once per deployment.
+
+    The job takes this input as either a dict or a path, and the path is what
+    the loop sends: a payload carrying the mapping inline repeats the same
+    fifteen pairs on every build, and puts a value that must match what identity
+    was predicted from into a place where it can be edited per submission.
+
+    Content, not address, is what identity hashes. The job reads this file and
+    hashes the mapping it resolves to, exactly as it would hash a dict handed to
+    it directly, so moving the mapping out of the payload changes no
+    identity_hash and invalidates nothing already built. What it does require is
+    that this file hold what desired_state holds — seed.py writes both from
+    author_intent.LULC_LOOKUP, and _build_model_payload sends the dict inline
+    rather than this path for any reach that overrides it.
+    """
+    return reference_data_path(LULC_LOOKUP_FILENAME)
 
 
 def reach_network_path() -> str:

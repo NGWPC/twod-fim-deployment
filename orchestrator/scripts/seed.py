@@ -29,13 +29,14 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import tempfile
 from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import pyarrow.parquet as pq
-from author_intent import DEFAULT_Q_BOUNDS_PARQUET, load_q_bounds
+from author_intent import DEFAULT_Q_BOUNDS_PARQUET, LULC_LOOKUP, load_q_bounds
 from recon import db, storage
 from recon.config import settings
 
@@ -225,6 +226,28 @@ def export_lulc(lulc_tif: Path) -> str:
     return uri
 
 
+def export_lulc_lookup() -> str:
+    """Publish the land-cover to Manning's n mapping as JSON, and return its path.
+
+    Written from author_intent.LULC_LOOKUP, the same constant author_intent.py
+    writes into desired_state_defaults, so the published file and the intent the
+    loop predicts identity from cannot say different things. That is the whole
+    requirement: the job hashes the mapping it resolves, not the address it came
+    from, so identity is unchanged as long as the two agree.
+
+    Exported here rather than from author_intent.py because this is where the
+    deployment's shared reference data is published — the land-cover raster and
+    the reach network go up in the same pass, and a job reading one reads all
+    three the same way.
+    """
+    uri = storage.lulc_lookup_path()
+    bucket, key = storage.parse_s3_path(uri)
+    storage.get_s3_client().put_object(
+        Bucket=bucket, Key=key, Body=json.dumps(LULC_LOOKUP, sort_keys=True).encode()
+    )
+    return uri
+
+
 def export_lake_polygons(lakes: list[dict]) -> list[str]:
     """Write each lake to storage as GeoJSON, and return the paths written."""
     s3 = storage.get_s3_client()
@@ -276,6 +299,7 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
     written = export_lake_polygons(lakes)
     network_uri = export_reach_network(reaches)
     lulc_uri = export_lulc(lulc_tif)
+    lulc_lookup_uri = export_lulc_lookup()
 
     summary = db.one("""
         SELECT count(*) AS reaches,
@@ -295,6 +319,7 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
         print(f"  exported      {uri}")
     print(f"  network       {network_uri}")
     print(f"  land cover    {lulc_uri}")
+    print(f"  lulc lookup   {lulc_lookup_uri}")
     if summary["outlet_terminals"]:
         # Not a warning any more. An outlet names no lake or coast, and needs
         # none: the outflow polygon input is optional and the run job derives an

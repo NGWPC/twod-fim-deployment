@@ -245,7 +245,14 @@ def _build_model_payload(reach_id: int) -> dict:
         "epsg_code": int(wanted["epsg_code"]),
         "dem_source": wanted["dem_source"],
         "lulc_source": wanted["lulc_source"],
-        "lulc_lookup": wanted["lulc_lookup"],
+        # By address, like the land-cover raster and the reach network beside
+        # it. The job accepts either a mapping or a path to one and hashes what
+        # it resolves, so this is the same identity the inline dict produced —
+        # it just stops fifteen pairs riding along on every build. A reach that
+        # overrides the mapping still sends it inline: the published file holds
+        # the defaults and nothing else.
+        "lulc_lookup": (wanted["lulc_lookup"] if wanted["lulc_lookup_overridden"]
+                        else storage.lulc_lookup_path()),
         # No domain_buffer. It was a flat placeholder — one distance for every
         # reach — standing in for a widening the job can now work out per reach,
         # from the bankfull width its own drainage area implies. Sending a

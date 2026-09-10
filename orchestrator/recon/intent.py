@@ -30,6 +30,12 @@ _EFFECTIVE = """
         COALESCE(d.dem_source,      f.dem_source)      AS dem_source,
         COALESCE(d.lulc_source,     f.lulc_source)     AS lulc_source,
         COALESCE(d.lulc_lookup,     f.lulc_lookup)     AS lulc_lookup,
+        -- Whether the mapping above came from this reach rather than the
+        -- defaults row. The build payload sends the published lulc_lookup.json
+        -- by address, and that file holds the DEFAULTS; a reach that overrides
+        -- them has to have its own mapping sent inline or it would be built
+        -- against someone else's.
+        (d.lulc_lookup IS NOT NULL) AS lulc_lookup_overridden,
         COALESCE(d.solver,          f.solver)          AS solver,
         d.q_lower_bound,
         d.q_upper_bound,
