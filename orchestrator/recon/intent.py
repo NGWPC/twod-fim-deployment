@@ -23,6 +23,10 @@ _EFFECTIVE = """
         rn.terminal_reason,
         rn.lake_to_id,
         rn.coast_to_id,
+        -- A lake immediately upstream (DR-007.4). The build job takes this as
+        -- ds_of_lake and moves the inflow line onto this reach's own centerline,
+        -- because there is no upstream mainstem to walk up.
+        rn.lake_outlet,
         ST_AsBinary(rn.geom) AS geom_wkb,
         f.sdr_commit,
         COALESCE(d.grid_resolution, f.grid_resolution) AS grid_resolution,
