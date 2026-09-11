@@ -26,26 +26,39 @@ CREATE TABLE IF NOT EXISTS desired_state_defaults(
     epsg_code integer NOT NULL,
     dem_source text NOT NULL,
     lulc_source text NOT NULL,
-    lulc_lookup jsonb NOT NULL,
+    -- An address, like the two sources above it, not the mapping itself. The
+    -- job takes a path here and hashes the mapping it reads out of it, so
+    -- identity follows the FILE'S CONTENT while the database holds only where
+    -- to find it. seed.py writes that file.
+    lulc_lookup text NOT NULL,
     -- ------------------------------------------------------------------
     -- Defaults for everything desired_state can author per reach.
     -- ------------------------------------------------------------------
     -- Run identity is hash(sdr_commit + solver NAME).
     solver text NOT NULL DEFAULT 'lisflood' CONSTRAINT desired_state_defaults_solver_chk CHECK (solver IN
 	('lisflood', 'sfincs', 'triton')),
-    ld_q_mean_stage_delta double precision,
-    ld_q_max_stage_delta double precision,
-    ld_q_max_extent_prcnt_delta double precision,
+    -- Library resolution (DR-030), one acceptance RANGE per criterion rather
+    -- than a single target, matching the contract agreed with the jobs repo.
+    -- numrange because the contract names one thing per criterion and a range
+    -- type enforces min < max for free; a caller sends lower(x) and upper(x).
+    --
+    -- All three are measured over WET CELLS ONLY, and describe the INCREASE
+    -- between consecutive library discharges.
+    ld_q_max_depth_increase_range numrange,
+    ld_q_median_depth_increase_range numrange,
+    ld_q_flooded_area_prcnt_increase_range numrange,
     ld_ds_z_delta double precision,
     kwse_upper_bound double precision,
-    revision integer NOT NULL DEFAULT 0 -- DB owned; see 09_triggers.sql
+    revision integer NOT NULL DEFAULT 0, -- DB owned; see 09_triggers.sql
+    CONSTRAINT desired_state_defaults_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25,
+	0.5, 1, 2, 5))
 );
 
 COMMENT ON TABLE desired_state_defaults IS 'One row. What every reach falls back to for any field it has not authored. Holds the model identity inputs, so the reconciler can predict where a model belongs.';
 
 COMMENT ON COLUMN desired_state_defaults.sdr_commit IS 'Methodology version pin. Part of model identity: changing it means every reach wants a new model.';
 
-COMMENT ON COLUMN desired_state_defaults.lulc_lookup IS 'Land-cover to roughness mapping. Hashed into model identity, so an edit here invalidates every model.';
+COMMENT ON COLUMN desired_state_defaults.lulc_lookup IS 'Path to the land-cover to roughness mapping JSON, written by seed.py. Model identity hashes the file CONTENT, not this path, so editing the file invalidates every model without changing this row.';
 
 COMMENT ON COLUMN desired_state_defaults.revision IS 'DB owned. Changing any default bumps this AND every reach revision (09_triggers.sql), because every reach effective intent changed.';
 
@@ -59,6 +72,14 @@ CREATE TABLE IF NOT EXISTS desired_state(
     q_lower_bound integer, -- cms (whole-number flows only)
     q_upper_bound integer, -- cms (whole-number flows only)
     initial_dq_step_for_nd integer, -- cms
+    -- The discharge axis every library entry for this reach must land on, cms,
+    -- anchored to zero, from the menu below (DR-041). It is the finest step the
+    -- sweep can take, so it is what makes "nothing finer exists" a fact about
+    -- the axis rather than a guess about how the sweep was feeling. Per reach
+    -- only: one deployment-wide grid would be far too coarse for a small reach
+    -- and needlessly fine for a large one, so there is no defaults row entry
+    -- and seeding derives it from the reach's own range.
+    q_grid_resolution integer, -- cms
     solver text,
     CONSTRAINT desired_state_solver_chk CHECK (solver IS NULL OR solver IN ('lisflood', 'sfincs', 'triton')),
     -- Identity inputs, overridable per reach. Rarely authored — a reach needing
@@ -69,22 +90,51 @@ CREATE TABLE IF NOT EXISTS desired_state(
     epsg_code integer,
     dem_source text,
     lulc_source text,
-    lulc_lookup jsonb,
+    -- A path, as in the defaults row. A reach that wants its own mapping points
+    -- at its own file rather than carrying a copy of one here.
+    lulc_lookup text,
     model_domain geometry(polygon, 5070),
     -- override system TBD
     override_id bigint,
-    ld_q_mean_stage_delta double precision, -- m
-    ld_q_max_stage_delta double precision, -- m
-    ld_q_max_extent_prcnt_delta double precision, -- percent
+    -- Library resolution (DR-030), one acceptance RANGE per criterion rather
+    -- than a single target, matching the contract agreed with the jobs repo.
+    -- numrange because the contract names one thing per criterion and a range
+    -- type enforces min < max for free; a caller sends lower(x) and upper(x).
+    --
+    -- All three are measured over WET CELLS ONLY, and describe the INCREASE
+    -- between consecutive library discharges.
+    ld_q_max_depth_increase_range numrange,
+    ld_q_median_depth_increase_range numrange,
+    ld_q_flooded_area_prcnt_increase_range numrange,
     ld_ds_z_delta double precision, -- m
     q_set integer[],
     kwse_upper_bound double precision, -- m
     revision integer NOT NULL DEFAULT 0, -- DB owned; per-reach counter set by 09_triggers.sql
     CONSTRAINT desired_state_flow_bounds_chk CHECK (q_lower_bound IS NULL OR q_upper_bound IS NULL OR q_lower_bound < q_upper_bound),
     CONSTRAINT desired_state_kwse_bounds_chk CHECK (kwse_upper_bound IS NULL OR kwse_upper_bound > 0),
-    CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_q_mean_stage_delta IS NULL OR ld_q_mean_stage_delta > 0) AND
-	(ld_q_max_stage_delta IS NULL OR ld_q_max_stage_delta > 0) AND (ld_q_max_extent_prcnt_delta IS NULL OR
-	ld_q_max_extent_prcnt_delta > 0) AND (ld_ds_z_delta IS NULL OR ld_ds_z_delta > 0))
+    CONSTRAINT desired_state_ld_positive_chk CHECK ((ld_ds_z_delta IS NULL OR ld_ds_z_delta > 0) AND
+	(ld_q_max_depth_increase_range IS NULL OR lower(ld_q_max_depth_increase_range) >= 0) AND
+	(ld_q_median_depth_increase_range IS NULL OR lower(ld_q_median_depth_increase_range) >= 0) AND
+	(ld_q_flooded_area_prcnt_increase_range IS NULL OR
+	    lower(ld_q_flooded_area_prcnt_increase_range) >= 0)),
+    -- DR-033 ALT-B picks the stage increment from a fixed menu, not a
+    -- continuum, and anchors the grid it builds to zero. The menu lives here
+    -- because it is a property of authored intent: a value off it would be
+    -- intent the system can never honour, and catching that at write time beats
+    -- discovering it when a library comes out the wrong shape.
+    CONSTRAINT desired_state_ld_ds_z_menu_chk CHECK (ld_ds_z_delta IS NULL OR ld_ds_z_delta IN (0.25, 0.5, 1,
+	2, 5)),
+    -- Same reasoning as the stage menu above: a discharge grid off the menu is
+    -- intent the system can never honour.
+    CONSTRAINT desired_state_q_grid_menu_chk CHECK (q_grid_resolution IS NULL
+	OR q_grid_resolution IN (2, 5, 10, 50, 100)),
+    -- Both bounds and the opening step must sit on the grid, or the sweep
+    -- cannot honour them and the loop cannot verify what it produced.
+    CONSTRAINT desired_state_q_on_grid_chk CHECK (q_grid_resolution IS NULL OR (
+	(q_lower_bound IS NULL OR q_lower_bound % q_grid_resolution = 0) AND
+	(q_upper_bound IS NULL OR q_upper_bound % q_grid_resolution = 0) AND
+	(initial_dq_step_for_nd IS NULL
+	    OR initial_dq_step_for_nd % q_grid_resolution = 0)))
 );
 
 COMMENT ON TABLE desired_state IS 'Authored intent, one row per reach. NULL field = use default source; non-NULL = authored. Preserved at all cost.';
@@ -93,7 +143,9 @@ COMMENT ON COLUMN desired_state.q_lower_bound IS 'Lower discharge bound for the 
 
 COMMENT ON COLUMN desired_state.q_upper_bound IS 'Upper discharge bound for the library (cms); NULL = system default.';
 
-COMMENT ON COLUMN desired_state.initial_dq_step_for_nd IS 'Initial discharge step for the normal-depth adaptive sweep (cms); NULL = default.';
+COMMENT ON COLUMN desired_state.initial_dq_step_for_nd IS 'Initial discharge step for the normal-depth adaptive sweep (cms); NULL = default. Must be a multiple of q_grid_resolution.';
+
+COMMENT ON COLUMN desired_state.q_grid_resolution IS 'The discharge grid every library entry must land on (cms), anchored to zero, one of 2/5/10/50/100 (DR-041). The finest step the sweep may take, and what lets the loop tell an unavoidable step from a skipped one. Derived from the reach range at seeding; no deployment-wide default.';
 
 COMMENT ON COLUMN desired_state.solver IS 'Hydraulic engine; NULL = system default, currently lisflood.';
 
@@ -101,16 +153,19 @@ COMMENT ON COLUMN desired_state.model_domain IS 'Authored domain polygon (EPSG:5
 
 COMMENT ON COLUMN desired_state.override_id IS 'Active override pointer (overrides table TBD); NULL = no override.';
 
-COMMENT ON COLUMN desired_state.ld_q_mean_stage_delta IS 'Adaptive-stepping target: mean/median stage change between library discharges, m (DR-030).';
 
-COMMENT ON COLUMN desired_state.ld_q_max_stage_delta IS 'Adaptive-stepping target: max stage change between library discharges, m (DR-030).';
 
-COMMENT ON COLUMN desired_state.ld_q_max_extent_prcnt_delta IS 'Adaptive-stepping target: max flooded-extent change between library discharges, percent (DR-030).';
+
+COMMENT ON COLUMN desired_state.ld_q_max_depth_increase_range IS 'Acceptance range for the increase in MAX depth between consecutive library discharges, metres, over wet cells only (DR-030). Authored intent, not yet wired: nothing sends it to the job and nothing checks it, pending the agreed jobs-repo contract.';
+
+COMMENT ON COLUMN desired_state.ld_q_median_depth_increase_range IS 'Acceptance range for the increase in MEDIAN depth between consecutive library discharges, metres, over wet cells only (DR-030). Authored intent, not yet wired.';
+
+COMMENT ON COLUMN desired_state.ld_q_flooded_area_prcnt_increase_range IS 'Acceptance range for the PERCENT increase in flooded area between consecutive library discharges, over wet cells only (DR-030) — 10 means 10%, not 0.1. Authored intent, not yet wired.';
 
 COMMENT ON COLUMN desired_state.ld_ds_z_delta IS 'Downstream KWSE standard stage-grid step, m (DR-033).';
 
 COMMENT ON COLUMN desired_state.q_set IS 'Explicitly authored library discharges (cms); NULL = system computes via the adaptive sweep (DR-030).';
 
-COMMENT ON COLUMN desired_state.kwse_upper_bound IS 'Authored upper KWSE bound (m); lower bound is floored by normal-depth WSEL (DR-032). NULL = system computes.';
+COMMENT ON COLUMN desired_state.kwse_upper_bound IS 'Authored ceiling for the stage library (m). Only lowers the computed ceiling, never raises it: nothing can be modelled above a stage the downstream reach never reached. NULL = the system computes it as that reach''s highest upstream-end WSE, one value for every discharge (DR-032 ALT-D). No floor is authored: it comes per discharge from the downstream reach''s minimum, and is deliberately NOT floored by this reach''s own normal depth — that was ALT-C, superseded 2026-07-21 because a too-flat slope pushed normal-depth stages above the downstream reach''s own.';
 
 COMMENT ON COLUMN desired_state.revision IS 'DB owned, per reach: 0 on INSERT, +1 on any real UPDATE (09_triggers.sql). Counts how many times this reach''s intent has changed.';

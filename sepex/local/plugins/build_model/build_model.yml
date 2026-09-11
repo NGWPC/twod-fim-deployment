@@ -153,7 +153,9 @@ inputs:
 
   - id: other_geometries
     title: other_geometries
-    description: Additional geometries for model building
+    description: >-
+      Additional geometries whose extent the model domain must cover. Each entry
+      is either a WKT string or the path to a GeoJSON; the loop sends paths.
     input:
       literalDataDomain:
         dataType: value
@@ -161,6 +163,21 @@ inputs:
           anyValue: true
     minOccurs: 0
     maxOccurs: 99
+
+  - id: ds_of_lake
+    title: ds_of_lake
+    description: >-
+      Whether a lake sits immediately upstream of this reach. Such a reach has
+      no upstream mainstem centerline to walk up, so its inflow line goes
+      walk_us_dist_pct DOWN its own centerline instead (DR-007.4). Sourced from
+      reach_network.lake_outlet.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
 
 outputs:
   - id: plugin_results

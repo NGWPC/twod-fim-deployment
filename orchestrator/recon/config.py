@@ -17,6 +17,24 @@ class Settings(BaseSettings):
     artifacts_s3_bucket: str = "twod-fim-artifacts"
     major_version: int = 1
     aws_endpoint_url: str | None = None
+    # Two MODEL IDENTITY inputs, authored into desired_state_defaults by
+    # author_intent.py. Identity is hashed from them, so changing either gives
+    # every reach a new identity_hash, a new model_id, and a new address — the
+    # whole corpus rebuilds and every result filed under an old model_id is
+    # orphaned. That is why they are settings rather than literals buried in an
+    # INSERT: the blast radius should be visible where the value is set.
+    #
+    # Editing them here changes nothing on its own. desired_state_defaults holds
+    # what is actually in force until author_intent.py runs again, and that run
+    # is what fires bump_all_reach_revisions and starts the rebuild.
+    #
+    # Horizontal resolution the DEM and roughness are resampled to, in the units
+    # of epsg_code — metres for 5070.
+    grid_resolution: float = 30
+    # CRS for every georeferenced artifact. 5070 is CONUS Albers, metres, which
+    # is what the schema stores geometry in and what model outputs are compared
+    # in.
+    epsg_code: int = 5070
     # Nothing here says which IMAGE runs a job, on what hardware, with which
     # environment or mounts. That belongs to the SEPEX process definition,
     # wherever this deployment's SEPEX reads it from, and the loop never sees

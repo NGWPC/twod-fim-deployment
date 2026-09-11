@@ -5,9 +5,10 @@
 -- The loop's candidate query rests on `applied_revision < revision`, so the one
 -- thing that must never happen is revision going backwards while a stale
 -- applied_revision survives. That can only occur one way — a desired_state row
--- being deleted and re-created, restarting at 0, while reach_processing (a
--- different table, untouched by that delete) still holds a high number. The
--- reach would then look permanently satisfied and never be checked again.
+-- being deleted and re-created, restarting at 0, while the materialized_* tables
+-- (untouched by that delete, since they cascade from reach_network) still hold a
+-- higher number. The reach would then look permanently satisfied and never be
+-- checked again.
 --
 -- The delete trigger below closes that, which is why the counter can be a plain
 -- per-row one rather than a global sequence.
@@ -44,12 +45,28 @@ CREATE TRIGGER desired_state_bump_revision
 -- Deleting intent retracts what was achieved against it. Without this, a
 -- re-created row starts at revision 0 while applied_revision still claims a
 -- higher one, and the reach is never looked at again.
+--
+-- The claim is retracted rather than the rows deleted. -1 is already the
+-- schema's sentinel for "satisfies no revision" (08_views.sql, and the loop's
+-- candidate query), so this says exactly what is true: something was seen in
+-- storage, and it is proof of nothing. The rows themselves stay because what
+-- they record — the identity found, the realized domain_code, the discharge set,
+-- the upstream-end stages — was seen in storage and still was. Deleting them
+-- would assert more than the delete of an intent row justifies, and would throw
+-- away values (domain_code above all) that cannot be predicted and would have to
+-- be re-read from S3. The next check re-observes and restores a real revision.
 CREATE OR REPLACE FUNCTION forget_applied_revision()
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    UPDATE reach_processing
+    UPDATE materialized_models
+    SET applied_revision = -1
+    WHERE reach_id = OLD.reach_id;
+    UPDATE materialized_nd_runs
+    SET applied_revision = -1
+    WHERE reach_id = OLD.reach_id;
+    UPDATE materialized_kwse_runs
     SET applied_revision = -1
     WHERE reach_id = OLD.reach_id;
     RETURN OLD;
@@ -103,4 +120,4 @@ DROP SEQUENCE IF EXISTS desired_state_revision_seq;
 
 COMMENT ON FUNCTION set_desired_state_revision() IS 'BEFORE INSERT/UPDATE on desired_state: revision starts at 0 and increments per reach on any real change.';
 
-COMMENT ON FUNCTION forget_applied_revision() IS 'AFTER DELETE on desired_state: clears applied_revision, so a re-created row starting at 0 is not shadowed by a stale claim.';
+COMMENT ON FUNCTION forget_applied_revision() IS 'AFTER DELETE on desired_state: sets applied_revision to -1 in every materialized_* table for the reach, so a re-created row starting at 0 is not shadowed by a stale claim. The rows stay: what they record was seen in storage.';

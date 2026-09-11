@@ -61,9 +61,10 @@ python3 deploy/setup_sepex.py \
   --sepex-password <password> \
   --s3-bucket <bucket-name>
 
-# Seed the network
+# Seed the network, then author intent for it
 cd orchestrator
 uv run python scripts/seed.py
+uv run python scripts/author_intent.py --scope all
 
 # Start the reconciler
 uv run python scripts/reconcile.py --forever
@@ -98,8 +99,9 @@ Seeds a small test network and runs the reconciliation loop.
 ```bash
 cd /opt/twod-fim-deployment/orchestrator
 
-# Seed the network
+# Seed the network, then author the small end-to-end scope
 uv run python scripts/seed.py
+uv run python scripts/author_intent.py
 
 # Run one reconciliation pass
 uv run python scripts/reconcile.py --once

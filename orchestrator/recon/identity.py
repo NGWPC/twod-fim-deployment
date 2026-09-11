@@ -18,10 +18,10 @@ Two representation details are load-bearing, learned from the job's own types:
   grid_resolution is a FLOAT in the identity (pydantic field), so it must
   serialize as 10.0, never 10 — "10.0" and "10" hash differently.
 
-  lulc_lookup is hashed with INT keys (dict[int, float]); jsonb returns string
-  keys, and json.dumps sorts by the original key type before stringifying, so
-  {"100": ..} and {100: ..} sort differently once codes pass two digits. Keys
-  are coerced back to int before hashing.
+  lulc_lookup is hashed with INT keys (dict[int, float]); the JSON it is read
+  from has string keys, and json.dumps sorts by the original key type before
+  stringifying, so {"100": ..} and {100: ..} sort differently once codes pass
+  two digits. Keys are coerced back to int before hashing.
 """
 
 import hashlib
@@ -68,14 +68,38 @@ def reach_geom_hash(geom_wkb: bytes) -> str:
     return hash_str(shapely_wkb.loads(bytes(geom_wkb)).wkt)
 
 
+def lulc_lookup_mapping(path: str) -> dict[int, float]:
+    """The land-cover to roughness mapping a path resolves to.
+
+    The database holds the address; identity is over the CONTENT, because that
+    is what the job hashes — it reads the same file and hashes the mapping, not
+    the string it was handed. So predicting an address means reading the file,
+    and this is the one place the recipe below reaches storage.
+
+    Read on every call rather than cached. A cache would be nearly free, since
+    this is one small deployment-wide file, but a reconciler holding a stale
+    mapping predicts addresses the job will not write to, and would go on doing
+    it until restart. If the reads ever matter, cache them here, where the
+    staleness window is visible.
+    """
+    from recon import storage  # local: storage imports config, and this is the
+                               # only function in this module that needs either
+
+    doc = storage.read_json(path)
+    if doc is None:
+        raise RuntimeError(f"no land-cover lookup at {path}")
+    return {int(k): float(v) for k, v in doc.items()}
+
+
 def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     """The identity object and hash this reach's effective intent implies.
 
     `intent` needs: sdr_commit, grid_resolution, epsg_code, dem_source,
-    lulc_source, lulc_lookup (jsonb dict), geom_wkb. Field construction mirrors
-    jobs/build_model.py line for line.
+    lulc_source, lulc_lookup (a path), geom_wkb. Field construction mirrors
+    jobs/build_model.py line for line — including that the lookup is resolved
+    from its path first, which is what the job does with the same input.
     """
-    lulc_lookup = {int(k): float(v) for k, v in intent["lulc_lookup"].items()}
+    lulc_lookup = lulc_lookup_mapping(intent["lulc_lookup"])
     identity = {
         "sdr_commit": intent["sdr_commit"],
         "reach_geom_hash": reach_geom_hash(intent["geom_wkb"]),
@@ -194,6 +218,57 @@ def parse_q_folder(name: str) -> int | None:
         return None
     try:
         return int(float(name[2:]))
+    except ValueError:
+        return None
+
+
+# The downstream half of a scenario folder. Mirrors format_downstream_string in
+# the jobs repo, whose precision constants are copied here for the same reason
+# the hashing recipe is: the loop has to name a folder the job will also name,
+# without launching a container to ask.
+RUN_NAME_KWSE_ROUNDING_PRECISION = 1
+RUN_NAME_SLOPE_ROUNDING_PRECISION = 1
+
+
+def kwse_folder(z: float) -> str:
+    """The `kwse=<stage>` folder for one KWSE scenario.
+
+    The stage is the one IMPOSED at this reach's downstream end — the grid
+    target — not whatever the run went on to achieve at its upstream end. One
+    decimal place, so a 0.25 m grid renders 224.25 as `kwse=224.2`; that is
+    lossy but consistent, because the loop and the job round identically and
+    neither ever parses a stage back out of a folder name.
+    """
+    return f"kwse={z:.{RUN_NAME_KWSE_ROUNDING_PRECISION}f}"
+
+
+def nd_folder(slope: float) -> str:
+    """The `nd=<slope>` folder holding a reach's normal-depth library.
+
+    Scientific notation with the sign stripped, which is what the job does. That
+    makes the rendering lossy in a way worth knowing: 1.2e4 and 1.2e-4 both come
+    out `nd=1.2E04`, so a folder name cannot tell you a slope's sign.
+    """
+    formatted = (
+        f"{slope:.{RUN_NAME_SLOPE_ROUNDING_PRECISION}e}"
+        .replace("-", "").replace("+", "").replace("e", "E")
+    )
+    return f"nd={formatted}"
+
+
+def parse_nd_folder(name: str) -> float | None:
+    """The slope an `nd=<value>` folder names, or None if it is not one.
+
+    Needed because the slope is emergent — the job derives it from the reach's
+    own DEM — so the only place the loop can read it is the folder the job
+    created. Recovering it is enough to name that folder again, which is all a
+    hotstart reference needs, even though the sign stripping above means the
+    value recovered is not necessarily the slope the job started from.
+    """
+    if not name.startswith("nd="):
+        return None
+    try:
+        return float(name[3:].replace("E", "e"))
     except ValueError:
         return None
 

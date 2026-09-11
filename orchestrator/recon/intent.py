@@ -23,17 +23,50 @@ _EFFECTIVE = """
         rn.terminal_reason,
         rn.lake_to_id,
         rn.coast_to_id,
+        -- A lake immediately upstream (DR-007.4). The build job takes this as
+        -- ds_of_lake and moves the inflow line onto this reach's own centerline,
+        -- because there is no upstream mainstem to walk up.
+        rn.lake_outlet,
         ST_AsBinary(rn.geom) AS geom_wkb,
         f.sdr_commit,
         COALESCE(d.grid_resolution, f.grid_resolution) AS grid_resolution,
         COALESCE(d.epsg_code,       f.epsg_code)       AS epsg_code,
         COALESCE(d.dem_source,      f.dem_source)      AS dem_source,
         COALESCE(d.lulc_source,     f.lulc_source)     AS lulc_source,
+        -- A path to the mapping, not the mapping. Identity is over the file's
+        -- content, so predicting an address reads it; the payload just passes
+        -- the address through. A reach overriding the default overrides which
+        -- FILE it points at, which needs no special handling anywhere.
         COALESCE(d.lulc_lookup,     f.lulc_lookup)     AS lulc_lookup,
         COALESCE(d.solver,          f.solver)          AS solver,
         d.q_lower_bound,
         d.q_upper_bound,
-        d.initial_dq_step_for_nd
+        d.initial_dq_step_for_nd,
+        -- The discharge axis this reach's library must land on (DR-041). Per
+        -- reach only, so no fallback: a NULL here means seeding never placed
+        -- the reach on a grid, and the loop cannot verify its resolution.
+        d.q_grid_resolution,
+        -- Authored library discharges. Per reach only: desired_state_defaults
+        -- has no q_set, because one deployment-wide list of discharges would
+        -- mean nothing across reaches of different size. NULL = the nd job's
+        -- adaptive sweep chooses, and the loop reads the result back from
+        -- materialized_nd_runs.
+        d.q_set,
+        -- The resolution the library must achieve, read back by
+        -- observe_nd_runs. Still not sent to the job: it carries its own
+        -- defaults, and the loop's business is judging the result rather than
+        -- dictating how the sweep reaches it.
+        COALESCE(d.ld_q_max_depth_increase_range,
+                 f.ld_q_max_depth_increase_range) AS ld_q_max_depth_increase_range,
+        COALESCE(d.ld_q_median_depth_increase_range,
+                 f.ld_q_median_depth_increase_range) AS ld_q_median_depth_increase_range,
+        COALESCE(d.ld_q_flooded_area_prcnt_increase_range,
+                 f.ld_q_flooded_area_prcnt_increase_range)
+                 AS ld_q_flooded_area_prcnt_increase_range,
+        -- KWSE fields. Both fall back to the defaults row like everything
+        -- above; the stage grid cannot be built without them.
+        COALESCE(d.ld_ds_z_delta,    f.ld_ds_z_delta)    AS ld_ds_z_delta,
+        COALESCE(d.kwse_upper_bound, f.kwse_upper_bound) AS kwse_upper_bound
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
     CROSS JOIN desired_state_defaults f

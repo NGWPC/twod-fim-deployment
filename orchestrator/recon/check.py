@@ -16,10 +16,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import psycopg
-from shapely.geometry import shape
 
-from recon import (activity, db, gap, identity, intent, observe, processing,
-                   queue, storage)
+from recon import (
+    activity,
+    db,
+    gap,
+    identity,
+    intent,
+    observe,
+    processing,
+    queue,
+    scenarios,
+    storage,
+)
 from recon.config import settings
 from recon.execution import ExecutionService
 
@@ -54,16 +63,19 @@ _SNAPSHOT = """
         d.revision,
         rn.is_terminal,
         rn.reach_to_id AS downstream_reach_id,
-        (rn.lake_to_id IS NOT NULL OR rn.coast_to_id IS NOT NULL) AS has_outflow_polygon,
         COALESCE(mm.applied_revision  >= d.revision,  FALSE) AS model_ok,
         COALESCE(mnd.applied_revision >= d.revision,  FALSE) AS nd_ok,
         COALESCE(mkw.applied_revision >= d.revision,  FALSE) AS kwse_ok,
         COALESCE(dmm.applied_revision  >= dd.revision, FALSE) AS ds_model_ok,
         COALESCE(dnd.applied_revision  >= dd.revision, FALSE) AS ds_nd_ok,
         COALESCE(dkw.applied_revision  >= dd.revision, FALSE) AS ds_kwse_ok,
+        COALESCE(drn.is_terminal, FALSE) AS ds_is_terminal,
+        (COALESCE(d.ld_ds_z_delta, f.ld_ds_z_delta) IS NOT NULL) AS has_stage_increment,
         p.current_step
     FROM desired_state d
     JOIN reach_network rn USING (reach_id)
+    CROSS JOIN desired_state_defaults f
+    LEFT JOIN reach_network drn          ON drn.reach_id = rn.reach_to_id
     LEFT JOIN materialized_models    mm  ON mm.reach_id  = d.reach_id
     LEFT JOIN materialized_nd_runs   mnd ON mnd.reach_id = d.reach_id
     LEFT JOIN materialized_kwse_runs mkw ON mkw.reach_id = d.reach_id
@@ -98,7 +110,8 @@ def load_snapshot(
         ds_model_ok=row["ds_model_ok"],
         ds_nd_ok=row["ds_nd_ok"],
         ds_kwse_ok=row["ds_kwse_ok"],
-        has_outflow_polygon=row["has_outflow_polygon"],
+        ds_is_terminal=row["ds_is_terminal"],
+        has_stage_increment=row["has_stage_increment"],
         in_flight_step=row["current_step"],
     )
 
@@ -114,38 +127,22 @@ def _downstream_max_q_dir(downstream: int) -> str:
     """
     proof = db.one(
         "SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
-        " WHERE reach_id = %s", (downstream,))
+        " WHERE reach_id = %s",
+        (downstream,),
+    )
     if proof is None:
-        raise RuntimeError(f"downstream reach {downstream} has no materialized nd library")
+        raise RuntimeError(
+            f"downstream reach {downstream} has no materialized nd library"
+        )
     library = storage.nd_library_path(
-        downstream, proof["model_id"], proof["run_identity_hash"])
+        downstream, proof["model_id"], proof["run_identity_hash"]
+    )
     if library is None:
         raise RuntimeError(
             f"downstream reach {downstream} is materialized but its nd=<slope> "
-            "folder cannot be found")
+            "folder cannot be found"
+        )
     return f"{library}/{identity.q_folder(max(proof['q_set']))}"
-
-
-def _geojson_wkt(path: str) -> list[str]:
-    """Every geometry in a GeoJSON document, as WKT.
-
-    build_model takes geometries, not references, so this is the one place the
-    loop hands a job DATA rather than an address. WKT via shapely for the same
-    reason identity hashing goes through shapely: it is the representation the
-    job itself round-trips through geopandas.
-    """
-    doc = storage.read_json(path)
-    if doc is None:
-        raise RuntimeError(f"expected a geometry at {path}, found nothing")
-    if doc.get("type") == "FeatureCollection":
-        geoms = [f["geometry"] for f in doc.get("features", []) if f.get("geometry")]
-    elif doc.get("type") == "Feature":
-        geoms = [doc["geometry"]] if doc.get("geometry") else []
-    else:
-        geoms = [doc]
-    if not geoms:
-        raise RuntimeError(f"no geometry in {path}")
-    return [shape(g).wkt for g in geoms]
 
 
 def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
@@ -159,6 +156,19 @@ def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
 
     Terminal reaches have nothing below them and pass none.
 
+    Passed as an ADDRESS. The job takes either a WKT string or a path to a
+    GeoJSON and reads the same geometry out of both — verified equal coordinate
+    for coordinate, so the domain this produces is the one the inlined WKT
+    produced. What changes is where the geometry travels: a stage transfer line
+    is a few kilobytes of WKT and grows with the reach, and the payload rides on
+    the job container's command line.
+
+    Nothing here reads the file, so a transfer line that is missing fails inside
+    the job rather than before it is submitted. gap.py already holds the reach
+    until the downstream nd library is proved, and _downstream_max_q_dir raises
+    when that proof or its nd= folder is absent, so what is left uncovered is
+    narrow: a proved library whose stage transfer line was never written.
+
     NOTE these geometries are NOT part of model identity. They move the domain,
     so they change domain_code and not identity_hash — meaning a model built
     without them still satisfies intent and will still be adopted. Changing
@@ -166,7 +176,7 @@ def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
     """
     if wanted["is_terminal"]:
         return []
-    return _geojson_wkt(f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}")
+    return [f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}"]
 
 
 # The reaches draining into one reach, and which of them is the mainstem.
@@ -241,7 +251,12 @@ def _build_model_payload(reach_id: int) -> dict:
         "epsg_code": int(wanted["epsg_code"]),
         "dem_source": wanted["dem_source"],
         "lulc_source": wanted["lulc_source"],
+        # Already a path in the database, like the two sources above it, so it
+        # passes straight through. The job reads it and hashes what it finds,
+        # which is the same mapping identity was predicted from.
         "lulc_lookup": wanted["lulc_lookup"],
+        # to do: should be part of identity
+        "ds_of_lake": bool(wanted["lake_outlet"]),
         # No domain_buffer. It was a flat placeholder — one distance for every
         # reach — standing in for a widening the job can now work out per reach,
         # from the bankfull width its own drainage area implies. Sending a
@@ -262,8 +277,9 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
                     discharge of its library — the largest wetted footprint it
                     produces, so it bounds every scenario this reach will run
       terminal      the lake or coast it drains into, published once per water
-                    body and shared by every reach ending there
-                    — DR-006 ALT-E
+                    body and shared by every reach ending there — DR-006 ALT-E.
+                    A plain outlet drains into neither and sends no polygon at
+                    all, leaving the job to derive one from the model itself
 
     The downstream address is read from that reach's proof rather than
     predicted, because the discharge in it is emergent: the adaptive step
@@ -285,16 +301,46 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
         for kind in ("lake", "coast"):
             feature_id = wanted[f"{kind}_to_id"]
             if feature_id is not None:
-                return {"outflow_area_polygon_path": storage.boundary_polygon_path(kind, feature_id)}
-        raise RuntimeError(
-            f"reach {reach_id} is a {wanted['terminal_reason']} terminal and names no "
-            "lake or coast, so it has no outflow boundary")
+                return {
+                    "outflow_area_polygon_path": storage.boundary_polygon_path(
+                        kind, feature_id
+                    )
+                }
+        # A plain outlet names no water body, and needs none. The input is
+        # optional and the job derives an outflow area from the model's own
+        # domain and centerline when it is absent, so sending nothing is the
+        # correct instruction rather than a missing one.
+        return {}
 
     downstream = wanted["reach_to_id"]
     return {
-        "outflow_area_polygon_path":
-            f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
+        "outflow_area_polygon_path": f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
     }
+
+
+def _library_scenarios(reach_id: int, model_id: str, wanted: db.Row) -> list[str]:
+    """Scenario manifests already published under this reach's run identity.
+
+    Everything, not just what a previous attempt adopted: a discharge rejected
+    against one reference is often accepted against the next, and the job
+    re-judges all of them against the bands in force now. An empty list is the
+    normal answer the first time a reach is swept.
+    """
+    _, run_hash = identity.run_identity(wanted)
+    library = storage.nd_library_path(reach_id, model_id, run_hash)
+    if library is None:
+        return []
+    return [
+        f"{library}/{identity.q_folder(q)}/{storage.SCENARIO_MANIFEST_FILENAME}"
+        for q in sorted(
+            q
+            for q in (
+                identity.parse_q_folder(name)
+                for name in storage.list_subfolders(library)
+            )
+            if q is not None
+        )
+    ]
 
 
 def _run_nd_payload(reach_id: int) -> dict:
@@ -312,13 +358,21 @@ def _run_nd_payload(reach_id: int) -> dict:
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
-    model = db.one("SELECT model_id FROM materialized_models WHERE reach_id = %s",
-                   (reach_id,))
+    model = db.one(
+        "SELECT model_id FROM materialized_models WHERE reach_id = %s", (reach_id,)
+    )
     if model is None:
         raise RuntimeError(f"reach {reach_id} has no materialized model to run against")
-    for field in ("q_lower_bound", "q_upper_bound", "initial_dq_step_for_nd"):
+    for field in (
+        "q_lower_bound",
+        "q_upper_bound",
+        "initial_dq_step_for_nd",
+        "q_grid_resolution",
+    ):
         if wanted[field] is None:
-            raise RuntimeError(f"reach {reach_id} has no {field}; nd cannot be submitted")
+            raise RuntimeError(
+                f"reach {reach_id} has no {field}; nd cannot be submitted"
+            )
     return {
         "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
         "model_results_base_path": storage.results_root(),
@@ -329,13 +383,80 @@ def _run_nd_payload(reach_id: int) -> dict:
         "min_upstream_inflow": int(wanted["q_lower_bound"]),
         "max_upstream_inflow": int(wanted["q_upper_bound"]),
         "delta_upstream_inflow": int(wanted["initial_dq_step_for_nd"]),
+        # The axis every scenario must land on. The job snaps its own proposals
+        # to it, which is what makes "nothing finer exists" checkable when the
+        # library is read back.
+        "q_grid_resolution": int(wanted["q_grid_resolution"]),
+        # What the library already holds. Simulating is the expensive part of a
+        # scenario; the three readings the sweep needs are on the manifest and
+        # cost nothing to read. Listing storage is this loop's job, not the
+        # job's, so it is told rather than left to go looking -- and being told
+        # is what makes a retry cheap and the sweep idempotent.
+        "existing_scenarios": _library_scenarios(reach_id, model["model_id"], wanted),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
     }
 
 
-PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
+def _run_kwse_payload(reach_id: int) -> dict:
+    """What run_kwse_scenarios needs to build the stage libraries intent asks for.
+
+    Unlike the nd payload, almost none of this is intent passed through. The
+    scenario list is COMPUTED — DR-032 sets the envelope from what the
+    downstream reach has materialized, DR-033 fills it with a stage grid, and
+    each target is bound to a real downstream run. plan.py does all of that and
+    is deliberately pure, so this function's whole job is to gather its inputs
+    and turn its answer into addresses.
+
+    Order is preserved exactly as planned. The job runs scenarios serially and
+    every seed names a scenario earlier in the list, so reordering here would
+    point a run at a depth grid that does not exist yet.
+    """
+    try:
+        context = scenarios.planned(reach_id)
+    except scenarios.NotPlannable as why:
+        raise RuntimeError(str(why)) from why
+
+    payload_scenarios = [
+        {
+            "upstream_discharge": s.q,
+            "bc_value": s.z,
+            "downstream_Scenario": storage.scenario_manifest_path(
+                context.downstream_id,
+                context.ds_model_id,
+                context.ds_run_identity_hash,
+                scenarios.scenario_dir(
+                    s.downstream.bc_type, s.downstream.bc_value, s.downstream.q
+                ),
+            ),
+            "hotstart": {
+                "upstream_discharge": s.seed.q,
+                "bc_type": s.seed.bc_type,
+                "bc_value": s.seed.bc_value,
+                # Named rather than defaulted: the job's default is baked into its
+                # image, and this is the hash the loop predicted and will later
+                # observe against.
+                "identity_hash": context.run_identity_hash,
+            },
+        }
+        for s in context.plan.scenarios
+    ]
+
+    return {
+        "model_manifest_path": storage.model_artifact_path(reach_id, context.model_id),
+        "model_results_base_path": storage.results_root(),
+        "scenarios": payload_scenarios,
+        "volume_convergence_tolerance": settings.volume_convergence_tolerance,
+        "allow_water_on_edges": settings.allow_water_on_edges,
+    }
+
+
+PAYLOADS = {
+    gap.BUILD_MODEL: _build_model_payload,
+    gap.RUN_ND: _run_nd_payload,
+    gap.RUN_KWSE: _run_kwse_payload,
+}
 
 # The SEPEX process each STEP is carried out by. A step and a process are not
 # the same thing: build_model has one process regardless, but a normal-depth run
@@ -359,8 +480,17 @@ PAYLOADS = {gap.BUILD_MODEL: _build_model_payload, gap.RUN_ND: _run_nd_payload}
 BUILD_MODEL_PROCESS = "buildModel"
 RUN_ND_PROCESSES = {
     ("lisflood", False): "runNdScenariosLisfloodCpu",
-    ("lisflood", True):  "runNdScenariosLisfloodGpu",
+    ("lisflood", True): "runNdScenariosLisfloodGpu",
 }
+RUN_KWSE_PROCESSES = {
+    ("lisflood", False): "runKwseScenariosLisfloodCpu",
+    ("lisflood", True): "runKwseScenariosLisfloodGpu",
+}
+
+# The steps whose process depends on the solver and the hardware. build_model is
+# absent on purpose: it runs no solver, so it has one process whatever a reach
+# asks for.
+SOLVER_PROCESSES = {gap.RUN_ND: RUN_ND_PROCESSES, gap.RUN_KWSE: RUN_KWSE_PROCESSES}
 
 
 # Whether this machine can run a solver on a GPU.
@@ -397,18 +527,20 @@ def _process_id(step: str, reach_id: int) -> str:
     """
     if step == gap.BUILD_MODEL:
         return BUILD_MODEL_PROCESS
-    if step != gap.RUN_ND:
+    processes = SOLVER_PROCESSES.get(step)
+    if processes is None:
         raise RuntimeError(f"no SEPEX process for step {step!r}")
     wanted = intent.effective(reach_id)
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
     key = (wanted["solver"], gpu_available())
-    if key not in RUN_ND_PROCESSES:
+    if key not in processes:
         raise RuntimeError(
             f"no {step} process for solver {wanted['solver']!r} "
             f"({GPU_AVAILABLE_ENV}={gpu_available()}); "
-            f"built variants are {sorted(RUN_ND_PROCESSES)}")
-    return RUN_ND_PROCESSES[key]
+            f"built variants are {sorted(processes)}"
+        )
+    return processes[key]
 
 
 def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
@@ -427,31 +559,50 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
     processing.start_check(reach_id)  # stamped now, at the start, never at the end
     seen = observe.observe_reach(reach_id)
     seen_nd = observe.observe_nd_runs(reach_id)
+    seen_kwse = observe.observe_kwse_runs(reach_id)
     # A change to this reach's nd proof changes what the reaches above it can
     # do: it is their outflow boundary, so one appearing unblocks them and one
     # being retracted invalidates work they may already have started. Told here
     # rather than at submission because this is the moment it becomes true —
     # and unlike submission, it also covers a library that has gone away.
-    if seen_nd.get("changed"):
+    # A kwse library counts for the same reason: the reach above reads the
+    # minimum across BOTH of this reach's tables to find its own floor, so a
+    # stage library appearing lowers that floor and widens what it can run.
+    if seen_nd.get("changed") or seen_kwse.get("changed"):
         queue.request_check_upstream(reach_id)
 
     # Work landing is what ends a failure streak. Adoption — a step's proof that
     # was not there before — is that signal; a retraction is not, which is why
     # `found` is tested alongside `changed`.
-    if any(o.get("changed") and o.get("found") for o in (seen, seen_nd)):
+    if any(o.get("changed") and o.get("found") for o in (seen, seen_nd, seen_kwse)):
         processing.clear_failures(reach_id)
 
     snapshot = load_snapshot(reach_id)
     if snapshot is None:
-        note = ("desired_state_defaults not seeded" if intent.defaults_missing()
-                else "no desired_state")
+        note = (
+            "desired_state_defaults not seeded"
+            if intent.defaults_missing()
+            else "no desired_state"
+        )
         return CheckResult(reach_id, -1, "skipped", seen, note=note)
 
-    event = activity.begin(reach_id, "check", snapshot.revision,
-                           {"model": seen.get("found"), "nd": seen_nd.get("found")})
+    event = activity.begin(
+        reach_id,
+        "check",
+        snapshot.revision,
+        {
+            "model": seen.get("found"),
+            "nd": seen_nd.get("found"),
+            "kwse": seen_kwse.get("found"),
+        },
+    )
     decision = gap.calculate(snapshot)
-    result = CheckResult(reach_id, snapshot.revision, type(decision).__name__,
-                         {"model": seen, "nd": seen_nd})
+    result = CheckResult(
+        reach_id,
+        snapshot.revision,
+        type(decision).__name__,
+        {"model": seen, "nd": seen_nd, "kwse": seen_kwse},
+    )
 
     try:
         if isinstance(decision, gap.NoGap):
@@ -464,7 +615,7 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
         elif isinstance(decision, gap.InFlight):
             result.note = f"{decision.step} already running, left alone"
 
-        elif isinstance(decision, gap.WaitingDownstream):
+        elif isinstance(decision, gap.AwaitingDownstream):
             processing.wait_on(reach_id, decision.reach_id)
             result.note = f"{decision.step} waits on reach {decision.reach_id}"
 
@@ -494,16 +645,23 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
     except Exception as exc:  # submission failed; the reach must not stall
         failure = processing.record_failure(reach_id, str(exc))
         activity.end(event, "failed", error=str(exc)[:2000])
-        result.decision, result.note = "Failed", (
-            f"{exc} (failure {failure['consecutive_failures']}"
-            + (", halted)" if failure["halted"] else ")"))
+        result.decision, result.note = (
+            "Failed",
+            (
+                f"{exc} (failure {failure['consecutive_failures']}"
+                + (", halted)" if failure["halted"] else ")")
+            ),
+        )
         logger.exception("check failed for reach %s", reach_id)
         return result
 
     # One activity outcome for both kinds of not-proceeding; the decision name
     # in the detail says which, and reach_status keeps them apart as states.
-    outcome = ("blocked" if isinstance(decision, (gap.WaitingDownstream, gap.AwaitingInputs))
-               else "ok")
+    outcome = (
+        "blocked"
+        if isinstance(decision, (gap.AwaitingDownstream, gap.AwaitingInputs))
+        else "ok"
+    )
     activity.end(event, outcome, {"decision": result.decision, "note": result.note})
     logger.info("%s", result)
     return result

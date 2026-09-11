@@ -40,7 +40,7 @@ from recon.execution import ExecutionService, SepexClient
 
 TALLY = """
     SELECT count(*) FILTER (WHERE state = 'finished')           AS finished,
-           count(*) FILTER (WHERE state = 'waiting_downstream') AS waiting,
+           count(*) FILTER (WHERE state = 'awaiting_downstream') AS waiting,
            count(*) FILTER (WHERE state = 'awaiting_inputs')    AS awaiting,
            count(*) FILTER (WHERE state = 'in_flight')          AS in_flight,
            count(*) FILTER (WHERE state = 'resting')            AS resting,

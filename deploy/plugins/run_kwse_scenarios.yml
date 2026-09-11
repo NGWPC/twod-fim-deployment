@@ -1,0 +1,88 @@
+info:
+  version: '0.1.0'
+  id: runKwseScenariosLisfloodGpu
+  title: Run KWSE Scenarios (LISFLOOD, GPU)
+  description: Run known-water-surface-elevation scenarios for a reach, serially, each hot-started from an earlier one
+  jobControlOptions:
+    - async-execute
+  outputTransmission:
+    - reference
+
+host:
+  type: "aws-batch"
+  jobDefinition: twod-fim-kwse-scenarios
+  jobQueue: twod-fim-scenarios-queue
+  image: ""
+
+command: []
+
+config:
+  envVars: []
+
+inputs:
+  - id: model_manifest_path
+    title: model_manifest_path
+    description: S3 path to the model manifest JSON from build_model
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: model_results_base_path
+    title: model_results_base_path
+    description: S3 path where scenario results will be saved
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: scenarios
+    title: scenarios
+    description: >-
+      Ordered list of KWSE scenarios. Each carries an upstream discharge, the
+      stage to impose, a path to the downstream scenario manifest supplying the
+      water surface, and the seed to hot-start from. Order matters: the job runs
+      them serially and every seed names a scenario earlier in the list.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 1
+    maxOccurs: 1
+
+  - id: volume_convergence_tolerance
+    title: volume_convergence_tolerance
+    description: Volume increase below which a scenario is considered steady
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+  - id: allow_water_on_edges
+    title: allow_water_on_edges
+    description: Whether to allow water at domain edges
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 1
+
+outputs:
+  - id: plugin_results
+    title: plugin_results
+    description: Paths to the generated scenario manifests, and job warnings
+    output:
+      transmissionMode:
+        - reference

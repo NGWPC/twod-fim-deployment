@@ -18,8 +18,12 @@ from pathlib import Path
 import pytest
 
 from recon import gap
-from recon.check import (BUILD_MODEL_PROCESS, RUN_ND_PROCESSES, _process_id,
-                         gpu_available)
+from recon.check import (BUILD_MODEL_PROCESS, RUN_KWSE_PROCESSES,
+                         RUN_ND_PROCESSES, _process_id, gpu_available)
+
+# Every process id the loop is capable of naming.
+ALL_PROCESSES = frozenset(
+    {BUILD_MODEL_PROCESS, *RUN_ND_PROCESSES.values(), *RUN_KWSE_PROCESSES.values()})
 
 DEPLOYMENT = Path(__file__).resolve().parents[2]
 SCHEMA = DEPLOYMENT / "db" / "schema"
@@ -38,16 +42,18 @@ def plugin_process_ids() -> set[str]:
 
 # --- routing ------------------------------------------------------------
 
-@pytest.mark.parametrize("env_value,expected", [
-    ("false", "runNdScenariosLisfloodCpu"),
-    ("true", "runNdScenariosLisfloodGpu"),
+@pytest.mark.parametrize("step,env_value,expected", [
+    (gap.RUN_ND, "false", "runNdScenariosLisfloodCpu"),
+    (gap.RUN_ND, "true", "runNdScenariosLisfloodGpu"),
+    (gap.RUN_KWSE, "false", "runKwseScenariosLisfloodCpu"),
+    (gap.RUN_KWSE, "true", "runKwseScenariosLisfloodGpu"),
 ])
-def test_gpu_available_picks_the_process(monkeypatch, env_value, expected):
+def test_gpu_available_picks_the_process(monkeypatch, step, env_value, expected):
     """Which hardware variant is asked for comes from the environment, not from
     an argument: the host either has a device or it does not."""
     monkeypatch.setattr("recon.check.intent.effective", lambda _r: {"solver": "lisflood"})
     monkeypatch.setenv("GPU_AVAILABLE", env_value)
-    assert _process_id(gap.RUN_ND, 1) == expected
+    assert _process_id(step, 1) == expected
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -106,7 +112,7 @@ def test_every_process_the_loop_can_name_exists_in_the_local_definitions():
     registered = plugin_process_ids()
     if not registered:
         pytest.skip(f"no local process definitions under {PLUGINS}")
-    for pid in {BUILD_MODEL_PROCESS, *RUN_ND_PROCESSES.values()}:
+    for pid in ALL_PROCESSES:
         assert pid in registered, (
             f"{pid} is not the info.id of any local process definition in {PLUGINS}; "
             f"found: {sorted(registered)}")
@@ -125,8 +131,8 @@ def test_processes_are_not_step_names():
                              (SCHEMA / "07_reach_processing.sql").read_text(),
                              re.S).group(0))
     )
-    assert gap.BUILD_MODEL in allowed and gap.RUN_ND in allowed
-    for pid in {BUILD_MODEL_PROCESS, *RUN_ND_PROCESSES.values()}:
+    assert {gap.BUILD_MODEL, gap.RUN_ND, gap.RUN_KWSE} <= allowed
+    for pid in ALL_PROCESSES:
         assert pid not in allowed, (
             f"{pid} is a SEPEX process, not a step; it must never reach "
             "reach_processing.current_step")
