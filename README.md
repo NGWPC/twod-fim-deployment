@@ -1,5 +1,8 @@
 # twod-fim-deployment
 
+> [!WARNING]
+> Draft Software. Many individual functions and code pieces are AI generated.
+
 Deployment + orchestration for the 2D-FIM system. This repo is the **orchestrator**
 and the **platform** it runs on. It does *not* contain the modeling jobs
 (`build_model`, `run_nd_scenarios`, `run_kwse_scenarios` those live in
