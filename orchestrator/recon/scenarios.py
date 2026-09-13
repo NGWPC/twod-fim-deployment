@@ -111,7 +111,7 @@ def others(
     reach_id: int, wanted: db.Row, downstream_id: int,
     *, conn: psycopg.Connection | None = None,
 ) -> float:
-    """What everything else can add to the downstream reach (DR-032 ALT-E).
+    """What everything else can add to the downstream reach (DR-044 ALT-G).
 
     Three numbers: this reach's drainage area, the downstream reach's, and the
     downstream reach's upper discharge bound. The bound rather than a separate
@@ -131,11 +131,11 @@ def others(
     if below["q_upper_bound"] is None:
         raise NotPlannable(
             f"downstream reach {downstream_id} has no q_upper_bound authored, "
-            "which the KWSE ceiling scales by (DR-032 ALT-E)")
+            "which the KWSE ceiling scales by (DR-044 ALT-G)")
     if wanted["total_da_sqkm"] is None or below["total_da_sqkm"] is None:
         raise NotPlannable(
             f"reach {reach_id} or downstream reach {downstream_id} has no drainage "
-            "area, which the KWSE ceiling scales by (DR-032 ALT-E)")
+            "area, which the KWSE ceiling scales by (DR-044 ALT-G)")
     try:
         return plan.others(float(wanted["total_da_sqkm"]),
                            float(below["total_da_sqkm"]),
@@ -170,7 +170,7 @@ def planned(reach_id: int, *, conn: psycopg.Connection | None = None) -> Planned
 
     downstream_id = wanted["reach_to_id"]
     # q_set too: its adopted library discharges are the only ones a KWSE ceiling
-    # rounds up onto (DR-032 ALT-E), because leftover runs carry no stage library.
+    # rounds up onto (DR-043 ALT-F), because leftover runs carry no stage library.
     ds_nd = db.one("SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
                    " WHERE reach_id = %s", (downstream_id,), conn=conn)
     if ds_nd is None:

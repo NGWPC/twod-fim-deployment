@@ -2,26 +2,28 @@
 
 Pure, like gap.py: it takes what was read in one pass and returns a decision,
 with no database, storage, clock or logging of its own. That is what makes the
-two decision records below testable against their own worked examples.
+decision records below testable against their own worked examples.
 
-Two decisions meet here.
+Several decisions meet here.
 
-DR-032 ALT-E sets the envelope, and both of its bounds answer the same
+DR-042 and DR-043 set the envelope, one bound each, and both answer the same
 question: while this reach carries q, what can the downstream reach be carrying?
 
-  floor    about q — everything else draining into it brings nothing. The
-           downstream reach's lowest upstream-end stage at its nearest
-           discharge at or below q. Deliberately NOT floored by this reach's own
-           normal depth; that was ALT-C, dropped in July 2026 after the Ohio
-           Ripple1D work showed a too-flat slope pushing normal-depth stages
-           above the downstream reach's own, which stitches into an artificial
-           bump once Flows2FIM joins the network up.
-  ceiling  q + others — everything else is in flood. `others` comes from
-           drainage area alone (see others()), and the ceiling is the highest
-           stage the downstream reach reached at any discharge up to that flow.
+  floor    DR-042 ALT-D. About q — everything else draining into it brings
+           nothing. The downstream reach's lowest upstream-end stage at its
+           nearest discharge at or below q. Deliberately NOT floored by this
+           reach's own normal depth; that was DR-042 ALT-C, dropped in July 2026
+           after the Ohio Ripple1D work showed a too-flat slope pushing
+           normal-depth stages above the downstream reach's own, which stitches
+           into an artificial bump once Flows2FIM joins the network up.
+  ceiling  DR-043 ALT-F. q + others — everything else is in flood. `others`
+           comes from drainage area alone (DR-044 ALT-G, see others()), with an
+           exponent DR-045 settles, and the ceiling is the highest stage the
+           downstream reach reached at any discharge up to that flow.
 
-Until ALT-E the ceiling was ALT-D's single value for every discharge: the
-downstream reach's highest stage EVER, which a trickle here cannot produce.
+Until DR-043 ALT-F the ceiling was a single value for every discharge, its
+ALT-A: the downstream reach's highest stage EVER, which a trickle here cannot
+produce.
 
 DR-033 ALT-B fills the envelope. Stages step by a fixed increment from the menu
 `{0.25, 0.5, 1, 2, 5}`, on a grid anchored to zero rather than to the reach's own
@@ -66,10 +68,11 @@ from typing import Literal, Sequence
 # desired_state.ld_ds_z_delta, so a value off the menu never reaches this far.
 DZ_MENU = (0.25, 0.5, 1.0, 2.0, 5.0)
 
-# The exponent turning a drainage-area share into a flood-flow share (DR-032
-# ALT-E): the drainage-area-ratio method's exponent, also called the flood
-# scaling exponent. Small catchments yield more flood flow per km² than large
-# ones, so the flow share of an area share is larger than the share itself.
+# The exponent turning a drainage-area share into a flood-flow share (DR-045
+# ALT-F, used by DR-044 ALT-G): the drainage-area-ratio method's exponent, also
+# called the flood scaling exponent. Small catchments yield more flood flow per
+# km² than large ones, so the flow share of an area share is larger than the
+# share itself.
 #
 # Fitted as ln(Q100) = a + b·ln(DA) over the 41-reach test network: 0.62, or
 # 0.66 without the lake-trimmed and lake-terminal reaches. One network-wide
@@ -175,13 +178,12 @@ def _snap(value: float, dz: float) -> float:
 def _floor(downstream: Sequence[DownstreamRun], q: int) -> float:
     """The lowest stage worth modelling at our discharge q.
 
-    DR-032 ALT-D reads the downstream reach's minimum at the nearest downstream
+    DR-042 ALT-D reads the downstream reach's minimum at the nearest downstream
     discharge AT OR BELOW ours. That reach drains more area, so its discharges
     are generally higher and there may be none at or below; the curve is then
-    clamped to its lowest, which the DR does not cover and is the one
-    interpretation added here. It is also nearly free of consequence: stage rises
-    with discharge, so a reach's overall minimum normally sits at its lowest
-    discharge anyway.
+    clamped to its lowest, as the DR describes. It is also nearly free of
+    consequence: stage rises with discharge, so a reach's overall minimum
+    normally sits at its lowest discharge anyway.
 
     The floor is read at ONE downstream discharge. The ceiling is read across a
     range of them, and binding shares that range — see _read_q() and plan().
@@ -201,12 +203,12 @@ def others(own_da: float, downstream_da: float, downstream_q_upper: float) -> fl
 
         (1 − own_da / downstream_da) ^ DAR_EXPONENT × downstream_q_upper
 
-    The drainage-area-ratio method, applied to the catchment that is not ours:
-    the downstream reach's upper discharge, transferred to that catchment's
-    area. The method is normally used between sites of comparable size and here
-    it is not, which is acceptable only because the result is used as a
-    conservative bound rather than an estimate, and the exponent keeps its error
-    on the high side.
+    The drainage-area-ratio method (DR-044 ALT-G), applied to the catchment
+    that is not ours: the downstream reach's upper discharge, transferred to
+    that catchment's area. The method is normally used between sites of
+    comparable size and here it is not, which is acceptable only because the
+    result is used as a conservative bound rather than an estimate, and the
+    exponent keeps its error on the high side.
 
     Equal areas add nothing — the downstream reach carries exactly what we send.
     More area here than downstream is refused rather than clamped: drainage area
@@ -229,14 +231,14 @@ def others(own_da: float, downstream_da: float, downstream_q_upper: float) -> fl
 def _read_q(downstream_q_set: Sequence[int], cap: float) -> int:
     """The downstream discharge whose runs, and every lower one's, bound a ceiling.
 
-    The first LIBRARY discharge at or above the cap — one the downstream reach
-    adopted, not merely one it has a run at. The downstream reach really can be
-    carrying the cap, but its library rarely has a run at exactly that flow, and
-    the library discharge above is the nearest flow at which it modelled every
-    downstream condition. Rounding up errs toward one extra stage rather than a
-    missing one — the mirror of the floor, which rounds down — and overshoots by
-    at most one step of the downstream library, which DR-030's resolution bands
-    keep small.
+    DR-043 ALT-F. The first LIBRARY discharge at or above the cap — one the
+    downstream reach adopted, not merely one it has a run at. The downstream
+    reach really can be carrying the cap, but its library rarely has a run at
+    exactly that flow, and the library discharge above is the nearest flow at
+    which it modelled every downstream condition. Rounding up errs toward one
+    extra stage rather than a missing one — the mirror of the floor, which
+    rounds down — and overshoots by at most one step of the downstream library,
+    which DR-030's resolution bands keep small.
 
     Why adopted discharges only. Storage also holds normal-depth runs an older
     sweep left at discharges the library never adopted, and the downstream
@@ -244,7 +246,8 @@ def _read_q(downstream_q_set: Sequence[int], cap: float) -> int:
     would read backwater only up to the adopted discharge BELOW the cap, and the
     downstream reach's real highest stage at the cap lies above that — the
     ceiling would come out low, which is the unsafe direction. It would also tie
-    the plan to runs that exist only until someone cleans them up.
+    the plan to runs that exist only until someone cleans them up. That was
+    DR-043 ALT-E, and it did both on the test network.
 
     A cap above the largest library discharge reads everything: the downstream
     library stops there, and so does anything we could impose from it.
@@ -270,7 +273,7 @@ def plan(
     slope naming this reach's own `nd=` folder, which roots every chain.
     `others` is what everything else can add to the downstream reach, from
     others(); it has no default, because a ceiling with nothing conditioning it
-    is ALT-D's, and falling back to that would hide whatever made it missing.
+    is DR-043 ALT-A's, and falling back to that would hide whatever made it missing.
     `downstream_q_set` is the downstream reach's adopted library discharges,
     the only ones a cap rounds up onto (see _read_q()).
 
@@ -300,7 +303,7 @@ def plan(
     for q in sorted(q_set):
         floor = _floor(downstream, q)
 
-        # A ceiling for THIS discharge (DR-032 ALT-E): the highest stage the
+        # A ceiling for THIS discharge (DR-043 ALT-F): the highest stage the
         # downstream reach reached at any discharge it can carry while we carry
         # q. The highest across the whole range, not the value at read_q alone:
         # a reach's highest stage need not sit at its highest discharge, and it

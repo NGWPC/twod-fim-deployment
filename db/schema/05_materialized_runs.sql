@@ -52,9 +52,9 @@ CREATE TABLE IF NOT EXISTS materialized_nd_runs(
     -- ------------------------------------------------------------------
     -- Values at THIS reach's upstream end (its Stage Transfer Line). They are
     -- read by the reach immediately upstream, which uses them to bound its own
-    -- KWSE library (DR-032):
-    -- us_wse_max	      informational. It was that reach's ceiling under ALT-D,
-    --		      one value for all discharges; under ALT-E the ceiling
+    -- KWSE library (DR-042 and DR-043):
+    -- us_wse_max	      informational. It was that reach's ceiling under DR-043
+    --		      ALT-A, one value for all discharges; under ALT-F the ceiling
     --		      is per discharge and read from the runs themselves.
     -- us_min_wse_curve  that reach's floor — per discharge, so it is a curve.
     --		      Shape: [{"q": <cms>, "wse": <m>}, …] ascending by q.
@@ -72,9 +72,9 @@ COMMENT ON TABLE materialized_nd_runs IS 'Proof that a reach ND intent is materi
 
 COMMENT ON COLUMN materialized_nd_runs.q_set IS 'The adopted library discharges, ascending: the smallest set meeting the authored ld_q_* resolution. The KWSE step builds a stage library at each. Storage may hold more; anything not adopted is surplus the loop ignores.';
 
-COMMENT ON COLUMN materialized_nd_runs.us_wse_max IS 'Maximum WSE at this reach upstream end, across its normal-depth runs. Informational: it was the ceiling of the upstream reach''s KWSE library under DR-032 ALT-D, but the ALT-E ceiling is per discharge and read from the runs themselves, so the planner does not read this.';
+COMMENT ON COLUMN materialized_nd_runs.us_wse_max IS 'Maximum WSE at this reach upstream end, across its normal-depth runs. Informational: it was the ceiling of the upstream reach''s KWSE library under DR-043 ALT-A, but the ALT-F ceiling is per discharge and read from the runs themselves, so the planner does not read this.';
 
-COMMENT ON COLUMN materialized_nd_runs.us_min_wse_curve IS 'Minimum WSE at this reach upstream end, per discharge: [{"q":…,"wse":…}, …] ascending. The upstream reach reads the entry at the nearest discharge at or below its own to get its KWSE floor (DR-032 ALT-D).';
+COMMENT ON COLUMN materialized_nd_runs.us_min_wse_curve IS 'Minimum WSE at this reach upstream end, per discharge: [{"q":…,"wse":…}, …] ascending. The upstream reach reads the entry at the nearest discharge at or below its own to get its KWSE floor (DR-042 ALT-D).';
 
 COMMENT ON COLUMN materialized_nd_runs.applied_revision IS 'The intent revision this proves. Co-located with its subject, so deleting the row retracts the proof.';
 

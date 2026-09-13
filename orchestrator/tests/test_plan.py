@@ -2,7 +2,7 @@
 
 No database, no bucket, no mocks — if a test here ever needs one, something has
 leaked into plan.py that does not belong there. Several of these check the
-worked examples in DR-032 and DR-033 directly, so a change to the methodology
+worked examples in DR-033 and DR-042 to DR-045 directly, so a change to the methodology
 fails here rather than in a bucket three reaches later.
 """
 
@@ -18,9 +18,10 @@ def plan(*args, others: float = math.inf, downstream_q_set=None, **kwargs):
     """plan(), with nothing capping the ceiling unless a test says otherwise.
 
     An unbounded `others` reads every downstream run, which is exactly the
-    single ALT-D ceiling. Most tests here are about the floor, the grid, binding
-    and seeds, none of which ALT-E changes, so they keep their original shape;
-    the ALT-E section below passes `others` explicitly. Unless told otherwise,
+    single ceiling of DR-043 ALT-A. Most tests here are about the floor, the
+    grid, binding and seeds, none of which the per-discharge ceiling (DR-043
+    ALT-F) changes, so they keep their original shape; the ceiling section
+    below passes `others` explicitly. Unless told otherwise,
     every discharge in the pool is one the downstream reach adopted.
     """
     downstream = args[2] if len(args) > 2 else kwargs["downstream"]
@@ -76,10 +77,10 @@ def test_grid_is_anchored_to_zero_not_to_the_reach():
     assert got == pytest.approx([585.0, 586.0, 587.0])
 
 
-# --- DR-032: the floor, and the ceiling with nothing capping it ----------
+# --- DR-042: the floor, and the ceiling with nothing capping it ----------
 
 def test_uncapped_ceiling_is_the_highest_stage_anywhere_downstream():
-    """ALT-D's single value, which ALT-E reduces to when nothing caps it."""
+    """DR-043 ALT-A's single value, which ALT-F reduces to when nothing caps it."""
     result = plan([200, 900], 1.0, POOL, SLOPE)
     assert [c.wse for c in result.ceilings] == pytest.approx([227.6, 227.6])
 
@@ -159,7 +160,7 @@ def test_authored_upper_bound_can_only_lower_the_ceiling():
     assert high.ceilings[0].wse == pytest.approx(227.6)
 
 
-# --- DR-032 ALT-E: a ceiling per discharge -------------------------------
+# --- DR-043 ALT-F, DR-044 ALT-G, DR-045 ALT-F: a ceiling per discharge ----
 
 # The downstream reach drawn in KWSE_CEILING_PLAN.md §5–6: its discharge range
 # and FIGURE_OTHERS come from a real test-network pair, its stages are made up.
@@ -180,7 +181,7 @@ def rungs(result) -> dict[int, list[float]]:
     return by_q
 
 
-def test_others_matches_the_dr032_worked_example():
+def test_others_matches_the_dr044_worked_example():
     """This reach holds 800 of the downstream reach's 1000 km², and that reach is
     bounded at 4500: the other 20% of the area can deliver 0.2^0.7 of it."""
     assert others(800.0, 1000.0, 4500.0) == pytest.approx(1458.6, abs=0.1)
@@ -222,7 +223,8 @@ def test_non_positive_inputs_are_refused(own, below, q_upper):
 
 
 def test_plan_has_no_default_for_others():
-    """No silent fallback to ALT-D: a caller that cannot say what others is fails."""
+    """No silent fallback to DR-043 ALT-A: a caller that cannot say what
+    others is fails."""
     with pytest.raises(TypeError):
         planner.plan([900], 1.0, POOL, SLOPE)
 
@@ -344,7 +346,7 @@ def test_every_discharge_records_its_ceiling_even_when_its_envelope_closes():
 @pytest.mark.parametrize("pool, q_set", [(FIGURE, [150, 650, 1250, 2780]),
                                          (POOL, [200, 900])])
 def test_a_capped_plan_only_ever_drops_scenarios(pool, q_set, extra):
-    """Why adopting ALT-E re-runs nothing: every (discharge, stage) it asks for
+    """Why adopting DR-043 ALT-F re-runs nothing: every (discharge, stage) it asks for
     is one the uncapped plan already asked for, so existing libraries still
     satisfy it."""
     capped = {(s.q, s.z) for s in plan(q_set, 1.0, pool, SLOPE, others=extra).scenarios}

@@ -37,7 +37,7 @@ DS_INDEX = [
 ]
 
 
-# The basin, for the ceiling (DR-032 ALT-E). This reach holds a tenth of the
+# The basin, for the ceiling (DR-044 ALT-G). This reach holds a tenth of the
 # downstream reach's area, so everything else can add 0.9^0.7 x 1000 = 929 cms:
 # every cap passes the downstream reach's largest discharge and the plan is the
 # uncapped one, which is what the fixture's hand-worked chains assume.
@@ -297,7 +297,7 @@ def test_authored_ceiling_shrinks_the_library(wired, monkeypatch):
     assert len(all_scenarios()) < full
 
 
-# --- the ceiling's basin inputs (DR-032 ALT-E) -----------------------------
+# --- the ceiling's basin inputs (DR-044 ALT-G) -----------------------------
 
 def test_the_basin_reaches_the_planner(wired, monkeypatch):
     """Equal areas: nothing else drains into the downstream reach, so while we

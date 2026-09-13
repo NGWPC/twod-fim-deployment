@@ -406,7 +406,7 @@ def _kwse_inputs(
     """What run_kwse_scenarios needs to run one chain of scenarios.
 
     Unlike the nd payload, almost none of this is intent passed through. The
-    scenario list is COMPUTED — DR-032 sets the envelope from what the
+    scenario list is COMPUTED — DR-042 and DR-043 set the envelope from what the
     downstream reach has materialized and how much of its basin is ours, DR-033
     fills it with a stage grid, and each target is bound to a real downstream
     run. plan.py does all of that and

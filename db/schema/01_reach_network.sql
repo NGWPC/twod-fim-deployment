@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS reach_network(
     -- TRUE if the modeling geometry was clipped at a lake boundary, i.e.
     -- geom differs from the source reach geometry.
     is_trimmed boolean NOT NULL DEFAULT FALSE,
-    -- Required: the KWSE ceiling scales by it on every link (DR-032 ALT-E), and a
+    -- Required: the KWSE ceiling scales by it on every link (DR-044 ALT-G), and a
     -- missing value there must stop the load rather than quietly change a plan.
     total_da_sqkm double precision NOT NULL CONSTRAINT reach_network_da_positive_chk CHECK (total_da_sqkm > 0),
     stream_order integer,
@@ -88,7 +88,7 @@ COMMENT ON COLUMN reach_network.lake_outlet IS 'Lake is upstream of this reach.'
 
 COMMENT ON COLUMN reach_network.is_trimmed IS 'Geometry was clipped at a lake boundary, so geom differs from the hydrofabric geometry.';
 
-COMMENT ON COLUMN reach_network.total_da_sqkm IS 'Total drainage area (km2). Used by build_model for bankfull width estimation, and by the KWSE ceiling of the reach above (DR-032 ALT-E): what the rest of this reach''s basin can add is its area minus the upstream reach''s. Required and positive.';
+COMMENT ON COLUMN reach_network.total_da_sqkm IS 'Total drainage area (km2). Used by build_model for bankfull width estimation, and by the KWSE ceiling of the reach above (DR-044 ALT-G): what the rest of this reach''s basin can add is its area minus the upstream reach''s. Required and positive.';
 
 COMMENT ON COLUMN reach_network.stream_order IS 'Strahler stream order from the hydrofabric.';
 
