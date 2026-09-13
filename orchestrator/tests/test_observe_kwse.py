@@ -187,3 +187,34 @@ def test_the_row_records_the_revision_it_proves(wired, monkeypatch):
     monkeypatch.setattr(scenarios, "planned", lambda r, **kw: context(a_plan()))
     observe.observe_kwse_runs(REACH)
     assert wired["written"][4] == 3          # intent revision
+
+
+# --- observe and the planner agree on what is missing ----------------------
+
+SPREAD = [(200, 224.0), (200, 225.0), (900, 226.0)]
+
+
+@pytest.mark.parametrize("published", [(), SPREAD[:1], SPREAD[1:], SPREAD])
+@pytest.mark.parametrize("refused", [None, (200, 224.0)])
+def test_the_step_is_satisfied_exactly_when_nothing_is_left_to_submit(
+        wired, monkeypatch, published, refused):
+    """The livelock this rules out: observe calling a scenario missing that the
+    planner calls present, so the planner submits nothing and the step never
+    becomes satisfied — or the reverse, resubmitting what observe already
+    accepted. Both use one lookup, and this holds them to it."""
+    p = a_plan([scenario(q, z, z + 0.1, z - 3.0) for q, z in SPREAD])
+    ctx = context(p)
+    monkeypatch.setattr(scenarios, "planned", lambda r, **kw: ctx)
+    for q, z in published:
+        publish(wired, q, z, z + 1.0)
+    if refused:
+        bad = scenarios.scenario_dir("KWSE", refused[1], refused[0])
+        monkeypatch.setattr(observe.identity, "verify_scenario_manifest",
+                            lambda m, r, h, mid, folder: ["refused"] if folder == bad else [])
+
+    observe.observe_kwse_runs(REACH)
+    left = [(s.q, s.z) for chain in scenarios.pending(REACH, ctx) for s in chain]
+
+    assert (wired["written"] is not None) == (left == [])
+    expected = [s for s in SPREAD if s not in published or s == refused]
+    assert left == expected

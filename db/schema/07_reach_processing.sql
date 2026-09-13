@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS reach_processing(
     current_step text CONSTRAINT reach_processing_current_step_chk CHECK (current_step IS NULL OR current_step IN ('build_model',
 	'run_nd_scenarios', 'run_kwse_scenarios')),
     current_step_started_at timestamptz,
-    current_step_ref text, -- external job/execution id, for log links
+    current_step_ref text, -- SEPEX jobID, or group:<groupID> for a step run as a group
     -- desired_state.revision this step is working towards; if desired_state moves
     -- past it, the step is superseded and gets cancelled.
     current_step_revision integer,
@@ -105,7 +105,7 @@ COMMENT ON COLUMN reach_processing.current_step IS 'Job in flight; NULL when non
 
 COMMENT ON COLUMN reach_processing.current_step_started_at IS 'When the in-flight job was submitted. Informational, plus the clock for giving up on a job the execution system can no longer account for.';
 
-COMMENT ON COLUMN reach_processing.current_step_ref IS 'External execution id for the running step, so a viewer can link to its logs.';
+COMMENT ON COLUMN reach_processing.current_step_ref IS 'SEPEX reference for the running step: a jobID, or group:<groupID> when the step runs as a group of jobs (run_kwse_scenarios, one job per discharge chain). What the loop polls, and what a viewer follows to logs.';
 
 COMMENT ON COLUMN reach_processing.current_step_revision IS 'desired_state.revision the running step targets; if desired_state moves past it the step is superseded.';
 

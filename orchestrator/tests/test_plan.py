@@ -8,7 +8,7 @@ fails here rather than in a bucket three reaches later.
 
 import pytest
 
-from recon.plan import DownstreamRun, Seed, plan
+from recon.plan import DownstreamRun, Seed, chains, plan
 
 
 def ds(q: int, wse: float, bc_value: float, bc_type: str = "KWSE") -> DownstreamRun:
@@ -210,6 +210,36 @@ def test_a_skipped_stage_is_never_named_as_a_seed():
     for s in result.scenarios:
         if s.seed.bc_type == "KWSE":
             assert s.seed.bc_value in ran
+
+
+# --- chains: what can run side by side ---------------------------------
+
+def test_chains_split_the_plan_by_discharge_keeping_stage_order():
+    pool = [ds(q, z, z - 3.0) for q in (200, 900) for z in (225.0, 226.0, 227.0)]
+    result = plan([900, 200], 1.0, pool, SLOPE)
+    got = [[(s.q, s.z) for s in chain] for chain in chains(result.scenarios)]
+    assert got == [[(200, 225.0), (200, 226.0), (200, 227.0)],
+                   [(900, 225.0), (900, 226.0), (900, 227.0)]]
+
+
+def test_no_chain_seeds_from_another():
+    """What lets each chain be its own job: every seed is inside its chain,
+    or is this reach's normal-depth run."""
+    pool = [ds(q, z, z - 3.0) for q in (200, 900) for z in (225.0, 226.0, 227.0)]
+    for chain in chains(plan([200, 900], 1.0, pool, SLOPE).scenarios):
+        own = {(s.q, s.z) for s in chain}
+        for s in chain:
+            assert s.seed.bc_type == "ND" or (s.seed.q, s.seed.bc_value) in own
+
+
+def test_a_subset_keeps_its_order_and_drops_empty_discharges():
+    """Chains are also built from what is left once existing scenarios are
+    removed, so a discharge with nothing left has no chain at all."""
+    pool = [ds(q, z, z - 3.0) for q in (200, 900) for z in (225.0, 226.0, 227.0)]
+    scenarios = plan([200, 900], 1.0, pool, SLOPE).scenarios
+    left = [s for s in scenarios if s.q == 200 and s.z != 226.0]
+    assert [[(s.q, s.z) for s in c] for c in chains(left)] == [[(200, 225.0), (200, 227.0)]]
+    assert chains([]) == ()
 
 
 # --- refusals and edges --------------------------------------------------

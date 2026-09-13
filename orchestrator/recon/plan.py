@@ -229,3 +229,22 @@ def plan(
             previous = z
 
     return Plan(scenarios=tuple(scenarios), skipped=tuple(skipped), ceiling=ceiling)
+
+
+def chains(
+    scenarios: Sequence[PlannedScenario],
+) -> tuple[tuple[PlannedScenario, ...], ...]:
+    """The scenarios split into one chain per discharge, each kept in order.
+
+    A chain is the unit that can run on its own. Every seed plan() names is
+    either this reach's normal-depth run or the stage below at the SAME
+    discharge, so nothing in one chain waits on another — which is what lets
+    each chain be its own job, run in parallel with the rest.
+
+    Order within a chain is load-bearing for the same reason it is in plan():
+    a seed must exist before the scenario naming it runs.
+    """
+    by_q: dict[int, list[PlannedScenario]] = {}
+    for s in scenarios:
+        by_q.setdefault(s.q, []).append(s)
+    return tuple(tuple(chain) for _, chain in sorted(by_q.items()))

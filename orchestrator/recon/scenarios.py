@@ -8,9 +8,14 @@ it.
 It exists as its own module because TWO callers need the identical plan and must
 not disagree about it:
 
-  check.py   turns the plan into a job payload — the scenarios to run
+  check.py   turns the plan into jobs — the scenarios still to run
   observe.py turns the plan into a materialization check — the scenarios that
              must be present for the step to count as satisfied
+
+They share the other half of the question too: whether one scenario is already
+there (look_up). check.py submits exactly the scenarios observe.py found
+missing, so a scenario that one calls present and the other calls absent can
+never be resubmitted forever.
 
 That second use is what keeps the loop from spinning. A stage target with no
 downstream run within Δz/2 is skipped rather than run (DR-033), so a check that
@@ -22,7 +27,7 @@ work is submitted and the plan recomputed when results are read agree.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 
@@ -163,3 +168,48 @@ def scenario_dir(bc_type: str, bc_value: float, q: int) -> str:
     downstream = (identity.nd_folder(bc_value) if bc_type == "ND"
                   else identity.kwse_folder(bc_value))
     return f"{downstream}/{identity.q_folder(q)}"
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """One planned scenario, as storage has it."""
+
+    folder: str
+    path: str
+    manifest: dict | None  # None when the job has not published one
+    problems: list[str] = field(default_factory=list)  # why the manifest was refused
+
+    @property
+    def exists(self) -> bool:
+        """Published and accepted. A refused manifest is not a scenario."""
+        return self.manifest is not None and not self.problems
+
+
+def look_up(reach_id: int, context: Planned, scenario: plan.PlannedScenario) -> Lookup:
+    """Read one planned scenario's manifest at the folder the plan names.
+
+    The single definition of "this scenario exists", used both to decide the
+    step is satisfied and to decide what still has to run.
+    """
+    folder = scenario_dir("KWSE", scenario.z, scenario.q)
+    path = storage.scenario_manifest_path(
+        reach_id, context.model_id, context.run_identity_hash, folder)
+    manifest = storage.read_json(path)
+    if manifest is None:
+        return Lookup(folder, path, None)
+    problems = identity.verify_scenario_manifest(
+        manifest, reach_id, context.run_identity_hash, context.model_id, folder)
+    return Lookup(folder, path, manifest, list(problems))
+
+
+def pending(reach_id: int, context: Planned) -> list[tuple[plan.PlannedScenario, ...]]:
+    """The planned scenarios that do not exist yet, one chain per discharge.
+
+    What exists is left out, one scenario at a time. A discharge whose stages
+    are all there has no chain at all, and a chain that got partway resumes at
+    its first missing stage. That stage's seed is the stage below it, which is
+    either in storage already or earlier in the same chain — so dropping what
+    exists never leaves a seed pointing at nothing.
+    """
+    return list(plan.chains([s for s in context.plan.scenarios
+                             if not look_up(reach_id, context, s).exists]))

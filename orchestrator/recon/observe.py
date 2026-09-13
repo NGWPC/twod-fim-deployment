@@ -486,19 +486,17 @@ def observe_kwse_runs(reach_id: int, *, conn: psycopg.Connection | None = None) 
     index: dict[int, list[dict]] = {}
     refused = []
     for scenario in context.plan.scenarios:
-        folder = scenarios.scenario_dir("KWSE", scenario.z, scenario.q)
-        path = storage.scenario_manifest_path(
-            reach_id, context.model_id, context.run_identity_hash, folder)
-        manifest = storage.read_json(path)
-        if manifest is None:
+        # The same test check.py uses to leave a scenario out of a submission,
+        # so what is missing here is exactly what gets run.
+        found = scenarios.look_up(reach_id, context, scenario)
+        if found.manifest is None:
             return {**retract(f"scenario kwse={scenario.z:g}/q={scenario.q} has no "
                               "manifest yet"), "refused": refused}
-        problems = identity.verify_scenario_manifest(
-            manifest, reach_id, context.run_identity_hash, context.model_id, folder)
-        if problems:
-            refused.append({"scenario": folder, "problems": problems})
-            logger.warning("refused scenario manifest at %s: %s", path, problems)
-            return {**retract(f"scenario {folder} refused"), "refused": refused}
+        if found.problems:
+            refused.append({"scenario": found.folder, "problems": found.problems})
+            logger.warning("refused scenario manifest at %s: %s", found.path, found.problems)
+            return {**retract(f"scenario {found.folder} refused"), "refused": refused}
+        manifest = found.manifest
         # The two stages this run carries: what it achieved at this reach's
         # upstream end, which the reach above matches against, and what was
         # imposed at its downstream end, which named the folder it sits in.
