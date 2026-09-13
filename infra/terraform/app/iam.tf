@@ -126,6 +126,26 @@ locals {
     "${local.test_bucket_arn}/*",
   ]
 
+  # Read on buckets this account does not own. Requester-pays needs no extra
+  # action - the charge follows the caller's credentials, not a permission - so
+  # GetObject is the whole grant, and the caller sends x-amz-request-payer via
+  # AWS_REQUEST_PAYER. An empty list yields no statements rather than an empty
+  # one, which IAM rejects.
+  external_source_statements = length(var.external_source_bucket_names) == 0 ? [] : [
+    {
+      Sid      = "S3ExternalSourceList"
+      Effect   = "Allow"
+      Action   = "s3:ListBucket"
+      Resource = [for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}"]
+    },
+    {
+      Sid      = "S3ExternalSourceRead"
+      Effect   = "Allow"
+      Action   = "s3:GetObject"
+      Resource = [for b in var.external_source_bucket_names : "arn:${local.partition}:s3:::${b}/*"]
+    },
+  ]
+
   ec2_log_group_arn           = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/ec2/${var.project_name}:*"
   batch_log_group_arn         = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/${var.project_name}:*"
   batch_default_log_group_arn = "arn:${local.partition}:logs:${var.region}:${local.account_id}:log-group:/aws/batch/job:*"
@@ -169,7 +189,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid      = "S3List"
         Effect   = "Allow"
@@ -250,7 +270,7 @@ resource "aws_iam_role_policy" "ec2_orchestrator" {
         Action   = "secretsmanager:GetSecretValue"
         Resource = aws_db_instance.main.master_user_secret[0].secret_arn
       },
-    ]
+    ], local.external_source_statements)
   })
 }
 
