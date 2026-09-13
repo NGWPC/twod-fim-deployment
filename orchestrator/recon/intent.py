@@ -27,6 +27,9 @@ _EFFECTIVE = """
         -- ds_of_lake and moves the inflow line onto this reach's own centerline,
         -- because there is no upstream mainstem to walk up.
         rn.lake_outlet,
+        -- Not intent, but the KWSE ceiling scales by it (DR-044 ALT-G), for
+        -- this reach and for the one below.
+        rn.total_da_sqkm,
         ST_AsBinary(rn.geom) AS geom_wkb,
         f.sdr_commit,
         COALESCE(d.grid_resolution, f.grid_resolution) AS grid_resolution,

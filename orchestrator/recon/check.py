@@ -24,6 +24,7 @@ from recon import (
     identity,
     intent,
     observe,
+    plan,
     processing,
     queue,
     scenarios,
@@ -399,25 +400,24 @@ def _run_nd_payload(reach_id: int) -> dict:
     }
 
 
-def _run_kwse_payload(reach_id: int) -> dict:
-    """What run_kwse_scenarios needs to build the stage libraries intent asks for.
+def _kwse_inputs(
+    reach_id: int, context: scenarios.Planned, chain: tuple[plan.PlannedScenario, ...]
+) -> dict:
+    """What run_kwse_scenarios needs to run one chain of scenarios.
 
     Unlike the nd payload, almost none of this is intent passed through. The
-    scenario list is COMPUTED — DR-032 sets the envelope from what the
-    downstream reach has materialized, DR-033 fills it with a stage grid, and
-    each target is bound to a real downstream run. plan.py does all of that and
-    is deliberately pure, so this function's whole job is to gather its inputs
-    and turn its answer into addresses.
+    scenario list is COMPUTED — DR-042 and DR-043 set the envelope from what the
+    downstream reach has materialized and how much of its basin is ours, DR-033
+    fills it with a stage grid, and each target is bound to a real downstream
+    run. plan.py does all of that and
+    is deliberately pure, so this function's whole job is to turn its answer
+    into addresses.
 
-    Order is preserved exactly as planned. The job runs scenarios serially and
-    every seed names a scenario earlier in the list, so reordering here would
-    point a run at a depth grid that does not exist yet.
+    Order is preserved exactly as planned. The job runs its scenarios serially
+    and a seed names either a scenario already in storage or one earlier in
+    this list, so reordering here would point a run at a depth grid that does
+    not exist yet.
     """
-    try:
-        context = scenarios.planned(reach_id)
-    except scenarios.NotPlannable as why:
-        raise RuntimeError(str(why)) from why
-
     payload_scenarios = [
         {
             "upstream_discharge": s.q,
@@ -440,7 +440,7 @@ def _run_kwse_payload(reach_id: int) -> dict:
                 "identity_hash": context.run_identity_hash,
             },
         }
-        for s in context.plan.scenarios
+        for s in chain
     ]
 
     return {
@@ -452,10 +452,45 @@ def _run_kwse_payload(reach_id: int) -> dict:
     }
 
 
+def _run_kwse_group(reach_id: int) -> list[dict]:
+    """One run_kwse_scenarios job per discharge chain still missing scenarios.
+
+    A chain is independent of every other (plan.chains), so each runs as its
+    own job and SEPEX decides how many run at once — on a GPU host or a CPU
+    one alike. Chains differ in length, and a job per chain leaves nothing
+    reserved while a short chain's neighbour finishes a long one.
+
+    Only what does not exist is submitted, one scenario at a time: a discharge
+    whose stages are all in storage has no job, and one that got partway
+    resumes at its first missing stage. That is what makes a retry after a
+    failure, a dismissal or a lost group cheap — it runs what is missing and
+    nothing else — and it is the same test observe applies, so what is missing
+    there is exactly what is submitted here.
+
+    An empty list means nothing is missing: the step is already done and the
+    next observation will adopt it.
+    """
+    try:
+        context = scenarios.planned(reach_id)
+    except scenarios.NotPlannable as why:
+        raise RuntimeError(str(why)) from why
+
+    return [
+        # The discharge is the label a person looks for among a group's jobs.
+        {"inputs": _kwse_inputs(reach_id, context, chain), "tags": [f"q:{chain[0].q}"]}
+        for chain in scenarios.pending(reach_id, context)
+    ]
+
+
 PAYLOADS = {
     gap.BUILD_MODEL: _build_model_payload,
     gap.RUN_ND: _run_nd_payload,
-    gap.RUN_KWSE: _run_kwse_payload,
+}
+
+# The steps carried out as a group of jobs rather than one: the builder returns
+# one member per job, all for the same process.
+GROUPS = {
+    gap.RUN_KWSE: _run_kwse_group,
 }
 
 # The SEPEX process each STEP is carried out by. A step and a process are not
@@ -628,19 +663,33 @@ def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
         elif isinstance(decision, gap.RunStep):
             processing.wait_on(reach_id, None)
             process_id = _process_id(decision.step, reach_id)
-            ref = execution.submit(
-                process_id, PAYLOADS[decision.step](reach_id), tags=job_tags(reach_id)
-            )
-            # The STEP is what goes in the marker, not the process that served
-            # it: that column is the ladder's rung, and the gap calculation and
-            # its CHECK constraint both speak in steps. The variant is named in
-            # the note, which the activity log keeps.
-            processing.mark_in_flight(reach_id, decision.step, ref, snapshot.revision)
+            if decision.step in GROUPS:
+                members = GROUPS[decision.step](reach_id)
+                ref = (execution.submit_group(process_id, members, tags=job_tags(reach_id))
+                       if members else None)
+                submitted = f"{len(members)} {process_id} jobs"
+            else:
+                ref = execution.submit(
+                    process_id, PAYLOADS[decision.step](reach_id), tags=job_tags(reach_id)
+                )
+                submitted = process_id
+
+            if ref is None:
+                # Everything the step asks for is already in storage — it landed
+                # between this check's observation and now. Nothing is marked in
+                # flight, so the check requested below adopts it.
+                result.note = f"{decision.step}: nothing missing, nothing submitted"
+            else:
+                # The STEP is what goes in the marker, not the process that
+                # served it: that column is the ladder's rung, and the gap
+                # calculation and its CHECK constraint both speak in steps. The
+                # variant is named in the note, which the activity log keeps.
+                processing.mark_in_flight(reach_id, decision.step, ref, snapshot.revision)
+                result.submitted_ref = ref
+                result.note = f"submitted {submitted} ({ref[:18]})"
             # Ask to be looked at again, so the result gets noticed without
             # waiting for the next sweep.
             queue.request_check(reach_id)
-            result.submitted_ref = ref
-            result.note = f"submitted {process_id} ({ref[:12]})"
 
     except Exception as exc:  # submission failed; the reach must not stall
         failure = processing.record_failure(reach_id, str(exc))

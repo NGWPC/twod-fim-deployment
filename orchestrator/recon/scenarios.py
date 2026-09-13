@@ -8,9 +8,14 @@ it.
 It exists as its own module because TWO callers need the identical plan and must
 not disagree about it:
 
-  check.py   turns the plan into a job payload — the scenarios to run
+  check.py   turns the plan into jobs — the scenarios still to run
   observe.py turns the plan into a materialization check — the scenarios that
              must be present for the step to count as satisfied
+
+They share the other half of the question too: whether one scenario is already
+there (look_up). check.py submits exactly the scenarios observe.py found
+missing, so a scenario that one calls present and the other calls absent can
+never be resubmitted forever.
 
 That second use is what keeps the loop from spinning. A stage target with no
 downstream run within Δz/2 is skipped rather than run (DR-033), so a check that
@@ -22,7 +27,7 @@ work is submitted and the plan recomputed when results are read agree.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 
@@ -102,6 +107,43 @@ def downstream_runs(
     return runs
 
 
+def others(
+    reach_id: int, wanted: db.Row, downstream_id: int,
+    *, conn: psycopg.Connection | None = None,
+) -> float:
+    """What everything else can add to the downstream reach (DR-044 ALT-G).
+
+    Three numbers: this reach's drainage area, the downstream reach's, and the
+    downstream reach's upper discharge bound. The bound rather than a separate
+    100-year flow, because the downstream library stops at that bound and the
+    ceiling can only read that library — a second copy of the 100-year could
+    disagree with the number the library was built to.
+
+    Every refusal here is a planning error rather than a fallback to the old
+    single ceiling, which would lower nothing and hide the cause. None should
+    fire in practice: drainage area is NOT NULL in reach_network, and the
+    downstream reach cannot have the nd proof this plan waited on without an
+    authored discharge range.
+    """
+    below = intent.effective(downstream_id, conn=conn)
+    if below is None:
+        raise NotPlannable(f"downstream reach {downstream_id} has no effective intent")
+    if below["q_upper_bound"] is None:
+        raise NotPlannable(
+            f"downstream reach {downstream_id} has no q_upper_bound authored, "
+            "which the KWSE ceiling scales by (DR-044 ALT-G)")
+    if wanted["total_da_sqkm"] is None or below["total_da_sqkm"] is None:
+        raise NotPlannable(
+            f"reach {reach_id} or downstream reach {downstream_id} has no drainage "
+            "area, which the KWSE ceiling scales by (DR-044 ALT-G)")
+    try:
+        return plan.others(float(wanted["total_da_sqkm"]),
+                           float(below["total_da_sqkm"]),
+                           float(below["q_upper_bound"]))
+    except ValueError as why:
+        raise NotPlannable(f"reach {reach_id} -> {downstream_id}: {why}") from why
+
+
 def planned(reach_id: int, *, conn: psycopg.Connection | None = None) -> Planned:
     """This reach's KWSE plan, or NotPlannable saying what is missing.
 
@@ -127,10 +169,14 @@ def planned(reach_id: int, *, conn: psycopg.Connection | None = None) -> Planned
         raise NotPlannable(f"reach {reach_id} has no materialized model and nd library")
 
     downstream_id = wanted["reach_to_id"]
-    ds_nd = db.one("SELECT model_id, run_identity_hash FROM materialized_nd_runs"
+    # q_set too: its adopted library discharges are the only ones a KWSE ceiling
+    # rounds up onto (DR-043 ALT-F), because leftover runs carry no stage library.
+    ds_nd = db.one("SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
                    " WHERE reach_id = %s", (downstream_id,), conn=conn)
     if ds_nd is None:
         raise NotPlannable(f"downstream reach {downstream_id} has no nd library")
+
+    extra = others(reach_id, wanted, downstream_id, conn=conn)
 
     # Read once: each call lists the reach's run prefix in storage.
     slope = nd_slope(reach_id, own_nd["model_id"], own_nd["run_identity_hash"])
@@ -143,6 +189,8 @@ def planned(reach_id: int, *, conn: psycopg.Connection | None = None) -> Planned
             nd_slope=slope,
             kwse_upper_bound=(None if wanted["kwse_upper_bound"] is None
                               else float(wanted["kwse_upper_bound"])),
+            others=extra,
+            downstream_q_set=list(ds_nd["q_set"]),
         ),
         model_id=model["model_id"],
         run_identity_hash=own_nd["run_identity_hash"],
@@ -163,3 +211,48 @@ def scenario_dir(bc_type: str, bc_value: float, q: int) -> str:
     downstream = (identity.nd_folder(bc_value) if bc_type == "ND"
                   else identity.kwse_folder(bc_value))
     return f"{downstream}/{identity.q_folder(q)}"
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """One planned scenario, as storage has it."""
+
+    folder: str
+    path: str
+    manifest: dict | None  # None when the job has not published one
+    problems: list[str] = field(default_factory=list)  # why the manifest was refused
+
+    @property
+    def exists(self) -> bool:
+        """Published and accepted. A refused manifest is not a scenario."""
+        return self.manifest is not None and not self.problems
+
+
+def look_up(reach_id: int, context: Planned, scenario: plan.PlannedScenario) -> Lookup:
+    """Read one planned scenario's manifest at the folder the plan names.
+
+    The single definition of "this scenario exists", used both to decide the
+    step is satisfied and to decide what still has to run.
+    """
+    folder = scenario_dir("KWSE", scenario.z, scenario.q)
+    path = storage.scenario_manifest_path(
+        reach_id, context.model_id, context.run_identity_hash, folder)
+    manifest = storage.read_json(path)
+    if manifest is None:
+        return Lookup(folder, path, None)
+    problems = identity.verify_scenario_manifest(
+        manifest, reach_id, context.run_identity_hash, context.model_id, folder)
+    return Lookup(folder, path, manifest, list(problems))
+
+
+def pending(reach_id: int, context: Planned) -> list[tuple[plan.PlannedScenario, ...]]:
+    """The planned scenarios that do not exist yet, one chain per discharge.
+
+    What exists is left out, one scenario at a time. A discharge whose stages
+    are all there has no chain at all, and a chain that got partway resumes at
+    its first missing stage. That stage's seed is the stage below it, which is
+    either in storage already or earlier in the same chain — so dropping what
+    exists never leaves a seed pointing at nothing.
+    """
+    return list(plan.chains([s for s in context.plan.scenarios
+                             if not look_up(reach_id, context, s).exists]))

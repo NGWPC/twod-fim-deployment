@@ -19,7 +19,7 @@ services:
       - twodfim_net
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: twodfim-minio
     command: server /data --console-address ":9001"
     ports:
@@ -39,7 +39,7 @@ services:
       - twodfim_net
 
   minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: twodfim-minio-init
     depends_on:
       minio:
@@ -52,12 +52,11 @@ services:
       - twodfim_net
 
   sepex:
-    image: ghcr.io/dewberry/sepex:dev
+    image: ghcr.io/dewberry/sepex:0.3.0-rc.1
     # For GPU enabled machines, uncomment the following lines to enable GPU support in the container.
     # And comment the above line.
     # This requires Docker Engine 19.03+ and NVIDIA Container Toolkit installed on the host.
     # In addition to that you must also set GPU_AVAILABLE=1 in the .env file, (not sepex_local.env).
-    # image: ghcr.io/dewberry/sepex:sha-f56dea8
     # deploy:
     #   resources:
     #     reservations:
