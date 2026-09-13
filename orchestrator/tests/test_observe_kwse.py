@@ -26,7 +26,7 @@ def scenario(q, z, ds_wse, ds_bc, ds_type="KWSE"):
 
 
 def a_plan(scenarios_=(), skipped=()):
-    return plan.Plan(scenarios=tuple(scenarios_), skipped=tuple(skipped), ceiling=230.0)
+    return plan.Plan(scenarios=tuple(scenarios_), skipped=tuple(skipped), ceilings=())
 
 
 def context(p):

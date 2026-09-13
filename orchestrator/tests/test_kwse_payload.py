@@ -37,14 +37,29 @@ DS_INDEX = [
 ]
 
 
+# The basin, for the ceiling (DR-032 ALT-E). This reach holds a tenth of the
+# downstream reach's area, so everything else can add 0.9^0.7 x 1000 = 929 cms:
+# every cap passes the downstream reach's largest discharge and the plan is the
+# uncapped one, which is what the fixture's hand-worked chains assume.
+AREA = {UPSTREAM: 100.0, DOWNSTREAM: 1000.0}
+DS_Q_UPPER = 1000
+
+
+def intent_for(reach_id, **override):
+    return {"reach_id": reach_id, "is_terminal": False, "reach_to_id": DOWNSTREAM,
+            "ld_ds_z_delta": 1.0, "kwse_upper_bound": None,
+            "total_da_sqkm": AREA[reach_id],
+            "q_upper_bound": DS_Q_UPPER if reach_id == DOWNSTREAM else 900,
+            **override}
+
+
 @pytest.fixture
 def wired(monkeypatch):
     """Stub the database and bucket. Storage starts empty; publish() fills it."""
     state = SimpleNamespace(manifests={}, refused=set())
 
     def fake_effective(reach_id, **kw):
-        return {"reach_id": reach_id, "is_terminal": False, "reach_to_id": DOWNSTREAM,
-                "ld_ds_z_delta": 1.0, "kwse_upper_bound": None}
+        return intent_for(reach_id)
 
     def fake_one(sql, params=None, **kw):
         reach = params[0] if params else None
@@ -57,7 +72,7 @@ def wired(monkeypatch):
                 return {"model_id": OWN_MODEL, "run_identity_hash": RUN_HASH,
                         "q_set": [200, 900]}
             return {"model_id": DS_MODEL, "run_identity_hash": RUN_HASH,
-                    "us_min_wse_curve": DS_CURVE}
+                    "q_set": [200, 900], "us_min_wse_curve": DS_CURVE}
         raise AssertionError(f"unexpected query: {sql}")
 
     def fake_library(reach_id, model_id, run_hash):
@@ -218,10 +233,11 @@ def test_downstream_address_uses_the_imposed_stage_not_the_achieved_one(wired):
     """Our target 226.0 binds to a run that ACHIEVED 226.1 but sits in kwse=223.0.
 
     Note also which discharge appears in that address: the DOWNSTREAM run's, not
-    ours. We are at q=200, and the nearest achieved stage anywhere downstream is
-    226.1 from its q=900 run — nearer than its own q=200 run at 226.4. Our inflow
-    and the downstream water surface are independent dimensions, which is the
-    entire point of a stage library, so the two discharges need not agree.
+    ours. We are at q=200, and the nearest achieved stage downstream is 226.1
+    from its q=900 run — nearer than its own q=200 run at 226.4. Our inflow and
+    the downstream water surface are independent dimensions, which is the entire
+    point of a stage library, so the two discharges need not agree — within
+    what the rest of the basin can add, which in this fixture reaches past 900.
     """
     at_226 = next(s for s in all_scenarios() if s["upstream_discharge"] == 200
                   and s["bc_value"] == pytest.approx(226.0))
@@ -261,27 +277,73 @@ def test_hotstart_identity_hash_is_named_not_left_to_the_image(wired):
 
 def test_a_terminal_reach_is_refused_rather_than_planned(wired, monkeypatch):
     """ISU-013: no downstream reach means no stage library can be bounded."""
-    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: {
-        "reach_id": r, "is_terminal": True, "reach_to_id": None,
-        "ld_ds_z_delta": 1.0, "kwse_upper_bound": None})
+    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: intent_for(
+        r, is_terminal=True, reach_to_id=None))
     with pytest.raises(RuntimeError, match="terminal"):
         group()
 
 
 def test_an_unauthored_stage_increment_is_refused(wired, monkeypatch):
-    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: {
-        "reach_id": r, "is_terminal": False, "reach_to_id": DOWNSTREAM,
-        "ld_ds_z_delta": None, "kwse_upper_bound": None})
+    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: intent_for(
+        r, ld_ds_z_delta=None))
     with pytest.raises(RuntimeError, match="ld_ds_z_delta"):
         group()
 
 
 def test_authored_ceiling_shrinks_the_library(wired, monkeypatch):
     full = len(all_scenarios())
-    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: {
-        "reach_id": r, "is_terminal": False, "reach_to_id": DOWNSTREAM,
-        "ld_ds_z_delta": 1.0, "kwse_upper_bound": 225.0})
+    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: intent_for(
+        r, kwse_upper_bound=225.0))
     assert len(all_scenarios()) < full
+
+
+# --- the ceiling's basin inputs (DR-032 ALT-E) -----------------------------
+
+def test_the_basin_reaches_the_planner(wired, monkeypatch):
+    """Equal areas: nothing else drains into the downstream reach, so while we
+    carry 200 it carries 200, and its q=900 runs are floods that cannot coincide.
+    Stage 226 then binds to its own q=200 run (achieved 226.4, kwse=223.0)
+    instead of the nearer q=900 one the uncapped plan picks."""
+    monkeypatch.setitem(AREA, UPSTREAM, 1000.0)
+    at_226 = next(s for s in all_scenarios() if s["upstream_discharge"] == 200
+                  and s["bc_value"] == pytest.approx(226.0))
+    assert "/kwse=223.0/q=200/scenario_manifest.json" in at_226["downstream_Scenario"]
+
+
+def test_a_leftover_downstream_discharge_is_not_rounded_onto(wired, monkeypatch):
+    """The downstream reach adopted 200 and 900, and an older sweep left a
+    normal-depth run at 400. Holding 95% of its area, we leave 0.05^0.7 x 1000 =
+    123 cms for everything else, so at q=200 the cap is 323. Rounding onto the
+    leftover 400 would drop the q=900 stage runs and bind stage 226 to the q=200
+    run; rounding onto the adopted 900 keeps the nearer q=900 run."""
+    monkeypatch.setitem(AREA, UPSTREAM, 950.0)
+    monkeypatch.setitem(globals(), "DS_CURVE",
+                        [{"q": 200, "wse": 223.0}, {"q": 400, "wse": 224.0},
+                         {"q": 900, "wse": 225.6}])
+    at_226 = next(s for s in all_scenarios() if s["upstream_discharge"] == 200
+                  and s["bc_value"] == pytest.approx(226.0))
+    assert "/kwse=223.0/q=900/scenario_manifest.json" in at_226["downstream_Scenario"]
+
+
+def test_more_area_than_the_downstream_reach_is_refused(wired, monkeypatch):
+    monkeypatch.setitem(AREA, UPSTREAM, 1001.0)
+    with pytest.raises(RuntimeError, match="only grows downstream"):
+        group()
+
+
+def test_an_unauthored_downstream_upper_bound_is_refused(wired, monkeypatch):
+    """No fallback to the old single ceiling: the cause must stay visible."""
+    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: intent_for(
+        r, **({"q_upper_bound": None} if r == DOWNSTREAM else {})))
+    with pytest.raises(RuntimeError, match="q_upper_bound"):
+        group()
+
+
+def test_a_missing_drainage_area_is_refused(wired, monkeypatch):
+    monkeypatch.setattr(check.intent, "effective", lambda r, **kw: intent_for(
+        r, **({"total_da_sqkm": None} if r == DOWNSTREAM else {})))
+    with pytest.raises(RuntimeError, match="drainage area"):
+        group()
 
 
 # --- checked against the job's own input model ---------------------------

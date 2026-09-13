@@ -407,8 +407,9 @@ def _kwse_inputs(
 
     Unlike the nd payload, almost none of this is intent passed through. The
     scenario list is COMPUTED — DR-032 sets the envelope from what the
-    downstream reach has materialized, DR-033 fills it with a stage grid, and
-    each target is bound to a real downstream run. plan.py does all of that and
+    downstream reach has materialized and how much of its basin is ours, DR-033
+    fills it with a stage grid, and each target is bound to a real downstream
+    run. plan.py does all of that and
     is deliberately pure, so this function's whole job is to turn its answer
     into addresses.
 
