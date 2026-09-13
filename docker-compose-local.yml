@@ -52,12 +52,11 @@ services:
       - twodfim_net
 
   sepex:
-    image: ghcr.io/dewberry/sepex:dev
+    image: ghcr.io/dewberry/sepex:0.3.0-rc.1
     # For GPU enabled machines, uncomment the following lines to enable GPU support in the container.
     # And comment the above line.
     # This requires Docker Engine 19.03+ and NVIDIA Container Toolkit installed on the host.
     # In addition to that you must also set GPU_AVAILABLE=1 in the .env file, (not sepex_local.env).
-    # image: ghcr.io/dewberry/sepex:sha-f56dea8
     # deploy:
     #   resources:
     #     reservations:
