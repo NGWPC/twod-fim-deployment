@@ -32,12 +32,12 @@ def version_root() -> str:
     return f"s3://{settings.artifacts_s3_bucket}/version={settings.twod_fim_version}"
 
 
-def model_base_path(reach_id: int) -> str:
+def model_base_path(reach_id: str) -> str:
     """Base S3 location for a reach's model artifacts."""
     return f"{version_root()}/models/reach={reach_id}"
 
 
-def model_artifact_path(reach_id: int, model_id: str) -> str:
+def model_artifact_path(reach_id: str, model_id: str) -> str:
     """Full s3:// path to a reach's model_manifest.json."""
     return f"{model_base_path(reach_id)}/{model_id}/model_manifest.json"
 
@@ -82,7 +82,7 @@ def model_identity_hash(model_id: str) -> str:
     return model_id.partition("_")[0]
 
 
-def run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
+def run_base_path(reach_id: str, model_id: str, run_identity_hash: str) -> str:
     """Everything one run identity produced for this reach, above the scenario folders.
 
     Not normal-depth specific. A run identity is the solver plus the methodology
@@ -98,7 +98,7 @@ def run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
     )
 
 
-def nd_library_path(reach_id: int, model_id: str, run_identity_hash: str) -> str | None:
+def nd_library_path(reach_id: str, model_id: str, run_identity_hash: str) -> str | None:
     """The folder holding one normal-depth library: every q run at one slope.
 
     Discovered, not predicted: the job computes the slope itself from the
@@ -211,7 +211,7 @@ def read_json(path: str) -> dict | None:
 
 
 def scenario_manifest_path(
-    reach_id: int, model_id: str, run_identity_hash: str, scenario_dir: str
+    reach_id: str, model_id: str, run_identity_hash: str, scenario_dir: str
 ) -> str:
     """The manifest of one scenario, given the folder its realization names.
 

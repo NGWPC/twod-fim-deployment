@@ -32,7 +32,7 @@ from recon.config import settings
 logger = logging.getLogger(__name__)
 
 
-def observe_reach(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
+def observe_reach(reach_id: str, *, conn: psycopg.Connection | None = None) -> dict:
     """Reconcile materialized_models for one reach against storage.
 
     Returns what happened, for the check to log and a notebook to show:
@@ -273,7 +273,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
                     len(metrics) - len(path))
 
 
-def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
+def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) -> dict:
     """Reconcile materialized_nd_runs for one reach against storage.
 
     Lookup down to the run identity, listing the rest of the way. Intent fixes
@@ -424,7 +424,7 @@ def observe_nd_runs(reach_id: int, *, conn: psycopg.Connection | None = None) ->
             "us_wse_max": us_wse_max, "changed": changed, "refused": refused}
 
 
-def observe_kwse_runs(reach_id: int, *, conn: psycopg.Connection | None = None) -> dict:
+def observe_kwse_runs(reach_id: str, *, conn: psycopg.Connection | None = None) -> dict:
     """Reconcile materialized_kwse_runs for one reach against storage.
 
     The address is a prediction all the way down, unlike the nd case. Intent

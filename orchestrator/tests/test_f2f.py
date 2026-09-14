@@ -31,24 +31,40 @@ def test_the_library_path_of_a_scenario():
 
 
 def test_a_link_out_of_the_export_becomes_an_outlet():
-    links = [(1, 2), (2, 3), (3, None), (4, 9)]
-    rows, cut = f2f.network_rows(links, {1, 2, 4})
-    assert rows == [(1, 2), (2, None), (4, None)]
-    assert cut == [(2, 3), (4, 9)]
+    links = [("1", "2"), ("2", "3_1"), ("3_1", None), ("4", "9")]
+    rows, cut = f2f.network_rows(links, {"1", "2", "4"})
+    assert rows == [("1", "2"), ("2", None), ("4", None)]
+    assert cut == [("2", "3_1"), ("4", "9")]
 
 
 def test_start_reaches_are_the_reaches_with_nowhere_to_drain_at_normal_depth(tmp_path):
     path = tmp_path / "start_reaches.csv"
-    starts = f2f.write_start_reaches(path, [(1, 2), (2, None), (4, None)])
-    assert starts == [2, 4]
-    assert path.read_text().splitlines() == ["reach_id,control_stage", "2,nd", "4,nd"]
+    numbers = {"1": 1, "2_1": 2, "4": 3}
+    starts = f2f.write_start_reaches(path, [("1", "2_1"), ("2_1", None), ("4", None)], numbers)
+    assert starts == ["2_1", "4"]
+    assert path.read_text().splitlines() == ["reach_id,control_stage", "2,nd", "3,nd"]
+
+
+def test_flows2fim_numbers_are_kept_across_exports(tmp_path):
+    path = tmp_path / "scenarios.db"
+    first = f2f.flows2fim_numbers(path, {"20", "10_2"})
+    assert first == {"10_2": 1, "20": 2}
+    f2f.write_scenarios_db(path, [], [], [], first, {"_location": "aoi.json"})
+    second = f2f.flows2fim_numbers(path, {"20", "10_1", "10_2"})
+    assert second == {"10_2": 1, "20": 2, "10_1": 3}
 
 
 def test_a_forecast_leaves_out_reaches_without_flows():
-    flows = pd.DataFrame({"f5year": [10.0, None, 30.0]}, index=pd.Index([1, 2, 3], name="reach_id"))
-    rows = f2f.forecast(flows, "f5year", {1, 2, 5})
+    flows = pd.DataFrame({"f5year": [10.0, None, 30.0]}, index=pd.Index(["1", "2", "3"], name="reach_id"))
+    rows = f2f.forecast(flows, "f5year", {7: "1", 8: "2", 9: "5"})
     assert list(rows.columns) == ["feature_id", "discharge"]
-    assert rows.to_dict("records") == [{"feature_id": 1, "discharge": 10.0}]
+    assert rows.to_dict("records") == [{"feature_id": 7, "discharge": 10.0}]
+
+
+def test_every_piece_of_a_split_reach_is_forecast_with_its_flowpaths_flow():
+    flows = pd.DataFrame({"f5year": [30.0]}, index=pd.Index(["3"], name="reach_id"))
+    rows = f2f.forecast(flows, "f5year", {1: "3_1", 2: "3_2"})
+    assert rows.to_dict("records") == [{"feature_id": 1, "discharge": 30.0}, {"feature_id": 2, "discharge": 30.0}]
 
 
 def test_vrt_sources_become_relative_to_the_vrt(tmp_path):

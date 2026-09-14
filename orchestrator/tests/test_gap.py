@@ -12,13 +12,13 @@ from recon.gap import (BUILD_MODEL, RUN_KWSE, RUN_ND, AwaitingInputs, InFlight, 
 
 def terminal(**kw) -> Snapshot:
     """A reach with nothing below it, whatever it drains into."""
-    return Snapshot(**{"reach_id": 1, "revision": 0, "is_terminal": True, **kw})
+    return Snapshot(**{"reach_id": "1", "revision": 0, "is_terminal": True, **kw})
 
 
 def upstream(**kw) -> Snapshot:
     """A non-terminal reach; downstream reach 9 in whatever state kw says."""
-    return Snapshot(**{"reach_id": 2, "revision": 0, "is_terminal": False,
-                       "downstream_reach_id": 9, **kw})
+    return Snapshot(**{"reach_id": "2", "revision": 0, "is_terminal": False,
+                       "downstream_reach_id": "9", **kw})
 
 
 def built(**kw) -> Snapshot:
@@ -32,14 +32,14 @@ def test_terminal_with_nothing_builds_at_once():
     assert calculate(terminal()) == RunStep(step=BUILD_MODEL)
 
 def test_upstream_waits_until_downstream_model_and_nd_exist():
-    assert calculate(upstream()) == AwaitingDownstream(reach_id=9, step=BUILD_MODEL)
+    assert calculate(upstream()) == AwaitingDownstream(reach_id="9", step=BUILD_MODEL)
 
 def test_downstream_model_alone_is_not_enough():
     """The geometry transfer needs the downstream ND library, not just its model."""
-    assert calculate(upstream(ds_model_ok=True)) == AwaitingDownstream(reach_id=9, step=BUILD_MODEL)
+    assert calculate(upstream(ds_model_ok=True)) == AwaitingDownstream(reach_id="9", step=BUILD_MODEL)
 
 def test_downstream_nd_alone_is_not_enough():
-    assert calculate(upstream(ds_nd_ok=True)) == AwaitingDownstream(reach_id=9, step=BUILD_MODEL)
+    assert calculate(upstream(ds_nd_ok=True)) == AwaitingDownstream(reach_id="9", step=BUILD_MODEL)
 
 def test_upstream_builds_once_downstream_model_and_nd_are_proven():
     assert calculate(upstream(ds_model_ok=True, ds_nd_ok=True)) == RunStep(step=BUILD_MODEL)
@@ -71,7 +71,7 @@ def test_upstream_nd_waits_for_the_downstream_library():
     """The outflow polygon is the downstream reach's max-q inundated area, so
     its library has to be proved before this one can start."""
     snap = upstream(model_ok=True, ds_model_ok=True)
-    assert calculate(snap) == AwaitingDownstream(reach_id=9, step=RUN_ND)
+    assert calculate(snap) == AwaitingDownstream(reach_id="9", step=RUN_ND)
 
 def test_upstream_runs_nd_once_the_downstream_library_is_proved():
     snap = upstream(model_ok=True, ds_model_ok=True, ds_nd_ok=True)

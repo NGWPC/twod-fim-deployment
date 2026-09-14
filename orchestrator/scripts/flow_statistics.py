@@ -9,6 +9,9 @@ Any parquet or CSV works: the reach id may be a column or the index, and every
 column may be called anything, as long as the AOI config (or the settings) say
 what. modify_network keeps the downstream reach's id when it merges reaches, so a
 network's reach_id matches the NHF flowpath id the default table is keyed by.
+
+Reach ids are text. A reach modify_network split out of one flowpath is named
+<flowpath id>_<n>, and every piece takes the flowpath's flows: see flow_id.
 """
 
 import sys
@@ -55,14 +58,19 @@ def describe(flows: FlowStatistics) -> str:
     return f"{flows.location}{' (system default)' if flows.is_default else ''}"
 
 
+def flow_id(reach_id: str) -> str:
+    """The id a reach's flows are listed under: its flowpath, without a split suffix."""
+    return reach_id.split("_")[0]
+
+
 def read(path: Path, reach_id_column: str, columns: Mapping[str, str]) -> pd.DataFrame:
-    """The table at `path`, indexed by reach id, holding just `columns`.
+    """The table at `path`, indexed by reach id as text, holding just `columns`.
 
     `columns` maps each column wanted to the AOI config key that names it, so a
     missing one is reported with the key to fix.
     """
     if path.suffix.lower() == ".csv":
-        table = pd.read_csv(path)
+        table = pd.read_csv(path, dtype={reach_id_column: str})
     else:
         table = pd.read_parquet(path)
     if table.index.name != reach_id_column:
@@ -73,6 +81,7 @@ def read(path: Path, reach_id_column: str, columns: Mapping[str, str]) -> pd.Dat
     if missing:
         keys = sorted(set(missing.values()))
         sys.exit(f"{path} has no column(s) {sorted(missing)}; name them with {' / '.join(keys)}")
-    if not pd.api.types.is_integer_dtype(table.index):
-        sys.exit(f"{path}: reach ids must be integers, got {table.index.dtype}")
+    if table.index.hasnans:
+        sys.exit(f"{path}: {int(table.index.isna().sum())} row(s) have no reach id")
+    table.index = table.index.map(aoi_config.as_id)
     return table[list(columns)]

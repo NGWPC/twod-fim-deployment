@@ -6,7 +6,7 @@ This directory holds DDL for the 2D-FIM database.
 
 _Not an exhaustive list_
 
-- `reach_id` `BIGINT` — external hydrofabric identifier, PK of `reach_network`.
+- `reach_id` `TEXT` — modeling reach identifier, PK of `reach_network`: the hydrofabric flowpath id as text, with a `_<n>` suffix when network modification split the flowpath.
 - `*_hash` `CHAR(8)` — first-8-hex SHA-256 identity hash (`model.schema.json`).
 - `model_id` — `"<identity_hash>_<domain_code>"`, the model folder name in
   storage; in `materialized_models` it is a **generated** column so it cannot drift

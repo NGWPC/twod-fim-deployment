@@ -9,7 +9,7 @@ runbook or `just`: rerun it only to regenerate that table, then
 Joins NHF flowpaths to an AEP source table (e.g. NWM flows v3) on the NHF
 reference flowpath id, fits log-log drainage-area regressions per return-period
 column to fill gaps and clip outliers to the 95% prediction interval, estimates
-bankfull depth, and writes one parquet indexed by integer reach_id -- the NHF
+bankfull depth, and writes one parquet with a text reach_id column -- the NHF
 flowpath id, which modify_network keeps as the downstream reach's id when it
 merges reaches, so it matches a network's reach_id.
 
@@ -116,11 +116,8 @@ def load_nhf(
     )
     nhf = nhf.set_index(OUT_FLOWPATH_ID)
 
-    # A flowpath id must be a real integer to key desired_state and flows2fim's
-    # controls on later; one that isn't is dropped here rather than smuggled
-    # through as a float, which is how the current CONUS table ended up with a
-    # float64 index (`reach ids must be integers, got float64` in
-    # flow_statistics.read).
+    # NHF flowpath ids are integers. Held as int64 here so the id written out as
+    # text is its exact digits, never a float's "123.0" or rounded mantissa.
     unkeyed = nhf.index.isna()
     if unkeyed.any():
         print(f"  dropping      {unkeyed.sum()} row(s) with no flowpath id")
@@ -316,8 +313,10 @@ def qc(df: pd.DataFrame) -> list[str]:
 
 
 def write(df: pd.DataFrame, out_path: Path) -> None:
-    """Write, with reach_id as the first column rather than a trailing index."""
-    df.reset_index().to_parquet(out_path, index=False)
+    """Write, with reach_id as the first column rather than a trailing index, as text like every reach id."""
+    table = df.reset_index()
+    table[OUT_FLOWPATH_ID] = table[OUT_FLOWPATH_ID].astype(str)
+    table.to_parquet(out_path, index=False)
 
 
 def build(

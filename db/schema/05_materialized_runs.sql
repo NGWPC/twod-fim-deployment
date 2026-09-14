@@ -30,7 +30,7 @@
 -- materialized_nd_runs
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS materialized_nd_runs(
-    reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
+    reach_id text PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     -- Which model these runs were produced against, and under which solver
     -- recipe. Both are compared against what intent now implies, and both are
     -- components of the results path a later step writes to.
@@ -110,7 +110,7 @@ COMMENT ON COLUMN materialized_nd_runs.applied_revision IS 'The intent revision 
 -- nd table keeps its pair because it has no index to derive them from: one run
 -- per discharge leaves nothing to index.
 CREATE TABLE IF NOT EXISTS materialized_kwse_runs(
-    reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
+    reach_id text PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     -- The WHOLE model_id, domain code included, for the reason the nd table
     -- gives: the job files results under the full id, so that is what the
     -- address needs. An identity hash alone cannot name the folder.

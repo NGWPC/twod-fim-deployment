@@ -51,10 +51,10 @@ class Snapshot:
     and meaningless (never read) when the reach is terminal.
     """
 
-    reach_id: int
+    reach_id: str
     revision: int
     is_terminal: bool
-    downstream_reach_id: int | None = None
+    downstream_reach_id: str | None = None
     # This reach's own proofs, judged against this snapshot's revision.
     model_ok: bool = False
     nd_ok: bool = False
@@ -97,7 +97,7 @@ class AwaitingDownstream:
     finds this reach regardless, so nothing polls.
     """
 
-    reach_id: int
+    reach_id: str
     step: str  # the step that is blocked, for the activity log
 
 

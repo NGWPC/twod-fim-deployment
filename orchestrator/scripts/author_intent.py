@@ -100,9 +100,8 @@ def load_q_bounds(bounds: pd.DataFrame, reaches: list[dict]) -> list[dict]:
     nan_bounds = []
     for r in reaches:
         reach_id = r["reach_id"]
-        reach_id = int(str(reach_id).split("_")[0])
         try:
-            row = bounds.loc[reach_id]
+            row = bounds.loc[flow_statistics.flow_id(reach_id)]
         except KeyError:
             missing_reaches.append(reach_id)
             continue
@@ -267,21 +266,24 @@ def place_on_q_grid(reaches: list[dict]) -> list[dict]:
 # intent — and check_downstream_closed enforces that.
 
 
-def reaches_to_author(aoi: dict, own: set[int], seeded: set[int], covered: set[int], flows: str) -> set[int]:
-    """The reaches of the AOI's own network that its flow statistics cover."""
+def reaches_to_author(aoi: dict, own: set[str], seeded: set[str], covered: set[str], flows: str) -> set[str]:
+    """The reaches of the AOI's own network that its flow statistics cover.
+
+    `covered` holds flow ids, so a split reach is covered by its flowpath's row.
+    """
     unseeded = sorted(own - seeded)
     if unseeded:
         sys.exit(
             f"{len(unseeded)} reach(es) of this AOI's network are not in reach_network: {unseeded[:20]}\n"
             f"Seed the network first: seed.py network {aoi['_location']}"
         )
-    wanted = own & covered
+    wanted = {r for r in own if flow_statistics.flow_id(r) in covered}
     if not wanted:
         sys.exit(f"{flows} covers no reach of this AOI's network")
     return wanted
 
 
-def check_downstream_closed(reaches: list[dict], authored: set[int], intended: set[int]) -> None:
+def check_downstream_closed(reaches: list[dict], authored: set[str], intended: set[str]) -> None:
     """Refuse to author reaches that cannot finish.
 
     Silent otherwise: a dangling reach authors cleanly and then sits at
@@ -471,7 +473,7 @@ def author(aoi: dict) -> None:
     flows = flow_statistics.for_aoi(aoi)
     with tempfile.TemporaryDirectory() as tmp, db.connect() as conn:
         bounds = read_q_bounds(aoi_config.local_copy(flows.location, Path(tmp)), flows)
-        covered = {int(i) for i in bounds.index}
+        covered = set(bounds.index)
         reaches = db.query(_NETWORK, conn=conn)
         intended = {r["reach_id"] for r in db.query("SELECT reach_id FROM desired_state", conn=conn)}
         authored = reaches_to_author(aoi, own, {r["reach_id"] for r in reaches}, covered, flows.location)

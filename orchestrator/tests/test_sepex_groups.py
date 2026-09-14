@@ -161,7 +161,7 @@ def in_flight(monkeypatch):
     from datetime import timedelta
     recorded = {"failures": [], "cleared": [], "checks": []}
     monkeypatch.setattr(jobs.processing, "in_flight", lambda **kw: [{
-        "reach_id": 100, "current_step": "run_kwse_scenarios", "current_step_ref": REF,
+        "reach_id": "100", "current_step": "run_kwse_scenarios", "current_step_ref": REF,
         "elapsed": timedelta(minutes=5)}])
     monkeypatch.setattr(jobs.processing, "record_failure",
                         lambda r, detail, **kw: recorded["failures"].append(detail) or
@@ -186,7 +186,7 @@ def test_a_failed_group_is_recorded_with_its_members_logs_and_halts(client, in_f
     assert outcome["action"] == "failed (1x), halted"
     [detail] = in_flight["failures"]
     assert "q=200 diverged" in detail
-    assert in_flight["checks"] == [100]
+    assert in_flight["checks"] == ["100"]
     # Nothing is submitted from here: a retry is the check's to make, and it
     # submits only what storage is still missing.
     assert not any(method == "POST" for method, _, _ in client.fake.calls)
@@ -198,5 +198,5 @@ def test_a_finished_group_clears_its_own_marker_and_asks_for_a_check(client, in_
     jobs.poll_in_flight(client)
 
     assert in_flight["cleared"] == [REF]
-    assert in_flight["checks"] == [100]
+    assert in_flight["checks"] == ["100"]
     assert in_flight["failures"] == []

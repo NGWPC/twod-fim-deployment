@@ -13,7 +13,7 @@ import pytest
 
 from recon import observe, plan, scenarios
 
-REACH, DOWNSTREAM = 100, 200
+REACH, DOWNSTREAM = "100", "200"
 MODEL = "5f14368c_N350S296E449W355"
 RUN_HASH = "af1436c4"
 

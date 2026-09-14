@@ -173,6 +173,14 @@ the job computes the slope from the reach's own DEM. It is discovered in
 storage, as the loop does, and every grid's full `s3://` address is recorded in
 a `scenario_sources` table so the library step needs no database connection.
 
+flows2fim (0.5.0) parses reach ids as integers, and reach ids here are text: a
+reach `modify_network` split out of one flowpath is `<flowpath id>_<n>`. So
+everything flows2fim reads (`scenarios`, `network`, `start_reaches.csv`,
+`flows.csv`, `library/<n>/`) names a reach by a number, and the `reach_ids`
+table in `scenarios.db` maps each number to its reach id. A reach keeps its
+number across exports into the same out-dir, so the library does not move.
+Every piece of a split flowpath is forecast with the flowpath's flows.
+
 Controls are traced upstream from the reaches with nowhere left to drain in
 the export, listed in `start_reaches.csv` and handed to `controls -scsv`, each at
 normal depth. For a true terminal that is the only start there is, since it has

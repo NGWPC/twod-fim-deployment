@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 class CheckResult:
     """What a check saw and did. Returned so a notebook can narrate it."""
 
-    reach_id: int
+    reach_id: str
     revision: int
     decision: str
     observed: dict[str, Any] = field(default_factory=dict)
@@ -90,7 +90,7 @@ _SNAPSHOT = """
 
 
 def load_snapshot(
-    reach_id: int, *, conn: psycopg.Connection | None = None
+    reach_id: str, *, conn: psycopg.Connection | None = None
 ) -> gap.Snapshot | None:
     """Everything a decision depends on, read in one query.
 
@@ -117,7 +117,7 @@ def load_snapshot(
     )
 
 
-def _downstream_max_q_dir(downstream: int) -> str:
+def _downstream_max_q_dir(downstream: str) -> str:
     """The downstream reach's scenario folder at its HIGHEST discharge.
 
     Read from that reach's proof rather than predicted, because the discharge
@@ -146,7 +146,7 @@ def _downstream_max_q_dir(downstream: int) -> str:
     return f"{library}/{identity.q_folder(max(proof['q_set']))}"
 
 
-def _model_geometries(reach_id: int, wanted: dict) -> list[str]:
+def _model_geometries(reach_id: str, wanted: dict) -> list[str]:
     """Geometry the model domain must contain besides the reach itself.
 
     A non-terminal reach's domain has to extend to where water is transferred
@@ -194,7 +194,7 @@ _UPSTREAM = """
 """
 
 
-def _upstream(reach_id: int) -> dict:
+def _upstream(reach_id: str) -> dict:
     """Upstream reach ids for this reach, and the mainstem among them."""
     rows = db.query(_UPSTREAM, (reach_id,))
     return {
@@ -215,12 +215,12 @@ def _upstream(reach_id: int) -> dict:
 # tags added later, and because a bare id is indistinguishable from any other
 # number. SEPEX allows letters, digits, and `. - _ :` in a tag, so the colon is
 # valid; it rejects anything else, and a rejected tag fails the submission.
-def job_tags(reach_id: int) -> list[str]:
+def job_tags(reach_id: str) -> list[str]:
     """The tags every submission for this reach carries."""
     return [f"reach:{reach_id}"]
 
 
-def _build_model_payload(reach_id: int) -> dict:
+def _build_model_payload(reach_id: str) -> dict:
     """What build_model needs, with every identity input pinned.
 
     Pinned rather than left to the job's defaults, so the job builds exactly
@@ -266,7 +266,7 @@ def _build_model_payload(reach_id: int) -> dict:
     }
 
 
-def _nd_boundary(reach_id: int, wanted: dict) -> dict:
+def _nd_boundary(reach_id: str, wanted: dict) -> dict:
     """The downstream boundary condition for a normal-depth run: where it is
     applied.
 
@@ -319,7 +319,7 @@ def _nd_boundary(reach_id: int, wanted: dict) -> dict:
     }
 
 
-def _library_scenarios(reach_id: int, model_id: str, wanted: db.Row) -> list[str]:
+def _library_scenarios(reach_id: str, model_id: str, wanted: db.Row) -> list[str]:
     """Scenario manifests already published under this reach's run identity.
 
     Everything, not just what a previous attempt adopted: a discharge rejected
@@ -344,7 +344,7 @@ def _library_scenarios(reach_id: int, model_id: str, wanted: db.Row) -> list[str
     ]
 
 
-def _run_nd_payload(reach_id: int) -> dict:
+def _run_nd_payload(reach_id: str) -> dict:
     """What run_nd_scenarios needs to produce the library intent asks for.
 
     The discharge range is authored intent passed straight through. The step is
@@ -401,7 +401,7 @@ def _run_nd_payload(reach_id: int) -> dict:
 
 
 def _kwse_inputs(
-    reach_id: int, context: scenarios.Planned, chain: tuple[plan.PlannedScenario, ...]
+    reach_id: str, context: scenarios.Planned, chain: tuple[plan.PlannedScenario, ...]
 ) -> dict:
     """What run_kwse_scenarios needs to run one chain of scenarios.
 
@@ -452,7 +452,7 @@ def _kwse_inputs(
     }
 
 
-def _run_kwse_group(reach_id: int) -> list[dict]:
+def _run_kwse_group(reach_id: str) -> list[dict]:
     """One run_kwse_scenarios job per discharge chain still missing scenarios.
 
     A chain is independent of every other (plan.chains), so each runs as its
@@ -553,7 +553,7 @@ def gpu_available() -> bool:
     return os.environ.get(GPU_AVAILABLE_ENV, "").strip().lower() in _TRUE
 
 
-def _process_id(step: str, reach_id: int) -> str:
+def _process_id(step: str, reach_id: str) -> str:
     """The SEPEX process that carries out a step for this reach.
 
     Two things pick it: the solver, which is authored intent, and whether this
@@ -578,7 +578,7 @@ def _process_id(step: str, reach_id: int) -> str:
     return processes[key]
 
 
-def run_check(reach_id: int, execution: ExecutionService) -> CheckResult:
+def run_check(reach_id: str, execution: ExecutionService) -> CheckResult:
     """Check one reach, and act on what the gap turns out to be.
 
     A check submits whenever there is a gap. There is no concurrency limit and

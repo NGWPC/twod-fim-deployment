@@ -198,7 +198,14 @@ def resolve(value: str, base: str) -> str:
     return str(Path(base) / value)
 
 
-def network_reach_ids(aoi: dict) -> set[int]:
+def as_id(value) -> str:
+    """An id as text, without the '.0' a float column would put on it."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def network_reach_ids(aoi: dict) -> set[str]:
     """Every reach id in the AOI's own network file."""
     source = require(aoi, "network")
     with tempfile.TemporaryDirectory() as tmp:
@@ -208,7 +215,7 @@ def network_reach_ids(aoi: dict) -> set[int]:
             columns=[NETWORK_REACH_ID],
             read_geometry=False,
         )[NETWORK_REACH_ID]
-    return {int(i) for i in ids}
+    return {as_id(i) for i in ids}
 
 
 def require(aoi: dict, key: str) -> str:

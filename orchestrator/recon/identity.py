@@ -112,7 +112,7 @@ def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     return identity, hash_dict(identity)
 
 
-def verify_manifest(manifest: Mapping[str, Any], reach_id: int, model_id: str) -> list[str]:
+def verify_manifest(manifest: Mapping[str, Any], reach_id: str, model_id: str) -> list[str]:
     """Why this manifest should NOT be adopted; empty list means it is sound.
 
     Checks are about trust, not correctness of the model itself:
@@ -304,7 +304,7 @@ def scenario_dir_from_code(code: str) -> str | None:
 
 
 def verify_scenario_manifest(
-    manifest: Mapping[str, Any], reach_id: int, run_hash: str, model_id: str,
+    manifest: Mapping[str, Any], reach_id: str, run_hash: str, model_id: str,
     scenario_dir: str,
 ) -> list[str]:
     """Why this scenario manifest should NOT be adopted; empty means sound.

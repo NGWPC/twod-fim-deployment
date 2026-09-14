@@ -6,12 +6,13 @@ Three steps, each a command, run in order by `just f2f`:
   scenarios <aoi-config-path> <out-dir>
             <out-dir>/scenarios.db: the `scenarios` and `network` tables
             flows2fim reads, for the reaches of the AOI's `network` that are
-            materialized, and where each depth grid is in storage
+            materialized, where each depth grid is in storage, and `reach_ids`,
+            the number flows2fim knows each reach by
             <out-dir>/start_reaches.csv: the reaches flows2fim controls start
             from, and the stage each starts at
   library   <out-dir> [--prune]
-            <out-dir>/library/<reach>/z_<stage>/f_<flow>.tif: the depth grids
-            scenarios.db names, downloaded
+            <out-dir>/library/<number>/z_<stage>/f_<flow>.tif: the depth
+            grids scenarios.db names, downloaded
   aep       <aoi-config-path> <out-dir>
             <out-dir>/aep/<column>/: for each AEP column of the AOI's flow
             statistics, a forecast, flows2fim controls for it from
@@ -35,6 +36,12 @@ while passing `flows2fim validate` 1:1, because the surplus was self-consistent.
 The one part of a grid's address the database cannot supply is the `nd=<slope>`
 folder, because the job computes the slope from the reach's own DEM. It is
 discovered in storage, exactly as the loop does (storage.nd_library_path).
+
+flows2fim parses reach ids as integers, while a reach id here is text: a reach
+modify_network split out of one flowpath is named <flowpath id>_<n>. So every
+table, file and library folder flows2fim reads names a reach by a number, and
+`reach_ids` in scenarios.db maps each number to its reach id. A reach keeps its
+number across exports into the same out-dir, so the library does not move.
 
 Discharges are cms, the unit the whole system is authored in -- desired_state
 bounds, q_set, the q= folders. flows2fim's help says cfs, but it never converts:
@@ -69,6 +76,7 @@ from recon.config import settings
 
 SCENARIOS_DB = "scenarios.db"
 START_REACHES = "start_reaches.csv"
+REACH_IDS = "reach_ids"
 LIBRARY_DIR = "library"
 AEP_DIR = "aep"
 DEPTH_GRID_FILENAME = "depth.tif"
@@ -100,7 +108,7 @@ def library_grid_name(us_flow: float) -> str:
     return f"f_{identity.q_folder(int(us_flow)).removeprefix('q=')}.tif"
 
 
-def nd_scenarios(reach_ids: set[int]) -> tuple[list[tuple], list[tuple]]:
+def nd_scenarios(reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
     """Scenario rows and grid addresses for each of these reaches with an ND library.
 
     Iterates `q_set`, the adopted discharges, and reads the upstream-end stage
@@ -134,7 +142,7 @@ def nd_scenarios(reach_ids: set[int]) -> tuple[list[tuple], list[tuple]]:
     return rows, sources
 
 
-def kwse_scenarios(reach_ids: set[int]) -> tuple[list[tuple], list[tuple]]:
+def kwse_scenarios(reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
     """Scenario rows and grid addresses for each of these reaches with a stage library.
 
     A KWSE run has two stages and they are not interchangeable: `bc` is the one
@@ -169,7 +177,7 @@ def kwse_scenarios(reach_ids: set[int]) -> tuple[list[tuple], list[tuple]]:
     return rows, sources
 
 
-def network_rows(links: list[tuple[int, int | None]], reach_ids: set[int]) -> tuple[list[tuple], list[tuple]]:
+def network_rows(links: list[tuple[str, str | None]], reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
     """Downstream links for the reaches being exported, and the ones cut.
 
     A link is kept only if its downstream reach is also in the export. A reach
@@ -190,7 +198,7 @@ def network_rows(links: list[tuple[int, int | None]], reach_ids: set[int]) -> tu
     return rows, cut
 
 
-def write_start_reaches(path: Path, links: list[tuple[int, int | None]]) -> list[int]:
+def write_start_reaches(path: Path, links: list[tuple[str, str | None]], numbers: dict[str, int]) -> list[str]:
     """Write the reaches controls start from, each at normal depth, for `controls -scsv`.
 
     Controls are traced upstream from the reaches with nowhere left to drain in
@@ -206,21 +214,45 @@ def write_start_reaches(path: Path, links: list[tuple[int, int | None]]) -> list
     and can be edited before aep runs.
     """
     starts = [reach_id for reach_id, downstream_id in links if downstream_id is None]
-    pd.DataFrame({"reach_id": starts, "control_stage": [START_STAGE] * len(starts)}).to_csv(path, index=False)
+    pd.DataFrame(
+        {"reach_id": [numbers[r] for r in starts], "control_stage": [START_STAGE] * len(starts)}
+    ).to_csv(path, index=False)
     return starts
+
+
+def flows2fim_numbers(path: Path, reach_ids: set[str]) -> dict[str, int]:
+    """The number flows2fim knows each reach by, keeping those an earlier export to `path` gave."""
+    numbers: dict[str, int] = {}
+    if path.exists():
+        with sqlite3.connect(path) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (REACH_IDS,)
+            ).fetchone()
+            if exists:
+                numbers = dict(connection.execute(f"SELECT twodfim_reach_id, reach_id FROM {REACH_IDS}"))
+    next_number = max(numbers.values(), default=0) + 1
+    for reach_id in sorted(reach_ids - numbers.keys()):
+        numbers[reach_id] = next_number
+        next_number += 1
+    return numbers
 
 
 def write_scenarios_db(
     path: Path,
     scenario_rows: list[tuple],
     source_rows: list[tuple],
-    links: list[tuple[int, int | None]],
+    links: list[tuple[str, str | None]],
+    numbers: dict[str, int],
     aoi: dict,
 ) -> None:
-    """Write the two tables flows2fim reads, plus where each grid is and what was exported."""
+    """Write the two tables flows2fim reads, plus the reach numbers, where each grid is and what was exported."""
+    number = numbers.__getitem__
+    scenario_rows = [(number(row[0]), *row[1:]) for row in scenario_rows]
+    source_rows = [(number(row[0]), *row[1:]) for row in source_rows]
+    links = [(number(reach_id), None if downstream_id is None else number(downstream_id)) for reach_id, downstream_id in links]
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
-        for table in ("scenarios", "network", "scenario_sources", "export_provenance"):
+        for table in ("scenarios", "network", "scenario_sources", "export_provenance", REACH_IDS):
             connection.execute(f"DROP TABLE IF EXISTS {table}")
         connection.execute(
             """
@@ -253,6 +285,13 @@ def write_scenarios_db(
                 UNIQUE(reach_id, us_flow, ds_wse, boundary_condition)
             )
             """
+        )
+        # Not part of the flows2fim contract either: the reach id behind each
+        # number every other table uses.
+        connection.execute(f"CREATE TABLE {REACH_IDS} (reach_id INTEGER PRIMARY KEY, twodfim_reach_id TEXT NOT NULL UNIQUE)")
+        connection.executemany(
+            f"INSERT INTO {REACH_IDS} (reach_id, twodfim_reach_id) VALUES (?, ?)",
+            sorted((n, r) for r, n in numbers.items()),
         )
         connection.execute(
             """
@@ -307,8 +346,9 @@ def export_scenarios(aoi: dict, out_dir: Path) -> None:
     links, cut = network_rows(links, exported)
 
     path = out_dir / SCENARIOS_DB
-    write_scenarios_db(path, scenario_rows, nd_sources + kwse_sources, links, aoi)
-    starts = write_start_reaches(out_dir / START_REACHES, links)
+    numbers = flows2fim_numbers(path, exported)
+    write_scenarios_db(path, scenario_rows, nd_sources + kwse_sources, links, numbers, aoi)
+    starts = write_start_reaches(out_dir / START_REACHES, links, numbers)
 
     print(f"\nexported        {len(exported)} of {len(own)} reach(es) in this AOI's network")
     if len(own) > len(exported):
@@ -457,22 +497,33 @@ def export_library(out_dir: Path, prune: bool) -> None:
 # --- aep -----------------------------------------------------------------
 
 
-def forecast(flows: pd.DataFrame, column: str, reach_ids: set[int]) -> pd.DataFrame:
+def forecast(flows: pd.DataFrame, column: str, reaches: dict[int, str]) -> pd.DataFrame:
     """One AEP column as a flows2fim forecast (feature_id, discharge) for these reaches, in cms.
 
-    Reaches the table has no value for are left out rather than stopping the
-    run; the caller counts them.
+    `reaches` maps each reach's flows2fim number, the feature_id, to its reach
+    id. Each reach takes the flow listed under its flow id, so every piece of a
+    split flowpath is forecast with the flowpath's discharge. Reaches the table
+    has no value for are left out rather than stopping the run; the caller
+    counts them.
     """
-    values = flows[column].reindex(sorted(reach_ids)).dropna()
-    return values.rename_axis("feature_id").rename("discharge").reset_index()
+    numbers = sorted(reaches)
+    values = flows[column].reindex([flow_statistics.flow_id(reaches[n]) for n in numbers])
+    values.index = pd.Index(numbers, name="feature_id")
+    return values.dropna().rename("discharge").reset_index()
 
 
-def read_reaches(scenarios_db: Path) -> set[int]:
-    """The reaches with usable scenarios."""
+def read_reaches(scenarios_db: Path) -> dict[int, str]:
+    """The reaches with usable scenarios: flows2fim number -> reach id."""
     with sqlite3.connect(scenarios_db) as connection:
-        reach_ids = {
-            row[0] for row in connection.execute("SELECT DISTINCT reach_id FROM scenarios WHERE map_exists = 1")
-        }
+        reach_ids = dict(
+            connection.execute(
+                f"""
+                SELECT DISTINCT s.reach_id, r.twodfim_reach_id
+                FROM scenarios s JOIN {REACH_IDS} r USING (reach_id)
+                WHERE s.map_exists = 1
+                """
+            )
+        )
     if not reach_ids:
         sys.exit(f"{scenarios_db} has no scenarios with map_exists = 1; run the library step first")
     return reach_ids

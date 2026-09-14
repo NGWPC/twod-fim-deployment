@@ -18,7 +18,7 @@ from recon import db
 
 
 def begin(
-    reach_id: int,
+    reach_id: str,
     action: str,
     revision: int | None = None,
     detail: dict[str, Any] | None = None,
@@ -65,7 +65,7 @@ def end(
     )
 
 
-def recent(limit: int = 20, reach_id: int | None = None,
+def recent(limit: int = 20, reach_id: str | None = None,
            *, conn: psycopg.Connection | None = None) -> list[db.Row]:
     """The latest events, newest first. For a notebook or a dashboard."""
     sql = """

@@ -32,10 +32,10 @@ COMMENT ON TABLE coasts IS 'Coastal polygons the network drains into. Same role 
 -- merged_reaches   modeling-reach <- source-reach merge traceback
 -- reach_exclusion  source reaches dropped in modification step (lake/coast)
 CREATE TABLE IF NOT EXISTS reach_network(
-    reach_id bigint PRIMARY KEY,
+    reach_id text PRIMARY KEY,
     -- Downstream modeling reach. NULL at terminals. Self FK is DEFERRABLE so a whole
     -- modified network loads in any row order inside one transaction.
-    reach_to_id bigint REFERENCES reach_network(reach_id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
+    reach_to_id text REFERENCES reach_network(reach_id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
     is_headwater boolean NOT NULL DEFAULT FALSE, -- no upstream modeling reach
     is_terminal boolean NOT NULL DEFAULT FALSE, -- no downstream modeling reach
     -- Why this reach has no modeling downstream. Drives nothing structurally but

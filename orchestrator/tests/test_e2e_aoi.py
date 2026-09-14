@@ -56,14 +56,14 @@ import seed  # noqa: E402
 # loop can be asked to walk, and a case worth keeping. 1269874503448786 covers
 # it at a fifth of the cost: 2 km2 of bounding box, the second smallest here.
 E2E_REACHES = {
-    1269876933415184: "drains into lake 120053033; nd gets that polygon",
-    1269877024692972: "sits on a terminal, so its kwse has no kwse below to seed from",
-    1269877035720873: "two authored branches meet here; a mainstem is chosen between them",
-    1269877039396680: "the mainstem branch: full kwse, seeded from the library below it",
-    1269877051885631: "the tributary branch: same rung, not the mainstem",
-    1269877088730144: "nothing above it, so build_model is given no mainstem reach",
-    1269869447554114: "names no water body, so nd is sent no outflow polygon at all",
-    1269874503448786: "nothing above and nothing below: the shortest ladder there is",
+    "1269876933415184": "drains into lake 120053033; nd gets that polygon",
+    "1269877024692972": "sits on a terminal, so its kwse has no kwse below to seed from",
+    "1269877035720873": "two authored branches meet here; a mainstem is chosen between them",
+    "1269877039396680": "the mainstem branch: full kwse, seeded from the library below it",
+    "1269877051885631": "the tributary branch: same rung, not the mainstem",
+    "1269877088730144": "nothing above it, so build_model is given no mainstem reach",
+    "1269869447554114": "names no water body, so nd is sent no outflow polygon at all",
+    "1269874503448786": "nothing above and nothing below: the shortest ladder there is",
 }
 
 # The forks a scope has to keep alive. Each is a branch the loop actually takes
@@ -85,21 +85,21 @@ CASES = {
 UNCOVERABLE = {"terminal:coast": "no reach in testdata names a coast"}
 
 
-def _upstream_of(reaches: list[dict]) -> dict[int, list[int]]:
+def _upstream_of(reaches: list[dict]) -> dict[str, list[str]]:
     """Who flows into whom, derived rather than read off is_headwater.
 
     Derived because this is the question check.py asks of the database
     (_UPSTREAM, keyed on reach_to_id), and a flag that disagreed with the links
     would report coverage the loop does not have.
     """
-    upstream: dict[int, list[int]] = {}
+    upstream: dict[str, list[str]] = {}
     for r in reaches:
         if r["reach_to_id"] is not None:
             upstream.setdefault(r["reach_to_id"], []).append(r["reach_id"])
     return upstream
 
 
-def cases_covered(reaches: list[dict], authored: set[int]) -> dict[int, list[str]]:
+def cases_covered(reaches: list[dict], authored: set[str]) -> dict[str, list[str]]:
     """Which cases each authored reach exercises, judged on the loaded network."""
     by_id = {r["reach_id"]: r for r in reaches}
     upstream = _upstream_of(reaches)
@@ -129,10 +129,10 @@ def _network() -> list[dict]:
     return seed.load_network(TESTDATA / "network.gpkg")
 
 
-def _authored() -> set[int]:
+def _authored() -> set[str]:
     """The reaches e2e.aoi_config.json authors: those its flow statistics cover."""
     flows = json.loads((TESTDATA / "e2e.aoi_config.json").read_text())["flow_statistics"]
-    return {int(i) for i in pd.read_parquet(TESTDATA / flows, columns=[]).index}
+    return {str(i) for i in pd.read_parquet(TESTDATA / flows, columns=[]).index}
 
 
 def test_the_aoi_authors_exactly_the_reaches_documented_here():

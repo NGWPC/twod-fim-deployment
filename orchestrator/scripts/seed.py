@@ -76,13 +76,6 @@ NETWORK_COLUMNS = (
 )
 
 
-def as_id(value) -> str:
-    """An id as text, without the '.0' a float column would put on it."""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
-
-
 # --- lakes and coasts ----------------------------------------------------
 
 
@@ -97,7 +90,7 @@ def load_water_bodies(gpkg_path: Path, layer: str, id_field: str) -> list[dict]:
         sys.exit(f"{gpkg_path} layer {layer} has no {id_field} column")
     if gdf.crs and gdf.crs.to_epsg() != 5070:
         gdf = gdf.to_crs(epsg=5070)
-    gdf[id_field] = gdf[id_field].map(as_id)
+    gdf[id_field] = gdf[id_field].map(aoi_config.as_id)
     merged = gdf[[id_field, "geometry"]].dissolve(by=id_field)
     return [{"id": body_id, "wkt": geom.wkt, "geom": geom} for body_id, geom in merged.geometry.items()]
 
@@ -160,7 +153,7 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
         gdf = gdf.to_crs(epsg=5070)
 
     known = set(gdf.columns)
-    in_file = set(gdf["reach_id"].astype("int64"))
+    in_file = {aoi_config.as_id(i) for i in gdf["reach_id"]}
     rows, clipped = [], []
     for _, r in gdf.iterrows():
 
@@ -174,8 +167,8 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
             # the column is LineString; a 1-part multi is the same line
             geom = geom.geoms[0]
 
-        reach_id = int(r["reach_id"])
-        reach_to_id = value("reach_to_id", int)
+        reach_id = aoi_config.as_id(r["reach_id"])
+        reach_to_id = value("reach_to_id", aoi_config.as_id)
         is_terminal = bool(value("is_terminal", bool, False))
         terminal_reason = value("terminal_reason", str)
 
@@ -197,8 +190,8 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
                 "is_terminal": is_terminal,
                 "is_headwater": bool(value("is_headwater", bool, False)),
                 "terminal_reason": terminal_reason,
-                "lake_to_id": value("lake_to_id", as_id),
-                "coast_to_id": value("coast_to_id", as_id),
+                "lake_to_id": value("lake_to_id", aoi_config.as_id),
+                "coast_to_id": value("coast_to_id", aoi_config.as_id),
                 "lake_inlet": bool(value("lake_inlet", bool, False)),
                 "lake_outlet": bool(value("lake_outlet", bool, False)),
                 "is_trimmed": bool(value("is_trimmed", bool, False)),
@@ -271,7 +264,9 @@ def export_reach_network() -> str:
     """
     rows = db.query(
         f"SELECT {', '.join(NETWORK_COLUMNS)}, ST_AsBinary(geom) AS geom_wkb "
-        f"FROM reach_network ORDER BY {REACH_ID_FIELD}"
+        # Byte order, not the database's collation: the parquet row-group
+        # min/max a reader skips by are compared bytewise.
+        f'FROM reach_network ORDER BY {REACH_ID_FIELD} COLLATE "C"'
     )
     gdf = gpd.GeoDataFrame(
         [{c: r[c] for c in NETWORK_COLUMNS} for r in rows],

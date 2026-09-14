@@ -42,7 +42,7 @@ class Planned:
     model_id: str  # this reach's model, which its results are filed under
     run_identity_hash: str  # shared by this reach's nd and kwse runs alike
     nd_slope: float  # names this reach's own nd= folder, the root of every chain
-    downstream_id: int
+    downstream_id: str
     ds_model_id: str
     ds_run_identity_hash: str
 
@@ -56,7 +56,7 @@ class NotPlannable(Exception):
     """
 
 
-def nd_slope(reach_id: int, model_id: str, run_hash: str) -> float:
+def nd_slope(reach_id: str, model_id: str, run_hash: str) -> float:
     """The slope naming this reach's `nd=<slope>` folder.
 
     Emergent — the job derives it from the reach's own DEM — so the folder the
@@ -73,7 +73,7 @@ def nd_slope(reach_id: int, model_id: str, run_hash: str) -> float:
 
 
 def downstream_runs(
-    downstream_id: int, *, conn: psycopg.Connection | None = None
+    downstream_id: str, *, conn: psycopg.Connection | None = None
 ) -> list[plan.DownstreamRun]:
     """Every scenario the downstream reach has, as candidate boundaries.
 
@@ -108,7 +108,7 @@ def downstream_runs(
 
 
 def others(
-    reach_id: int, wanted: db.Row, downstream_id: int,
+    reach_id: str, wanted: db.Row, downstream_id: str,
     *, conn: psycopg.Connection | None = None,
 ) -> float:
     """What everything else can add to the downstream reach (DR-044 ALT-G).
@@ -144,7 +144,7 @@ def others(
         raise NotPlannable(f"reach {reach_id} -> {downstream_id}: {why}") from why
 
 
-def planned(reach_id: int, *, conn: psycopg.Connection | None = None) -> Planned:
+def planned(reach_id: str, *, conn: psycopg.Connection | None = None) -> Planned:
     """This reach's KWSE plan, or NotPlannable saying what is missing.
 
     Everything here is read at one point in time, and plan.py turns it into an
@@ -228,7 +228,7 @@ class Lookup:
         return self.manifest is not None and not self.problems
 
 
-def look_up(reach_id: int, context: Planned, scenario: plan.PlannedScenario) -> Lookup:
+def look_up(reach_id: str, context: Planned, scenario: plan.PlannedScenario) -> Lookup:
     """Read one planned scenario's manifest at the folder the plan names.
 
     The single definition of "this scenario exists", used both to decide the
@@ -245,7 +245,7 @@ def look_up(reach_id: int, context: Planned, scenario: plan.PlannedScenario) -> 
     return Lookup(folder, path, manifest, list(problems))
 
 
-def pending(reach_id: int, context: Planned) -> list[tuple[plan.PlannedScenario, ...]]:
+def pending(reach_id: str, context: Planned) -> list[tuple[plan.PlannedScenario, ...]]:
     """The planned scenarios that do not exist yet, one chain per discharge.
 
     What exists is left out, one scenario at a time. A discharge whose stages
