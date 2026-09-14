@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # Any table works — an AOI config can point at its own file with its own column
     # names; these name what the default file calls them. DR-029 ALT-D takes
     # the bounds from the high flow threshold and the 100-year discharge.
-    flow_statistics: str = "{source_data}/flows/nhf_aep_flows.parquet"
+    flow_statistics: str = "{source_data}/flows/nhf_v1.2.3_aep_flows.parquet"
     flow_reach_id_column: str = "reach_id"
     flow_q_lower_column: str = "high_flow_threshold"
     flow_q_upper_column: str = "f100year"

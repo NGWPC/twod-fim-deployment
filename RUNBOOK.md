@@ -7,23 +7,23 @@ part of this runbook.
 Steps marked **being standardized** work today but will change. Open decisions
 are listed at the end.
 
-| Placeholder         | Meaning                                                                            |
-| ------------------- | ---------------------------------------------------------------------------------- |
-| `<storage-root>`    | Where everything the system writes lives (`TWOD_FIM_DATA_ROOT_PREFIX` in `.env`), e.g. `s3://<bucket>/version=2026.09` |
-| `<source-data-root>`| Where source data lives (`TWOD_FIM_SOURCE_DATA_PREFIX` in `.env`), e.g. `s3://<bucket>/source_data` |
-| `<aoi-name>`        | The AOI's name, e.g. `huc6_120401`, for its file names and record folder           |
-| `<workdir>`         | A local working folder for modifying the network                                   |
-| `<aoi-config-path>` | The AOI config the commands are given (step 3), a local path or an `s3://` address |
-| `<out-dir>`         | A local folder the flows2fim outputs are written to (step 8)                       |
-| `<sepex-url>`       | SEPEX's address (`SEPEX_URL` in `.env`)                                            |
+| Placeholder          | Meaning                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `<storage-root>`     | Where everything the system writes lives (`TWOD_FIM_DATA_ROOT_PREFIX` in `.env`), e.g. `s3://<bucket>/version=2026.09` |
+| `<source-data-root>` | Where source data lives (`TWOD_FIM_SOURCE_DATA_PREFIX` in `.env`), e.g. `s3://<bucket>/source_data`  |
+| `<aoi-name>`         | The AOI's name, e.g. `huc6_120401`, for its file names and record folder                             |
+| `<workdir>`          | A local working folder for modifying the network                                                     |
+| `<aoi-config-path>`  | The AOI config the commands are given (step 3), a local path or an `s3://` address                   |
+| `<out-dir>`          | A local folder the flows2fim outputs are written to (step 8)                                         |
+| `<sepex-url>`        | SEPEX's address (`SEPEX_URL` in `.env`)                                                              |
 
 ## Where things live
 
-| Location                          | Holds                                                                                                | Written by                                                       | Read by                                                             |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `<source-data-root>/`             | External source data, any number of variants side by side: CONUS or regional hydrofabric, coastal influence polygons, DEMs, land-cover rasters and lookups, flow statistics | People staging data. Never changed; new data is added beside it. | Seeding, and jobs through the sources intent names                  |
-| `<storage-root>/workspace/`       | The system's working data: `reach_network.parquet`, `lakes/`, `coasts/`                              | Seeding                                                          | Jobs. **Not scratch space:** removing a file breaks work in flight. |
-| `<storage-root>/provenance/`      | Copies of what produced this generation, kept for the record, one folder per AOI: `aois/<aoi-name>/aoi_config.jsonc`, and `aois/<aoi-name>/networks/<identity_hash>/` for `modify_network` output | People (step 9)                                                  | People. Nothing in the system reads it.                             |
+| Location                             | Holds                                                                                                | Written by                                                       | Read by                                                             |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `<source-data-root>/`                | External source data, any number of variants side by side: CONUS or regional hydrofabric, coastal influence polygons, DEMs, land-cover rasters and lookups, flow statistics | People staging data. Never changed; new data is added beside it. | Seeding, and jobs through the sources intent names                  |
+| `<storage-root>/workspace/`          | The system's working data: `reach_network.parquet`, `lakes/`, `coasts/`                              | Seeding                                                          | Jobs. **Not scratch space:** removing a file breaks work in flight. |
+| `<storage-root>/provenance/`         | Copies of what produced this generation, kept for the record, one folder per AOI: `aois/<aoi-name>/aoi_config.jsonc`, and `aois/<aoi-name>/networks/<identity_hash>/` for `modify_network` output | People (step 9)                                                  | People. Nothing in the system reads it.                             |
 | `<storage-root>/models/`, `results/` | Materialized outputs                                                                                 | Jobs                                                             | The loop, flows2fim                                                 |
 
 Source data has its own root, outside every storage root, because it has
@@ -33,7 +33,7 @@ same source data.
 ## 1. Source data
 
 Make sure what your AOI will need as source data (a custom DEM, specific land cover, etc.) is under `<source-data-root>/`. You can use `just stage-source-data <file> <path-in-source-data>` to upload files to source data. If you don't have any custom data and want to use the default datasets everywhere, copy the default datasets from `s3://fimc-data/twod-fim/source_data/` into your `<source-data-root>/`
-.
+if you are using a different bucket.
 
 ## 2. Modify the network
 
