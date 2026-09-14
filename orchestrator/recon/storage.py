@@ -27,14 +27,14 @@ def parse_s3_path(path: str) -> tuple[str, str]:
     return bucket, prefix.strip("/")
 
 
-def version_root() -> str:
-    """The storage generation every artifact address starts with."""
-    return f"s3://{settings.artifacts_s3_bucket}/version={settings.twod_fim_version}"
+def twod_fim_data_root_prefix() -> str:
+    """The storage area every artifact address starts with."""
+    return settings.twod_fim_data_root_prefix
 
 
 def model_base_path(reach_id: str) -> str:
     """Base S3 location for a reach's model artifacts."""
-    return f"{version_root()}/models/reach={reach_id}"
+    return f"{twod_fim_data_root_prefix()}/models/reach={reach_id}"
 
 
 def model_artifact_path(reach_id: str, model_id: str) -> str:
@@ -68,7 +68,7 @@ def results_root() -> str:
     Until that check compares identity halves, a reach that changes domain has
     old and new runs mixed in one folder, and the old ones fail its library.
     """
-    return f"{version_root()}/results"
+    return f"{twod_fim_data_root_prefix()}/results"
 
 
 def model_identity_hash(model_id: str) -> str:
@@ -130,10 +130,10 @@ def source_data_path(name: str) -> str:
     and their lookups, flow statistics. An AOI config says which ones an AOI
     uses; new data is added beside the old rather than replacing it.
 
-    At the bucket root, outside every storage generation: source data has
-    nothing to do with versioning, and every generation reads the same copy.
+    Under its own root, outside every storage area: source data has nothing to
+    do with versioning, and every storage area reads the same copy.
     """
-    return f"s3://{settings.artifacts_s3_bucket}/source_data/{name}"
+    return f"{settings.twod_fim_source_data_prefix}/{name}"
 
 
 def workspace_path(name: str) -> str:
@@ -143,7 +143,7 @@ def workspace_path(name: str) -> str:
     whenever its source is seeded again — but not scratch space: jobs read these
     files, so removing one breaks work in flight.
     """
-    return f"{version_root()}/workspace/{name}"
+    return f"{twod_fim_data_root_prefix()}/workspace/{name}"
 
 
 def reach_network_path() -> str:

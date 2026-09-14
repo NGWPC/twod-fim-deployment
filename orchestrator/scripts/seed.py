@@ -12,7 +12,7 @@ Three separate commands, each reading its source from an AOI config
            reach_network, then the whole table to
            workspace/reach_network.parquet
 
-Lakes and coasts are whole datasets, usually seeded once per storage generation
+Lakes and coasts are whole datasets, usually seeded once per storage root
 however many networks follow. A network names the lakes and coasts its terminal
 reaches drain into, so those must already be seeded; `network` checks, and says
 which are missing.

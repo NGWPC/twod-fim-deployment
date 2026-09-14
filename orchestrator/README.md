@@ -208,8 +208,8 @@ flows2fim runs in docker, since it shells out to GDAL, pulling
 | `AWS_ACCESS_KEY_ID` | docker-compose, boto3 | S3/MinIO access key |
 | `AWS_SECRET_ACCESS_KEY` | docker-compose, boto3 | S3/MinIO secret key |
 | `AWS_ENDPOINT_URL` | docker-compose, config.py | MinIO endpoint (`localhost` host / `minio` compose; omit for real S3) |
-| `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
-| `TWOD_FIM_VERSION` | config.py | Storage generation every artifact path starts with, as written after `version=` (required) |
+| `TWOD_FIM_DATA_ROOT_PREFIX` | config.py, docker-compose | `s3://` address everything the system writes lives under, e.g. `s3://<bucket>/version=2026.09`; a new value is a new, empty area (required) |
+| `TWOD_FIM_SOURCE_DATA_PREFIX` | config.py, docker-compose | `s3://` address `{source_data}` stands for, e.g. `s3://<bucket>/source_data` (required) |
 | `SEPEX_URL` | config.py | SEPEX API base URL |
 | `GPU_AVAILABLE` | check.py, register_processes.py | Select the GPU variant of `run_nd_scenarios` / `run_kwse_scenarios` -- both which the loop submits to and, for local SEPEX, which one is registered; set to `true` for cloud Batch (default `false`) |
 | `USE_LOCAL_IMAGES` | register_processes.py | Register local docker processes with their `:local` image instead of the published GHCR one (default `false`) |

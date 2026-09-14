@@ -123,9 +123,9 @@ def main() -> int:
 
     execution = build_execution(args)
     logging.info(
-        "database %s | storage s3://%s | run job %s",
+        "database %s | storage %s | run job %s",
         settings.postgres_host,
-        settings.artifacts_s3_bucket,
+        settings.twod_fim_data_root_prefix,
         check.RUN_ND_PROCESSES.get(("lisflood", check.gpu_available()), "?"),
     )
 

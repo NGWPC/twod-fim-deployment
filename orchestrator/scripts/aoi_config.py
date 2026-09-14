@@ -59,7 +59,7 @@ Locations inside the file are s3:// addresses or local paths. A relative one is
 relative to the AOI config itself. One placeholder keeps an AOI config free of
 bucket names:
 
-  {source_data}   s3://<ARTIFACTS_S3_BUCKET>/source_data
+  {source_data}   TWOD_FIM_SOURCE_DATA_PREFIX, from .env
 """
 
 import argparse
@@ -71,13 +71,23 @@ from pathlib import Path
 
 import pyogrio
 from botocore.exceptions import ClientError
-
 from recon import storage
 
 KEYS = {
-    "name", "description", "network", "lakes", "coasts",
-    "flow_statistics", "flow_reach_id_column", "flow_q_lower_column", "flow_q_upper_column",
-    "flow_aep_columns", "dem_source", "lulc_source", "lulc_lookup", "q_bound_factors",
+    "name",
+    "description",
+    "network",
+    "lakes",
+    "coasts",
+    "flow_statistics",
+    "flow_reach_id_column",
+    "flow_q_lower_column",
+    "flow_q_upper_column",
+    "flow_aep_columns",
+    "dem_source",
+    "lulc_source",
+    "lulc_lookup",
+    "q_bound_factors",
 }
 # Read by a command on this machine: local paths are fine, relative ones are
 # relative to the AOI config.
@@ -97,7 +107,8 @@ NETWORK_REACH_ID = "reach_id"
 def add_argument(parser: argparse.ArgumentParser) -> None:
     """The one argument every AOI command takes, so it reads the same everywhere."""
     parser.add_argument(
-        "aoi_config_path", metavar="aoi-config-path",
+        "aoi_config_path",
+        metavar="aoi-config-path",
         help="the AOI config to read: a local path or an s3:// address",
     )
 
@@ -117,7 +128,9 @@ _STRING_OR_COMMENT = re.compile(r'"(?:\\.|[^"\\])*"|//[^\n]*')
 
 def strip_comments(text: str) -> str:
     """JSONC to JSON: drop `//` comments, leave strings alone."""
-    return _STRING_OR_COMMENT.sub(lambda m: m.group(0) if m.group(0).startswith('"') else "", text)
+    return _STRING_OR_COMMENT.sub(
+        lambda m: m.group(0) if m.group(0).startswith('"') else "", text
+    )
 
 
 def read_text(location: str) -> str:
@@ -128,7 +141,12 @@ def read_text(location: str) -> str:
         return path.read_text()
     bucket, key = storage.parse_s3_path(location)
     try:
-        return storage.get_s3_client().get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+        return (
+            storage.get_s3_client()
+            .get_object(Bucket=bucket, Key=key)["Body"]
+            .read()
+            .decode()
+        )
     except ClientError as exc:
         sys.exit(f"No AOI config at {location}: {exc}")
 
@@ -142,9 +160,15 @@ def load(location: str) -> dict:
 
     unknown = set(aoi) - KEYS
     if unknown:
-        sys.exit(f"{location}: unknown key(s) {sorted(unknown)}; an AOI config has {sorted(KEYS)}")
+        sys.exit(
+            f"{location}: unknown key(s) {sorted(unknown)}; an AOI config has {sorted(KEYS)}"
+        )
 
-    base = location.rsplit("/", 1)[0] if location.startswith("s3://") else str(Path(location).resolve().parent)
+    base = (
+        location.rsplit("/", 1)[0]
+        if location.startswith("s3://")
+        else str(Path(location).resolve().parent)
+    )
     resolved = {}
     for key, value in aoi.items():
         if key in LOCATIONS:
@@ -165,9 +189,13 @@ def job_address(key: str, value: str, where: str = "") -> str:
     """An address a job can open, with the placeholder filled; anything else stops."""
     value = fill(value)
     if not _JOB_READABLE.match(value):
-        sys.exit(f"{where}: `{key}` is read by jobs, so it must be s3://, https:// or /vsi..., not {value}")
+        sys.exit(
+            f"{where}: `{key}` is read by jobs, so it must be s3://, https:// or /vsi..., not {value}"
+        )
     if key == "lulc_lookup" and not value.startswith("s3://"):
-        sys.exit(f"{where}: `lulc_lookup` must be s3://, because the loop reads it too; got {value}")
+        sys.exit(
+            f"{where}: `lulc_lookup` must be s3://, because the loop reads it too; got {value}"
+        )
     return value
 
 

@@ -9,8 +9,8 @@ are listed at the end.
 
 | Placeholder         | Meaning                                                                            |
 | ------------------- | ---------------------------------------------------------------------------------- |
-| `<bucket>`          | The artifacts bucket (`ARTIFACTS_S3_BUCKET` in `.env`)                             |
-| `<v>`               | The storage generation (`TWOD_FIM_VERSION` in `.env`), e.g. `2026.09`              |
+| `<storage-root>`    | Where everything the system writes lives (`TWOD_FIM_DATA_ROOT_PREFIX` in `.env`), e.g. `s3://<bucket>/version=2026.09` |
+| `<source-data-root>`| Where source data lives (`TWOD_FIM_SOURCE_DATA_PREFIX` in `.env`), e.g. `s3://<bucket>/source_data` |
 | `<aoi-name>`        | The AOI's name, e.g. `huc6_120401`, for its file names and record folder           |
 | `<workdir>`         | A local working folder for modifying the network                                   |
 | `<aoi-config-path>` | The AOI config the commands are given (step 3), a local path or an `s3://` address |
@@ -21,18 +21,18 @@ are listed at the end.
 
 | Location                          | Holds                                                                                                | Written by                                                       | Read by                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `source_data/`                    | External source data, any number of variants side by side: CONUS or regional hydrofabric, coastal influence polygons, DEMs, land-cover rasters and lookups, flow statistics | People staging data. Never changed; new data is added beside it. | Seeding, and jobs through the sources intent names                  |
-| `version=<v>/workspace/`          | The system's working data: `reach_network.parquet`, `lakes/`, `coasts/`                              | Seeding                                                          | Jobs. **Not scratch space:** removing a file breaks work in flight. |
-| `version=<v>/provenance/`         | Copies of what produced this generation, kept for the record, one folder per AOI: `aois/<aoi-name>/aoi_config.jsonc`, and `aois/<aoi-name>/networks/<identity_hash>/` for `modify_network` output | People (step 9)                                                  | People. Nothing in the system reads it.                             |
-| `version=<v>/models/`, `results/` | Materialized outputs                                                                                 | Jobs                                                             | The loop, flows2fim                                                 |
+| `<source-data-root>/`             | External source data, any number of variants side by side: CONUS or regional hydrofabric, coastal influence polygons, DEMs, land-cover rasters and lookups, flow statistics | People staging data. Never changed; new data is added beside it. | Seeding, and jobs through the sources intent names                  |
+| `<storage-root>/workspace/`       | The system's working data: `reach_network.parquet`, `lakes/`, `coasts/`                              | Seeding                                                          | Jobs. **Not scratch space:** removing a file breaks work in flight. |
+| `<storage-root>/provenance/`      | Copies of what produced this generation, kept for the record, one folder per AOI: `aois/<aoi-name>/aoi_config.jsonc`, and `aois/<aoi-name>/networks/<identity_hash>/` for `modify_network` output | People (step 9)                                                  | People. Nothing in the system reads it.                             |
+| `<storage-root>/models/`, `results/` | Materialized outputs                                                                                 | Jobs                                                             | The loop, flows2fim                                                 |
 
-All are under `s3://<bucket>/`. `source_data/` sits at the bucket root, outside
-every version's outputs, because source data has nothing to do with
-versioning.
+Source data has its own root, outside every storage root, because it has
+nothing to do with versioning: a new storage root starts empty and reads the
+same source data.
 
 ## 1. Source data
 
-Make sure what your AOI will need as source data (a custom DEM, specific land cover, etc.) is under `source_data/`. You can use `just stage-source-data <file> <path-in-source_data>` to upload files to source data. If you don't have any custom data and want to use the default datasets everywhere, copy the default datasets from `s3://fimc-data/twod-fim/source_data/` into your `s3://<bucket>/source_data/`
+Make sure what your AOI will need as source data (a custom DEM, specific land cover, etc.) is under `<source-data-root>/`. You can use `just stage-source-data <file> <path-in-source-data>` to upload files to source data. If you don't have any custom data and want to use the default datasets everywhere, copy the default datasets from `s3://fimc-data/twod-fim/source_data/` into your `<source-data-root>/`
 .
 
 ## 2. Modify the network
@@ -42,8 +42,8 @@ Runs the `modify_network` job from `twod-fim-jobs` with Docker, on local files.
 1. **Download the base data** if you don't have it (starting NHF and Coastal Influence layers) into `<workdir>`. The following commands assume these files are in `source_data` too.
 
    ```bash
-   aws s3 cp s3://<bucket>/source_data/hydrofabric/nhf.gpkg <workdir>/
-   aws s3 cp s3://<bucket>/source_data/coastal_influence/coastal_influence.gpkg <workdir>/
+   aws s3 cp <source-data-root>/hydrofabric/nhf.gpkg <workdir>/
+   aws s3 cp <source-data-root>/coastal_influence/coastal_influence.gpkg <workdir>/
    ```
 1. **Subset the NHF** to the AOI as `<workdir>/<aoi-name>.gpkg`, or keep it as is if your AOI is the whole of CONUS.
 1. **Run the `modify_network` job**:
@@ -65,7 +65,7 @@ Runs the `modify_network` job from `twod-fim-jobs` with Docker, on local files.
 An AOI config is the payload for the seed and author commands: it names everything they read. Write it anywhere, for example `<workdir>/aoi_config.jsonc`, and give each command its path. [example.aoi_config.jsonc](example.aoi_config.jsonc) lists every option in one file.
 
 - **Locations** are local paths or `s3://` addresses.
-    - **`{source_data}`** stands for `s3://<bucket>/source_data`, taken from `.env`, so the file names no bucket.
+    - **`{source_data}`** stands for `<source-data-root>`, taken from `.env`, so the file names no bucket.
     - **A relative path** is relative to the AOI config itself. Full paths mean the same thing wherever a copy of the file ends up.
 - **A typo in a key name** is reported, not ignored.
 
@@ -95,7 +95,7 @@ just seed-coasts <aoi-config-path>
 ```
 
 - **What they load:** every lake in `lakes` and every polygon in `coasts` go into the database. Each one is also published to `workspace/lakes/<lake_id>.geojson` or `workspace/coasts/<coast_id>.geojson`, the outflow area a terminal reach's nd job reads.
-- **They're whole datasets,** not tied to one AOI, so later AOIs in the same storage generation can skip this step.
+- **They're whole datasets,** not tied to one AOI, so later AOIs in the same storage root can skip this step.
 - **They add or update, never delete,** so running them again is safe. The full `nhf.gpkg` is a 1.4 GiB download.
 
 ## 5. Seed the network
@@ -189,7 +189,7 @@ It exits once the AOI settles. To keep it running instead: `cd orchestrator && u
 
 ```bash
 curl -s "<sepex-url>/jobs?f=json&limit=20"
-aws s3 ls s3://<bucket>/version=<v>/results/ --recursive | wc -l
+aws s3 ls <storage-root>/results/ --recursive | wc -l
 ```
 
 **What to expect:**
@@ -242,8 +242,8 @@ Several AOIs are several out-dirs. See `orchestrator/README.md`, section 5, for 
 Optionally upload your AOI config and its related files to S3 to preserve them for later.
 
 ```bash
-aws s3 cp <aoi-config-path> s3://<bucket>/version=<v>/provenance/aois/<aoi-name>/aoi_config.jsonc
-aws s3 cp <workdir>/<identity_hash>/ s3://<bucket>/version=<v>/provenance/aois/<aoi-name>/networks/<identity_hash>/ --recursive
+aws s3 cp <aoi-config-path> <storage-root>/provenance/aois/<aoi-name>/aoi_config.jsonc
+aws s3 cp <workdir>/<identity_hash>/ <storage-root>/provenance/aois/<aoi-name>/networks/<identity_hash>/ --recursive
 ```
 
 ## Open decisions

@@ -2,7 +2,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
-from pydantic import computed_field
+from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -14,12 +14,22 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "twodfim"
-    artifacts_s3_bucket: str = "twod-fim-artifacts"
-    # The storage generation every artifact path starts with, written exactly as
-    # it appears after `version=`: TWOD_FIM_VERSION=2026.09 is `version=2026.09/`.
-    # It is only an address, so a new value is a new, empty storage area.
-    twod_fim_version: str
+    # Where everything this system writes lives: workspace, provenance, models,
+    # results. Only an address, so a new value is a new, empty storage area;
+    # a generation is whatever the path says, e.g. s3://<bucket>/version=2026.09.
+    twod_fim_data_root_prefix: str
+    # What `{source_data}` stands for: source data people stage and this system
+    # only reads. Apart from twod_fim_data_root_prefix so every storage area reads the same copy.
+    twod_fim_source_data_prefix: str
     aws_endpoint_url: str | None = None
+
+    @field_validator("twod_fim_data_root_prefix", "twod_fim_source_data_prefix")
+    @classmethod
+    def _s3_root(cls, value: str) -> str:
+        if not value.startswith("s3://") or not value.removeprefix("s3://").strip("/"):
+            raise ValueError(f"must be an s3:// address, not {value!r}")
+        return value.rstrip("/")
+
     # Two MODEL IDENTITY inputs, authored into desired_state_defaults by
     # `author_intent.py defaults`. Identity is hashed from them, so changing either gives
     # every reach a new identity_hash, a new model_id, and a new address — the

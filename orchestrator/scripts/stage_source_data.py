@@ -1,4 +1,4 @@
-"""Stage a local file as source data: s3://<bucket>/source_data/<name>.
+"""Stage a local file as source data: <TWOD_FIM_SOURCE_DATA_PREFIX>/<name>.
 
 What a person does when adding source data, done through the deployment's own
 storage settings, so it works against MinIO as well as S3. Source data is never
@@ -17,7 +17,6 @@ import sys
 from pathlib import Path
 
 from botocore.exceptions import ClientError
-
 from recon import storage
 
 
@@ -30,7 +29,7 @@ def md5(path: Path) -> str:
 
 
 def stage(local: Path, name: str) -> str:
-    """Upload `local` to source_data/<name>, unless something different is there."""
+    """Upload `local` to <TWOD_FIM_SOURCE_DATA_PREFIX>/<name>, unless something different is there."""
     if not local.is_file():
         sys.exit(f"No such file: {local}")
     uri = storage.source_data_path(name)
@@ -45,9 +44,13 @@ def stage(local: Path, name: str) -> str:
         etag = head["ETag"].strip('"')
         # A multipart upload's ETag is not an MD5, so size is all there is to
         # compare; a single-part one is the MD5 itself.
-        same = head["ContentLength"] == local.stat().st_size and ("-" in etag or etag == md5(local))
+        same = head["ContentLength"] == local.stat().st_size and (
+            "-" in etag or etag == md5(local)
+        )
         if not same:
-            sys.exit(f"{uri} already holds a different file; source data is not replaced")
+            sys.exit(
+                f"{uri} already holds a different file; source data is not replaced"
+            )
         print(f"already staged  {uri}")
         return uri
 
@@ -57,7 +60,9 @@ def stage(local: Path, name: str) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("file", type=Path, help="local file to stage")
     ap.add_argument("name", help="its name under source_data/, e.g. lulc/nlcd_2023.tif")
     args = ap.parse_args()

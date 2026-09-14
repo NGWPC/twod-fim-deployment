@@ -93,7 +93,7 @@ seed-coasts aoi_config_path:
 seed-network aoi_config_path:
     uv run --project orchestrator python orchestrator/scripts/seed.py network {{aoi_config_path}}
 
-# Stage a local file as source data at source_data/<name> (refuses to replace a different file)
+# Stage a local file as source data at <TWOD_FIM_SOURCE_DATA_PREFIX>/<name> (refuses to replace a different file)
 stage-source-data file name:
     uv run --project orchestrator python orchestrator/scripts/stage_source_data.py {{file}} {{name}}
 
