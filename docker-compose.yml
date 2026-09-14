@@ -1,6 +1,32 @@
 # One stack, one profile per mode. Every service names the modes it runs in:
 #   local   `just up-local`   db, MinIO, SEPEX
 #   hybrid  `just up-hybrid`  db only; S3 and SEPEX are cloud services named in .env
+# Local SEPEX comes in two hardware variants, one profile each, and `just up-local`
+# adds the one GPU_AVAILABLE in .env calls for:
+#   local-cpu  sepex
+#   local-gpu  sepex-gpu, the same service with the host's NVIDIA GPUs
+
+# SEPEX, shared by its two hardware variants below. A YAML anchor rather than
+# `extends`, because extends merges the profiles lists and would start the GPU
+# variant in the CPU profile too.
+x-sepex: &sepex
+  image: ghcr.io/dewberry/sepex:0.3.0-rc.1
+  # One container name for both variants, so SEPEX is `sepex` at localhost:5050
+  # either way. Only one of the two profiles is ever started.
+  container_name: sepex
+  ports:
+    - '5050:5050'
+  env_file:
+    - sepex_local.env
+  volumes:
+    - ./.data/sepex:/.data
+    - /var/run/docker.sock:/var/run/docker.sock
+  depends_on:
+    minio-init:
+      condition: service_completed_successfully
+  networks:
+    - twodfim_net
+
 services:
   db:
     profiles: [ local, hybrid ]
@@ -67,33 +93,24 @@ services:
       - twodfim_net
 
   sepex:
-    profiles: [ local ]
-    image: ghcr.io/dewberry/sepex:0.3.0-rc.1
-    # For GPU enabled machines, uncomment the following lines to enable GPU support in the container.
-    # And comment the above line.
-    # This requires Docker Engine 19.03+ and NVIDIA Container Toolkit installed on the host.
-    # In addition to that you must also set GPU_AVAILABLE=1 in the .env file, (not sepex_local.env).
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [ gpu ]
+    <<: *sepex
+    profiles: [ local-cpu ]
 
-    container_name: sepex
-    ports:
-      - '5050:5050'
-    env_file:
-      - sepex_local.env
-    volumes:
-      - ./.data/sepex:/.data
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-    networks:
-      - twodfim_net
+  sepex-gpu:
+    # sepex plus the host's GPUs, which the GPU variants of run_nd_scenarios /
+    # run_kwse_scenarios need. Requires the NVIDIA Container Toolkit: on a host
+    # without it SEPEX fails to start, and asking for zero GPUs does not help
+    # (the nvidia driver is still required), which is why this is a separate
+    # service rather than a count set from .env.
+    <<: *sepex
+    profiles: [ local-gpu ]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
 
 networks:
   twodfim_net:

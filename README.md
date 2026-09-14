@@ -18,7 +18,7 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ├── RUNBOOK.md               # producing libraries for an AOI
 ├── justfile
 ├── compatibility_policy   	 # placeholder for future document
-├── docker-compose.yml       # profiles: local (db, minio, sepex), hybrid (db)
+├── docker-compose.yml       # profiles: local (db, minio) + local-cpu or local-gpu (sepex), hybrid (db)
 ├── example.env
 ├── example.cloud.env
 ├── example.aoi_config.jsonc # every AOI config option, commented (see RUNBOOK.md)

@@ -79,14 +79,15 @@ Each of the following steps starts with the part of the AOI config it uses and t
 {
   // seed-lakes: a GeoPackage with layer lakes_polygons, keyed by lake_id.
   // Left out, seed-lakes stops.
-  "lakes": "{source_data}/hydrofabric/nhf.gpkg",
+  "lakes": "{source_data}/hydrofabric/nhf_v1.2.3.gpkg",
   // seed-coasts: a GeoPackage with layer coastal_influence_polygons, keyed by
   // coast_id. Left out, seed-coasts stops.
   "coasts": "{source_data}/coastal_influence/coastal_influence.gpkg"
 }
 ```
 
-Seed all lakes and coasts in your AOI if you have custom lakes or coasts, or this is the first AOI against this database. This is not required if an earlier seeding has already seeded CONUS-wide lakes and coasts and there are no custom lakes and coasts in your data.
+Seed all lakes and coasts in your AOI if you have custom lakes or coasts, or this is the first AOI against this database. This is not required if an earlier seeding has already seeded CONUS-wide lakes and coasts and there are no custom lakes and coasts in your data.\
+If files are on cloud, they will be downloaded locally for processing. Local files can also be used.
 
 ```bash
 just seed-lakes  <aoi-config-path>

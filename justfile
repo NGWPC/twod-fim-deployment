@@ -8,15 +8,26 @@ default:
 network:
     @docker network inspect twodfim_net >/dev/null 2>&1 || docker network create twodfim_net
 
-# Start the stack, register the local processes with its SEPEX, then set up its database
+# Start the stack (SEPEX with the GPUs when GPU_AVAILABLE is true), register the local processes with its SEPEX, then set up its database
 up-local: network
-    docker compose --profile local up -d
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # GPU_AVAILABLE from the environment, else from .env; true the same way
+    # recon/check.py reads it (true, 1, yes, y, on).
+    gpu="${GPU_AVAILABLE:-$(sed -n 's/^[[:space:]]*GPU_AVAILABLE[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null | tail -n 1)}"
+    gpu="$(printf '%s' "${gpu//[\"\']/}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "$gpu" in
+      true|1|yes|y|on) hardware=local-gpu; echo "GPU_AVAILABLE=true: SEPEX with the host's GPUs" ;;
+      *) hardware=local-cpu; echo "GPU_AVAILABLE=false: SEPEX without GPUs" ;;
+    esac
+    docker compose --profile local --profile "$hardware" up -d
     just register-sepex-processes-local
     just setup-db
 
-# Stop the stack
+# Stop the stack, whichever SEPEX variant it started
 down-local:
-    docker compose --profile local down
+    docker compose --profile local --profile local-cpu down
+    docker compose --profile local --profile local-gpu down
 
 # Start hybrid stack (local DB only, cloud SEPEX + S3), register the cloud processes, then set up its database
 up-hybrid: network

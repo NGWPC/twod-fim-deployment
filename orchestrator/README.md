@@ -31,7 +31,13 @@ See [`db/schema/`](../db/schema/) for full definitions.
 
 - Docker
 - [uv](https://docs.astral.sh/uv/) for running scripts and managing dependencies
-- Job images for local SEPEX (not needed for cloud):
+- Job images for local SEPEX (not needed for cloud): nothing to do by default.
+  `register-sepex-processes-local` (part of `just up-local`) registers each
+  docker process against its published `ghcr.io/ngwpc/twod-fim-jobs/<name>:dev`
+  image, and SEPEX pulls it when the process is registered.
+
+  Only if you need a locally built or otherwise unpublished image, set
+  `USE_LOCAL_IMAGES=true` in `.env` and build or tag it `:local` yourself first:
   ```bash
   # Option A: build from twod-fim-jobs
   cd ../twod-fim-jobs
@@ -48,6 +54,12 @@ See [`db/schema/`](../db/schema/) for full definitions.
   docker tag ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev run_nd_scenarios-lisflood-cpu:local
   docker tag ghcr.io/ngwpc/twod-fim-jobs/run_nd_scenarios-lisflood-gpu:dev run_nd_scenarios-lisflood-gpu:local
   ```
+  (kwse images are not covered above; pull and tag `run_kwse_scenarios-lisflood-{cpu,gpu}` the same way if you need `:local` for those too)
+
+  Only the process for `GPU_AVAILABLE` (`false` unless set) is registered: the
+  loop only ever asks SEPEX for that one variant of `run_nd_scenarios` /
+  `run_kwse_scenarios` (`recon/check.py`), so the other hardware variant's
+  image is never needed on this machine.
 
 ## Local dev setup
 
@@ -68,7 +80,7 @@ just up-local
 This brings up:
 - **PostGIS** (`localhost:5432`) - applies `db/schema/*.sql` on first boot; `just setup-db` then writes `desired_state_defaults` from `.env`
 - **MinIO** (`localhost:9000`, console at `localhost:9001`) - creates artifact buckets on first boot
-- **SEPEX** (`localhost:5050`) - container execution server, with `sepex/local/plugins` registered through its API
+- **SEPEX** (`localhost:5050`) - container execution server, with `sepex/local/plugins` registered through its API. With `GPU_AVAILABLE=true` in `.env` it is started as `sepex-gpu` (profile `local-gpu`), which gives it the host's NVIDIA GPUs (needs the NVIDIA Container Toolkit)
 
 The reconciler runs on the host (not in a container):
 
@@ -191,7 +203,8 @@ flows2fim runs in docker, since it shells out to GDAL, pulling
 | `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
 | `TWOD_FIM_VERSION` | config.py | Storage generation every artifact path starts with, as written after `version=` (required) |
 | `SEPEX_URL` | config.py | SEPEX API base URL |
-| `GPU_AVAILABLE` | check.py | Select GPU ND process variant; set to `true` for cloud Batch (default `false`) |
+| `GPU_AVAILABLE` | check.py, register_processes.py | Select the GPU variant of `run_nd_scenarios` / `run_kwse_scenarios` -- both which the loop submits to and, for local SEPEX, which one is registered; set to `true` for cloud Batch (default `false`) |
+| `USE_LOCAL_IMAGES` | register_processes.py | Register local docker processes with their `:local` image instead of the published GHCR one (default `false`) |
 | `VOLUME_CONVERGENCE_TOLERANCE` | config.py | Steady-state threshold for normal-depth runs (default `1e-3`) |
 | `HALT_AFTER_FAILURES` | config.py | Consecutive failures before a reach is parked (default `1`) |
 | `ALLOW_WATER_ON_EDGES` | config.py | Continue when water hits an invalid domain edge (default `true`) |

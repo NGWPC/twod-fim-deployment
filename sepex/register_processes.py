@@ -12,6 +12,28 @@ process definitions do not change between runs.
 The target is $SEPEX_URL, read from the repo's .env the same way the loop
 reads it: processes belong on the SEPEX the loop submits to.
 
+Two things about a docker process definition are resolved here rather than
+fixed in its .yml, both read from the repo's .env like $SEPEX_URL:
+
+  $USE_LOCAL_IMAGES  An image written as "<name>:local" is registered as-is
+                      when true. Otherwise it is registered as the published
+                      GHCR image, "ghcr.io/ngwpc/twod-fim-jobs/<name>:dev" --
+                      the same image `docker tag`'d :local by
+                      orchestrator/README.md's setup instructions, so this is
+                      just skipping that tag and registering the source
+                      directly. Defaults false: nothing to build or pull by
+                      hand first. Images not written ":local" (aws-batch's
+                      blank image, or a cloud .yml that already names GHCR
+                      directly) are untouched either way.
+
+  $GPU_AVAILABLE      A process whose id ends Cpu or Gpu is a hardware variant
+                      of a step recon/check.py routes by $GPU_AVAILABLE
+                      (RUN_ND_PROCESSES, RUN_KWSE_PROCESSES) -- the loop on
+                      this deployment only ever asks for the variant matching
+                      it, so only that one is registered. A variant left
+                      unregistered this way is not deleted if some earlier run
+                      registered it; it is reported "(not ours, left alone)".
+
 Usage:
   uv run sepex/register_processes.py sepex/local/plugins
   uv run sepex/register_processes.py sepex/cloud/plugins
@@ -29,6 +51,39 @@ import yaml
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+# Parsed rather than truthiness-tested, and kept identical to
+# recon/check.py's _TRUE: a bare bool() on a string is true for every
+# non-empty value, so e.g. GPU_AVAILABLE=false would read as True.
+_TRUE = {"true", "1", "yes", "y", "on"}
+
+
+def env_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE
+
+
+GHCR_REPO = "ghcr.io/ngwpc/twod-fim-jobs"
+PUBLISHED_TAG = "dev"
+
+
+def resolve_image(image: str, use_local: bool) -> str:
+    """The image to register, given $USE_LOCAL_IMAGES. See module docstring."""
+    if use_local or not image.endswith(":local"):
+        return image
+    return f"{GHCR_REPO}/{image.removesuffix(':local')}:{PUBLISHED_TAG}"
+
+
+def wanted_hardware(process_id: str, gpu: bool) -> bool:
+    """Whether this process id is the hardware variant $GPU_AVAILABLE calls for.
+
+    True for a process id that names no hardware at all (buildModel): it runs
+    the same everywhere.
+    """
+    if process_id.endswith("Cpu"):
+        return not gpu
+    if process_id.endswith("Gpu"):
+        return gpu
+    return True
 
 
 def request(method: str, url: str, body: dict | None = None) -> tuple[int, str]:
@@ -80,10 +135,12 @@ def served_ids(base_url: str) -> set[str]:
 def register(base_url: str, definition: dict, served: set[str]) -> bool:
     """Add or replace one process. True when SEPEX accepted it."""
     process_id = definition["info"]["id"]
+    image = definition.get("host", {}).get("image")
     method = "PUT" if process_id in served else "POST"
     status, text = request(method, f"{base_url}/processes/{process_id}", definition)
     if status == 200:
-        print(f"  {'replaced' if method == 'PUT' else 'added':8} {process_id}")
+        verb = "replaced" if method == "PUT" else "added"
+        print(f"  {verb:8} {process_id}{f'  ({image})' if image else ''}")
         return True
 
     print(f"  FAILED   {process_id}: {method} -> {status}: {text[:300]}")
@@ -114,14 +171,24 @@ def main() -> int:
         print(f"No process definitions in {folder}/*/*.yml")
         return 2
 
-    print(f"Registering {len(definitions)} process(es) from {folder} with {base_url}")
+    use_local, gpu = env_true("USE_LOCAL_IMAGES"), env_true("GPU_AVAILABLE")
+    print(
+        f"Registering process(es) from {folder} with {base_url} "
+        f"(USE_LOCAL_IMAGES={use_local}, GPU_AVAILABLE={gpu})"
+    )
     wait_for(base_url)
     served = served_ids(base_url)
     defined: set[str] = set()
     failures = 0
     for path in definitions:
         definition = yaml.safe_load(path.read_text())
-        defined.add(definition["info"]["id"])
+        process_id = definition["info"]["id"]
+        if not wanted_hardware(process_id, gpu):
+            print(f"  skipped  {process_id} (GPU_AVAILABLE={gpu})")
+            continue
+        defined.add(process_id)
+        if "image" in definition.get("host", {}):
+            definition["host"]["image"] = resolve_image(definition["host"]["image"], use_local)
         if not register(base_url, definition, served):
             failures += 1
 
