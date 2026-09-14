@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_db: str = "twodfim"
     artifacts_s3_bucket: str = "twod-fim-artifacts"
-    major_version: int = 1
+    # The storage generation every artifact path starts with, written exactly as
+    # it appears after `version=`: TWOD_FIM_VERSION=2026.09 is `version=2026.09/`.
+    # It is only an address, so a new value is a new, empty storage area.
+    twod_fim_version: str
     aws_endpoint_url: str | None = None
     # Two MODEL IDENTITY inputs, authored into desired_state_defaults by
     # author_intent.py. Identity is hashed from them, so changing either gives

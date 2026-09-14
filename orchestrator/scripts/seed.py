@@ -38,7 +38,6 @@ import pandas as pd
 import pyarrow.parquet as pq
 from author_intent import DEFAULT_Q_BOUNDS_PARQUET, LULC_LOOKUP, load_q_bounds
 from recon import db, storage
-from recon.config import settings
 
 # The column the network is keyed and sorted by. Named once because the parquet
 # writer, the sort, and the row-group statistics all have to agree on it.
@@ -152,10 +151,7 @@ def lake_polygon_uri(lake_id: str) -> str:
     Under `shared/` rather than a reach folder: one lake bounds many reaches, so
     it belongs to none of them.
     """
-    return (
-        f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-        f"/shared/lakes/{lake_id}.geojson"
-    )
+    return storage.boundary_polygon_path("lake", lake_id)
 
 
 # How many reaches share a row group. Point queries are the only access

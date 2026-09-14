@@ -184,7 +184,7 @@ Options:
 | `AWS_SECRET_ACCESS_KEY` | docker-compose, boto3 | S3/MinIO secret key |
 | `AWS_ENDPOINT_URL` | docker-compose, config.py | MinIO endpoint (`localhost` host / `minio` compose; omit for real S3) |
 | `ARTIFACTS_S3_BUCKET` | config.py, docker-compose | Model artifacts bucket |
-| `MAJOR_VERSION` | config.py | Artifact path versioning |
+| `TWOD_FIM_VERSION` | config.py | Storage generation every artifact path starts with, as written after `version=` (required) |
 | `SEPEX_URL` | config.py | SEPEX API base URL |
 | `GPU_AVAILABLE` | check.py | Select GPU ND process variant; set to `true` for cloud Batch (default `false`) |
 | `VOLUME_CONVERGENCE_TOLERANCE` | config.py | Steady-state threshold for normal-depth runs (default `1e-3`) |

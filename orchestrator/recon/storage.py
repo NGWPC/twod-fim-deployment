@@ -27,9 +27,14 @@ def parse_s3_path(path: str) -> tuple[str, str]:
     return bucket, prefix.strip("/")
 
 
+def version_root() -> str:
+    """The storage generation every artifact address starts with."""
+    return f"s3://{settings.artifacts_s3_bucket}/version={settings.twod_fim_version}"
+
+
 def model_base_path(reach_id: int) -> str:
     """Base S3 location for a reach's model artifacts."""
-    return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/models/reach={reach_id}"
+    return f"{version_root()}/models/reach={reach_id}"
 
 
 def model_artifact_path(reach_id: int, model_id: str) -> str:
@@ -63,7 +68,7 @@ def results_root() -> str:
     Until that check compares identity halves, a reach that changes domain has
     old and new runs mixed in one folder, and the old ones fail its library.
     """
-    return f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}/results"
+    return f"{version_root()}/results"
 
 
 def model_identity_hash(model_id: str) -> str:
@@ -87,13 +92,13 @@ def run_base_path(reach_id: int, model_id: str, run_identity_hash: str) -> str:
     Takes a whole model_id and uses only its identity half: see results_root()
     for why the domain code is not in this address.
     """
-    return (f"{results_root()}/reach={reach_id}"
-            f"/{model_identity_hash(model_id)}/{run_identity_hash}")
+    return (
+        f"{results_root()}/reach={reach_id}"
+        f"/{model_identity_hash(model_id)}/{run_identity_hash}"
+    )
 
 
-def nd_library_path(
-    reach_id: int, model_id: str, run_identity_hash: str
-) -> str | None:
+def nd_library_path(reach_id: int, model_id: str, run_identity_hash: str) -> str | None:
     """The folder holding one normal-depth library: every q run at one slope.
 
     Discovered, not predicted: the job computes the slope itself from the
@@ -107,7 +112,9 @@ def nd_library_path(
     found = list_subfolders(base, prefix="nd=")
     if len(found) != 1:
         if found:
-            logger.warning("expected exactly one nd= folder under %s, found %s", base, found)
+            logger.warning(
+                "expected exactly one nd= folder under %s, found %s", base, found
+            )
         return None
     return f"{base}/{found[0]}"
 
@@ -124,8 +131,7 @@ def reference_data_path(filename: str) -> str:
     under `shared/`: these describe the world the models are built in, not any
     one model's results.
     """
-    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-            f"/reference_data/{filename}")
+    return f"{version_root()}/reference_data/{filename}"
 
 
 def lulc_path() -> str:
@@ -176,8 +182,7 @@ def boundary_polygon_path(kind: str, feature_id: str) -> str:
     so the polygon is a property of that body and is shared by every reach
     ending in it — hence `shared/`, written once rather than per reach.
     """
-    return (f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-            f"/shared/{kind}s/{feature_id}.geojson")
+    return f"{version_root()}/shared/{kind}s/{feature_id}.geojson"
 
 
 def list_subfolders(path: str, prefix: str = "") -> list[str]:
@@ -192,11 +197,13 @@ def list_subfolders(path: str, prefix: str = "") -> list[str]:
     s3 = get_s3_client()
     names = []
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=dir_prefix + prefix, Delimiter="/"):
+    for page in paginator.paginate(
+        Bucket=bucket, Prefix=dir_prefix + prefix, Delimiter="/"
+    ):
         for entry in page.get("CommonPrefixes", []):
             # Slice off the directory, not the narrowing prefix: callers get
             # the child's full name either way.
-            names.append(entry["Prefix"][len(dir_prefix):].rstrip("/"))
+            names.append(entry["Prefix"][len(dir_prefix) :].rstrip("/"))
     return names
 
 
@@ -229,5 +236,7 @@ def scenario_manifest_path(
     `scenario_dir` is the `<nd=…|kwse=…>/q=…` pair, built by identity.py so that
     the rendering of a boundary value lives in exactly one place.
     """
-    return (f"{run_base_path(reach_id, model_id, run_identity_hash)}"
-            f"/{scenario_dir}/{SCENARIO_MANIFEST_FILENAME}")
+    return (
+        f"{run_base_path(reach_id, model_id, run_identity_hash)}"
+        f"/{scenario_dir}/{SCENARIO_MANIFEST_FILENAME}"
+    )
