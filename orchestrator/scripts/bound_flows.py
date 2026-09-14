@@ -1,33 +1,44 @@
-# TODO: Reasonable WSE bound estimates
+"""Build the CONUS flow statistics table.
 
+This is what `settings.flow_statistics` names by default (see
+flow_statistics.py) -- the table author-intent.py and f2f.py fall back to when
+an AOI config names none of its own. One-time data prep, not part of the
+runbook or `just`: rerun it only to regenerate that table, then
+`just stage-source-data <out> flows/<name>.parquet` to publish it.
+
+Joins NHF flowpaths to an AEP source table (e.g. NWM flows v3) on the NHF
+reference flowpath id, fits log-log drainage-area regressions per return-period
+column to fill gaps and clip outliers to the 95% prediction interval, estimates
+bankfull depth, and writes one parquet indexed by integer reach_id -- the NHF
+flowpath id, which modify_network keeps as the downstream reach's id when it
+merges reaches, so it matches a network's reach_id.
+
+Usage:
+    uv run scripts/bound_flows.py build <nhf.gpkg> <aep-source.parquet> <out.parquet> [--sample N] [--no-plots]
+    uv run scripts/bound_flows.py clip <network.gpkg> <table.parquet> <out.parquet>
+
+`clip` subsets an already-built table to one network's reaches, e.g. testdata.
+
+Blackburn-Lynch Bankfull Depth Citation: Blackburn-Lynch, Whitney, Carmen T.
+Agouridis, and Christopher D. Barton, 2017. Development of Regional Curves for
+Hydrologic Landscape Regions (HLR) in the Contiguous United States. Journal of
+the American Water Resources Association (JAWRA) 53(4): 903-928.
+https://doi.org/10.1111/1752-1688.12540
+"""
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["geopandas>=1.0", "pandas", "numpy", "scipy>=1.13", "matplotlib>=3.10", "pyarrow>=15"]
+# ///
+
+import argparse
 import json
-import logging
 import sys
 from pathlib import Path
+
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import t
-from scipy.stats import linregress
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger(__name__)
-
-# --- Input / output paths ---
-NHF_PATH = Path(__file__).parent.parent / "source_data" / "nhf_1.2.3.gpkg"
-AEP_SRC_PATH = Path(__file__).parent.parent / "source_data" / "nwm_flows_v3_bbox_column.parquet"
-OUT_DATASET_PATH = Path(__file__).parent / "min_max_network_flows.parquet"
-
-TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
-EXTERNAL = Path(__file__).resolve().parents[2] / "external"
-DEFAULT_NETWORK_GPKG = TESTDATA / "network.gpkg"
-DEFAULT_SOURCE_PARQUET = EXTERNAL / "min_max_network_flows.parquet"
-DEFAULT_TESTDATA_OUTPUT = TESTDATA / "min_max_network_flows.parquet"
+from scipy.stats import linregress, t
 
 # --- NHF layer / field names ---
 NHF_REFERENCE_LAYER = "reference_flowpaths"
@@ -50,14 +61,18 @@ SRC_FIELDS = [
     "f50year",
     "f100year",
 ]
-RI_COLS = ["high_flow_threshold", "f2year", "f5year", "f10year", "f25year", "f50year", "f100year"]
+RI_COLS = [
+    "high_flow_threshold",
+    "f2year",
+    "f5year",
+    "f10year",
+    "f25year",
+    "f50year",
+    "f100year",
+]
 AEP_COLS = ["f2year", "f5year", "f10year", "f25year", "f50year", "f100year"]
-P_RI_COLS = 1 - 1 / np.array([2, 5, 10, 25, 50, 100])
-LP3_FIT_RMSE_THRESHOLD = 0.10  # flag reaches where LP3 RMSE exceeds 10% of mean flow
-FREQUENCY_FACTOR_RANGE = (-3.0, 3.0)
 
 # --- QC schema ---
-INDEX_NAME = "reach_id"
 REQUIRED_FIELDS = [
     "high_flow_threshold",
     "f2year",
@@ -70,38 +85,27 @@ REQUIRED_FIELDS = [
     "bkf_depth_m",
 ]
 
-# --- Run options ---
-INCLUDE_GEOMETRY = False
-DEV_SAMPLE: int | None = None  # set to None for full run
 
-# Blackburn-Lynch Bankfull Depth Citation
-# Blackburn-Lynch, Whitney, Carmen T. Agouridis, and Christopher D. Barton, 2017. Development of Regional
-# Curves for Hydrologic Landscape Regions (HLR) in the Contiguous United States. Journal of the American
-# Water Resources Association (JAWRA) 53(4): 903-928. https://doi.org/10.1111/1752-1688.12540
-
-
-def load_nhf() -> gpd.GeoDataFrame:
-    """Load NHF and join to AEP_SRC."""
-    log.info("Loading NHF flowpaths")
+def load_nhf(
+    nhf_path: Path, aep_source_path: Path, sample: int | None
+) -> gpd.GeoDataFrame:
+    """Load NHF flowpaths, join to the AEP source table, index by integer reach_id."""
+    print(f"nhf             {nhf_path}")
     nhf = gpd.read_file(
-        NHF_PATH,
+        nhf_path,
         layer=NHF_FLOWPATHS_LAYER,
         columns=[NHF_FLOWPATH_ID_FIELD, NHF_DA_COL],
-        ignore_geometry=not INCLUDE_GEOMETRY,
+        ignore_geometry=True,
     )
     reference = gpd.read_file(
-        NHF_PATH,
+        nhf_path,
         layer=NHF_REFERENCE_LAYER,
         columns=[NHF_REF_FLOWPATH_ID_FIELD, NHF_FLOWPATH_ID_FIELD],
     )
-    aeps = pd.read_parquet(AEP_SRC_PATH, columns=SRC_FIELDS)
+    print(f"aep source      {aep_source_path}")
+    aeps = pd.read_parquet(aep_source_path, columns=SRC_FIELDS)
 
-    nhf = nhf.merge(
-        reference,
-        left_on=NHF_FLOWPATH_ID_FIELD,
-        right_on=NHF_FLOWPATH_ID_FIELD,
-        how="left",
-    )
+    nhf = nhf.merge(reference, on=NHF_FLOWPATH_ID_FIELD, how="left")
     nhf = nhf.merge(
         aeps, left_on=NHF_REF_FLOWPATH_ID_FIELD, right_on=AEP_ID_FIELD, how="left"
     )
@@ -111,33 +115,47 @@ def load_nhf() -> gpd.GeoDataFrame:
         columns={NHF_FLOWPATH_ID_FIELD: OUT_FLOWPATH_ID}
     )
     nhf = nhf.set_index(OUT_FLOWPATH_ID)
-    nhf.index = nhf.index.astype(int)
+
+    # A flowpath id must be a real integer to key desired_state and flows2fim's
+    # controls on later; one that isn't is dropped here rather than smuggled
+    # through as a float, which is how the current CONUS table ended up with a
+    # float64 index (`reach ids must be integers, got float64` in
+    # flow_statistics.read).
+    unkeyed = nhf.index.isna()
+    if unkeyed.any():
+        print(f"  dropping      {unkeyed.sum()} row(s) with no flowpath id")
+        nhf = nhf[~unkeyed]
+    non_integer = nhf.index.to_series().apply(lambda v: float(v) != int(v))
+    if non_integer.any():
+        sys.exit(
+            f"{nhf_path}: {int(non_integer.sum())} flowpath id(s) are not whole numbers, e.g. {nhf.index[non_integer][:5].tolist()}"
+        )
+    nhf.index = nhf.index.astype("int64")
 
     nhf = nhf.sort_values("f100year", ascending=False)
     nhf = nhf[~nhf.index.duplicated(keep="first")]
-    log.info("Loaded %d reaches", len(nhf))
-    if DEV_SAMPLE is not None:
-        log.warning("DEV_SAMPLE=%d — truncating for debugging", DEV_SAMPLE)
-        nhf = nhf.head(DEV_SAMPLE)
+    print(f"  loaded        {len(nhf)} reach(es)")
+    if sample is not None:
+        print(f"  --sample      truncating to {sample}")
+        nhf = nhf.head(sample)
     return nhf
 
 
 def blackburn_lynch_bkf_depth(da: float) -> float:
-    """Calculate bankful depth in meters from drainage area in sq.km."""
+    """Bankfull depth in meters from drainage area in sq.km."""
     return 0.27 * (da**0.21)
 
 
 def _da_regression(
     log_da: np.ndarray, log_q: np.ndarray, prediction_locations: np.ndarray
 ):
-    """Fit log-log OLS of flow on drainage area; return (coeffs, X, se, t_crit)."""
+    """Fit log-log OLS of flow on drainage area; return (mean, lower, upper) at each prediction location."""
     fit = linregress(log_da, log_q)
     yhat = fit.intercept + fit.slope * log_da
     resid = log_q - yhat
 
     n = len(log_da)
     s = np.sqrt(np.sum(resid**2) / (n - 2))
-
     se_pred = s * np.sqrt(
         1
         + 1 / n
@@ -152,10 +170,8 @@ def _da_regression(
     return np.exp(mean), lower, upper
 
 
-def _compute_da_regressions(
-    nhf_in: gpd.GeoDataFrame, all_flow_cols: list[str]
-) -> tuple[np.ndarray, dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]]:
-    """Compute log-log DA regressions for each flow column; return (da_range, {col: (mean, lower, upper)})."""
+def _compute_da_regressions(nhf_in: gpd.GeoDataFrame, all_flow_cols: list[str]):
+    """Log-log DA regressions for each flow column; return (da_range, {col: (mean, lower, upper)})."""
     log_da = np.log(nhf_in[NHF_DA_COL].values)
     da_range = np.linspace(log_da.min(), log_da.max(), 200)
     regressions = {}
@@ -167,12 +183,9 @@ def _compute_da_regressions(
     return da_range, regressions
 
 
-def _plot_da_regression(
-    nhf_in: gpd.GeoDataFrame,
-    da_range: np.ndarray,
-    regressions: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]],
-    fname: str = "da_regression.png",
-) -> None:
+def _plot_da_regression(nhf_in, da_range, regressions, out_path: Path) -> None:
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(2, 4, figsize=(16, 8), sharex=True, sharey=True)
     colors = np.where(nhf_in["stream_order"].values < 3, "red", "k")
     for ax, col in zip(axes.flat, regressions):
@@ -194,25 +207,32 @@ def _plot_da_regression(
         ax.set_facecolor("whitesmoke")
     axes.flat[0].legend(loc="upper left")
     fig.tight_layout()
-    fig.savefig(Path(__file__).parent / fname, dpi=150)
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
+    print(f"  plot          {out_path}")
 
 
-def enrich_nhf(nhf_in: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    log.info("Building drainage area regressions and supplemental plot")
+def enrich_nhf(
+    nhf_in: gpd.GeoDataFrame, plots: bool, out_path: Path
+) -> gpd.GeoDataFrame:
+    """Fill gaps and clip outliers per column with DA regression bounds; add bankfull depth."""
     all_flow_cols = RI_COLS
     da_range, regressions = _compute_da_regressions(nhf_in, all_flow_cols)
-    _plot_da_regression(nhf_in, da_range, regressions)
+    if plots:
+        _plot_da_regression(
+            nhf_in,
+            da_range,
+            regressions,
+            out_path.with_name(out_path.stem + ".da_regression.png"),
+        )
 
-    log.info("Applying regression bounds across %d AEP columns", len(all_flow_cols))
     log_da = np.log(nhf_in[NHF_DA_COL].values)
     nhf_in["regression_q_applied"] = False
 
-    # Fill NaN RI flows with regression mean
     nan_mask = nhf_in[RI_COLS].isna().any(axis=1)
     if nan_mask.any():
-        log.info(
-            "Filling NaN RI flows for %d reaches with regression mean", nan_mask.sum()
+        print(
+            f"  filling       {nan_mask.sum()} reach(es) with NaN RI flows, from the regression mean"
         )
         for col in RI_COLS:
             col_nan = nhf_in[col].isna()
@@ -234,18 +254,14 @@ def enrich_nhf(nhf_in: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         nhf_in.loc[too_low, col] = lower[too_low]
         nhf_in.loc[too_high, col] = upper[too_high]
         nhf_in.loc[too_low | too_high, "regression_q_applied"] = True
-        log.info(
-            "  %s: %d low, %d high clipped to PI bounds",
-            col,
-            too_low.sum(),
-            too_high.sum(),
+        print(
+            f"  {col:<20} {too_low.sum()} low, {too_high.sum()} high clipped to the 95% PI"
         )
 
-    # Apply regression mean to non-monotonic reaches
     non_monotonic = ~(nhf_in[RI_COLS].diff(axis=1).iloc[:, 1:] > 0).all(axis=1)
     if non_monotonic.any():
-        log.info(
-            "Applying regression mean to %d non-monotonic reaches", non_monotonic.sum()
+        print(
+            f"  regressing    {non_monotonic.sum()} non-monotonic reach(es) to the regression mean"
         )
         for col in RI_COLS:
             q = nhf_in[col].values
@@ -255,112 +271,149 @@ def enrich_nhf(nhf_in: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
             nhf_in.loc[non_monotonic, col] = mean[non_monotonic.values]
         nhf_in.loc[non_monotonic, "regression_q_applied"] = True
 
-    _plot_da_regression(nhf_in, da_range, regressions, "da_regression_after_clean.png")
+    if plots:
+        _plot_da_regression(
+            nhf_in,
+            da_range,
+            regressions,
+            out_path.with_name(out_path.stem + ".da_regression_after_clean.png"),
+        )
 
-    log.info("Estimating bankfull depth")
     nhf_in["bkf_depth_m"] = nhf_in[NHF_DA_COL].apply(blackburn_lynch_bkf_depth)
-
+    # Rounded up rather than to nearest, so a nonzero flow never rounds down to
+    # the unusable 0.0 -- the smallest a positive value can come out is 0.1.
+    nhf_in[RI_COLS] = np.ceil(nhf_in[RI_COLS] * 10) / 10
     return nhf_in
 
 
-def export_final(gdf: gpd.GeoDataFrame) -> None:
-    log.info("Exporting %d reaches to %s", len(gdf), OUT_DATASET_PATH)
-    if not INCLUDE_GEOMETRY and "geometry" in gdf.columns:
-        gdf = gdf.drop(columns="geometry")
-    gdf.to_parquet(OUT_DATASET_PATH)
-    log.info("Export complete")
-
-
-def make_bounded_flow_dataset() -> None:
-    """Generate min/max flows dataset."""
-    joined_nhf = load_nhf()
-    enriched_nhf = enrich_nhf(joined_nhf)
-    export_final(enriched_nhf)
-
-
-def qc_dataset() -> None:
-    """Validate that the min/max flows dataset has all valid data/passes QC checks."""
+def qc(df: pd.DataFrame) -> list[str]:
+    """Every problem with the built table; empty means it is fit to publish."""
     errors = []
-
-    if not OUT_DATASET_PATH.exists():
-        raise FileNotFoundError(OUT_DATASET_PATH)
-
-    df = pd.read_parquet(OUT_DATASET_PATH)
-
-    if df.index.name != INDEX_NAME:
-        errors.append(f"Index name not set to {INDEX_NAME}")
-
+    if df.index.name != OUT_FLOWPATH_ID:
+        errors.append(f"index not named {OUT_FLOWPATH_ID!r}")
     if not pd.api.types.is_integer_dtype(df.index):
-        errors.append(f"Index dtype is not integer: {df.index.dtype}")
-
+        errors.append(f"index dtype is not integer: {df.index.dtype}")
     missing_fields = [f for f in REQUIRED_FIELDS if f not in df.columns]
     if missing_fields:
-        errors.append(f"Missing fields: {missing_fields}")
-
-    nan_counts = df[REQUIRED_FIELDS].isnull().sum()
-    nan_fields = nan_counts[nan_counts > 0].to_dict()
+        errors.append(f"missing fields: {missing_fields}")
+    nan_fields = df[REQUIRED_FIELDS].isnull().sum()
+    nan_fields = nan_fields[nan_fields > 0].to_dict()
     if nan_fields:
         errors.append(f"NaN values found: {nan_fields}")
-
     if df.index.duplicated().any():
-        n = df.index.duplicated().sum()
-        errors.append(f"Duplicate reach IDs: {n}")
-
+        errors.append(f"duplicate reach ids: {df.index.duplicated().sum()}")
     non_monotonic = ~(df[AEP_COLS].diff(axis=1).iloc[:, 1:] >= 0).all(axis=1)
     if non_monotonic.any():
-        errors.append(f"Non-monotonic AEP discharges: {non_monotonic.sum()} reaches")
-
+        errors.append(f"non-monotonic AEP discharges: {non_monotonic.sum()} reach(es)")
     zero_discharge = (df[AEP_COLS] == 0).any(axis=1).sum()
     if zero_discharge:
-        errors.append(f"Zero AEP discharges: {zero_discharge} reaches")
-
+        errors.append(f"zero AEP discharge: {zero_discharge} reach(es)")
     if (df["bkf_depth_m"] == 0).any():
-        errors.append(f"Zero bankfull_depth: {(df['bkf_depth_m'] == 0).sum()} reaches")
+        errors.append(
+            f"zero bankfull depth: {(df['bkf_depth_m'] == 0).sum()} reach(es)"
+        )
+    return errors
 
-    n_regression = int(df["regression_q_applied"].sum())
-    print(f"regression_q_applied: {n_regression} reaches")
 
+def write(df: pd.DataFrame, out_path: Path) -> None:
+    """Write, with reach_id as the first column rather than a trailing index."""
+    df.reset_index().to_parquet(out_path, index=False)
+
+
+def build(
+    nhf_path: Path,
+    aep_source_path: Path,
+    out_path: Path,
+    sample: int | None,
+    plots: bool,
+) -> None:
+    nhf = load_nhf(nhf_path, aep_source_path, sample)
+    enriched = enrich_nhf(nhf, plots, out_path)
+
+    n_regression = int(enriched["regression_q_applied"].sum())
+    print(f"regression applied to {n_regression} reach(es)")
+
+    errors = qc(enriched)
     summary = {
-        "path": str(OUT_DATASET_PATH),
-        "n_reaches": len(df),
+        "path": str(out_path),
+        "n_reaches": len(enriched),
         "errors": errors,
         "regression_q_applied_count": n_regression,
     }
-
-    qc_summary_path = OUT_DATASET_PATH.with_suffix(".qc.json")
-    qc_summary_path.write_text(json.dumps(summary, indent=2))
-
+    out_path.with_suffix(".qc.json").write_text(json.dumps(summary, indent=2))
     if errors:
-        raise ValueError(
-            f"QC failed with {len(errors)} error(s):\n" + "\n".join(errors)
-        )
+        sys.exit("QC failed:\n" + "\n".join(errors))
 
-    print(f"QC passed. Summary written to {qc_summary_path}")
+    write(enriched, out_path)
+    print(f"wrote           {out_path} ({len(enriched)} reach(es))")
 
 
-def clip_for_testdata() -> None:
-    """Subest the min/max dataset for the reaches in testdata."""
-    for p in (DEFAULT_NETWORK_GPKG, DEFAULT_SOURCE_PARQUET):
-        if not p.exists():
-            sys.exit(f"No such file: {p}")
-
-    net = gpd.read_file(DEFAULT_NETWORK_GPKG, layer="reach_network")
+def clip(network_path: Path, table_path: Path, out_path: Path) -> None:
+    """Subset an already-built table to one network's reaches (e.g. testdata)."""
+    net = gpd.read_file(network_path, layer="reach_network")
     reach_ids = set(net["reach_id"].astype("int64").tolist())
-    print(f"network  {DEFAULT_NETWORK_GPKG} ({len(reach_ids)} reaches)")
+    print(f"network         {network_path} ({len(reach_ids)} reach(es))")
 
-    bounds = pd.read_parquet(DEFAULT_SOURCE_PARQUET)
-    print(f"source   {DEFAULT_SOURCE_PARQUET} ({len(bounds)} rows)")
+    table = pd.read_parquet(table_path)
+    if OUT_FLOWPATH_ID in table.columns:
+        table = table.set_index(OUT_FLOWPATH_ID)
+    print(f"table           {table_path} ({len(table)} row(s))")
 
-    subset = bounds.loc[bounds.index.isin(reach_ids)]
+    subset = table.loc[table.index.isin(reach_ids)]
     missing = reach_ids - set(subset.index)
     if missing:
-        sys.exit(f"{len(missing)} reaches not found in source parquet: {sorted(missing)}")
+        sys.exit(
+            f"{len(missing)} reach(es) not found in {table_path}: {sorted(missing)}"
+        )
 
-    subset.to_parquet(DEFAULT_TESTDATA_OUTPUT)
-    print(f"wrote    {DEFAULT_TESTDATA_OUTPUT} ({len(subset)} rows)")
+    write(subset, out_path)
+    print(f"wrote           {out_path} ({len(subset)} row(s))")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = ap.add_subparsers(dest="what", required=True)
+
+    b = sub.add_parser(
+        "build", help="build the flow statistics table from NHF and an AEP source"
+    )
+    b.add_argument(
+        "nhf", type=Path, help="NHF geopackage (layers flowpaths, reference_flowpaths)"
+    )
+    b.add_argument(
+        "aep_source", type=Path, help="AEP source parquet (e.g. NWM flows v3)"
+    )
+    b.add_argument("out", type=Path, help="output parquet")
+    b.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="truncate to N reaches, for a quick run",
+    )
+    b.add_argument(
+        "--no-plots",
+        dest="plots",
+        action="store_false",
+        help="skip the DA regression plots",
+    )
+
+    c = sub.add_parser(
+        "clip", help="subset an already-built table to one network's reaches"
+    )
+    c.add_argument(
+        "network", type=Path, help="network geopackage (layer reach_network)"
+    )
+    c.add_argument("table", type=Path, help="an already-built flow statistics parquet")
+    c.add_argument("out", type=Path, help="output parquet")
+
+    args = ap.parse_args()
+    if args.what == "build":
+        build(args.nhf, args.aep_source, args.out, args.sample, args.plots)
+    else:
+        clip(args.network, args.table, args.out)
 
 
 if __name__ == "__main__":
-    make_bounded_flow_dataset()
-    qc_dataset()
-    clip_for_testdata()
+    main()
