@@ -1,5 +1,9 @@
+# One stack, one profile per mode. Every service names the modes it runs in:
+#   local   `just up-local`   db, MinIO, SEPEX
+#   hybrid  `just up-hybrid`  db only; S3 and SEPEX are cloud services named in .env
 services:
   db:
+    profiles: [ local, hybrid ]
     image: postgis/postgis:16-3.4
     container_name: twodfim-db
     env_file:
@@ -19,6 +23,7 @@ services:
       - twodfim_net
 
   minio:
+    profiles: [ local ]
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: twodfim-minio
     command: server /data --console-address ":9001"
@@ -39,6 +44,7 @@ services:
       - twodfim_net
 
   minio-init:
+    profiles: [ local ]
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: twodfim-minio-init
     depends_on:
@@ -52,6 +58,7 @@ services:
       - twodfim_net
 
   sepex:
+    profiles: [ local ]
     image: ghcr.io/dewberry/sepex:0.3.0-rc.1
     # For GPU enabled machines, uncomment the following lines to enable GPU support in the container.
     # And comment the above line.

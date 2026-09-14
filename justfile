@@ -10,21 +10,21 @@ network:
 
 # Start the stack, then register the local processes with its SEPEX
 up-local: network
-    docker compose -f docker-compose-local.yml up -d
+    docker compose --profile local up -d
     just register-sepex-processes-local
 
 # Stop the stack
 down-local:
-    docker compose -f docker-compose-local.yml down
+    docker compose --profile local down
 
 # Start hybrid stack (local DB only, cloud SEPEX + S3), then register the cloud processes
 up-hybrid: network
-    docker compose -f docker-compose-local.yml up -d db
+    docker compose --profile hybrid up -d
     just register-sepex-processes-cloud
 
 # Stop hybrid stack
 down-hybrid:
-    docker compose -f docker-compose-local.yml down
+    docker compose --profile hybrid down
 
 # Wipe sepex only
 wipe-sepex: down-local

@@ -17,7 +17,7 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ├── README.md
 ├── justfile
 ├── compatibility_policy   	 # placeholder for future document
-├── docker-compose-local.yml # local infrastructure (db, minio, sepex)
+├── docker-compose.yml       # profiles: local (db, minio, sepex), hybrid (db)
 ├── example.env
 ├── example.cloud.env
 ├── orchestrator/            # reconciliation loop and job execution

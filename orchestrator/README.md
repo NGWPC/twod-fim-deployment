@@ -62,13 +62,13 @@ cp example.env .env
 ### 2. Start the local stack
 
 ```bash
-docker compose -f docker-compose-local.yml up -d
+just up-local
 ```
 
 This brings up:
 - **PostGIS** (`localhost:5432`) - applies `db/schema/*.sql` on first boot
 - **MinIO** (`localhost:9000`, console at `localhost:9001`) - creates artifact buckets on first boot
-- **SEPEX** (`localhost:5050`) - container execution server
+- **SEPEX** (`localhost:5050`) - container execution server, with `sepex/local/plugins` registered through its API
 
 The reconciler runs on the host (not in a container):
 
@@ -77,7 +77,7 @@ cd orchestrator
 uv run python scripts/reconcile.py --forever
 ```
 
-To reset from scratch: `docker compose -f docker-compose-local.yml down && rm -rf .data/ && docker compose -f docker-compose-local.yml up -d`
+To reset from scratch: `just wipe && just up-local`
 
 ### 3. Endpoints
 
