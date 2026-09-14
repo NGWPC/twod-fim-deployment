@@ -89,13 +89,13 @@ class Settings(BaseSettings):
     # {0.25, 0.5, 1, 2, 5} and a CHECK constraint enforces it. Nothing else
     # supplies it, and NULL would leave every non-terminal reach awaiting_inputs
     # with no stage library ever planned.
-    ld_ds_z_delta: float = 2.0
+    ld_ds_z_delta: float = 5.0
     # Library resolution (DR-030): the acceptance RANGE of each criterion, over
     # wet cells only, for the increase between consecutive library discharges.
     # Authored but not yet wired — nothing sends these to a job or checks them.
-    ld_q_max_depth_increase_range: str = "[1.5,2.5]"  # m
-    ld_q_median_depth_increase_range: str = "[0.75,1.5]"  # m
-    ld_q_flooded_area_prcnt_increase_range: str = "[10,30]"  # percent
+    ld_q_max_depth_increase_range: str = "[2.5,3.5]"  # m
+    ld_q_median_depth_increase_range: str = "[1.5,2.5]"  # m
+    ld_q_flooded_area_prcnt_increase_range: str = "[20,45]"  # percent
     # Nothing here says which IMAGE runs a job, on what hardware, with which
     # environment or mounts. That belongs to the SEPEX process definition,
     # wherever this deployment's SEPEX reads it from, and the loop never sees
