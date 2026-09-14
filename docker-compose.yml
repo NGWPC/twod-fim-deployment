@@ -6,8 +6,12 @@ services:
     profiles: [ local, hybrid ]
     image: postgis/postgis:16-3.4
     container_name: twodfim-db
-    env_file:
-      - .env
+    # Only what Postgres reads, not all of .env: in hybrid that file holds real
+    # AWS credentials, and a database has no use for them.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -15,7 +19,7 @@ services:
       - ./db/schema:/docker-entrypoint-initdb.d:ro
       - ./.data/db:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-twodfim} -d ${POSTGRES_DB:-twodfim}" ]
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -50,8 +54,13 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    env_file:
-      - .env
+    # Defaults rather than `:?`, because compose resolves these even in hybrid,
+    # where .env has no MinIO. They match minio's own defaults and example.env.
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minio}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minio123}
+      ARTIFACTS_S3_BUCKET: ${ARTIFACTS_S3_BUCKET:-twod-fim-artifacts}
+      SEPEX_STORAGE_BUCKET: ${SEPEX_STORAGE_BUCKET:-sepex-storage}
     entrypoint: >
       /bin/sh -c " mc alias set local http://minio:9000 $$AWS_ACCESS_KEY_ID $$AWS_SECRET_ACCESS_KEY && mc mb --ignore-existing local/$$ARTIFACTS_S3_BUCKET && mc mb --ignore-existing local/$$SEPEX_STORAGE_BUCKET && echo 'Buckets ready.' "
     networks:
