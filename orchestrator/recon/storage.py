@@ -120,59 +120,41 @@ def nd_library_path(reach_id: int, model_id: str, run_identity_hash: str) -> str
 
 
 REACH_NETWORK_FILENAME = "reach_network.parquet"
-LULC_FILENAME = "lulc.tif"
-LULC_LOOKUP_FILENAME = "lulc_lookup.json"
 
 
-def reference_data_path(filename: str) -> str:
-    """Something every job reads and no reach owns, published once per deployment.
+def source_data_path(name: str) -> str:
+    """External source data: staged by people, read by this system, never written by it.
 
-    `reference_data/` rather than a reach folder, for the same reason lakes live
-    under `shared/`: these describe the world the models are built in, not any
-    one model's results.
+    Any number of variants can sit side by side — a CONUS or regional
+    hydrofabric, coastal influence polygons, several DEMs, land-cover rasters
+    and their lookups, flow statistics. An AOI config says which ones an AOI
+    uses; new data is added beside the old rather than replacing it.
+
+    At the bucket root, outside every storage generation: source data has
+    nothing to do with versioning, and every generation reads the same copy.
     """
-    return f"{version_root()}/reference_data/{filename}"
+    return f"s3://{settings.artifacts_s3_bucket}/source_data/{name}"
 
 
-def lulc_path() -> str:
-    """The land-cover raster, as an address rather than a mounted file.
+def workspace_path(name: str) -> str:
+    """The system's working data: written by seeding, read by jobs.
 
-    In storage so that running a job needs no volume arranged for it. GDAL
-    reads s3:// through /vsis3, but it does NOT read the boto3 endpoint
-    variable — a job needs AWS_S3_ENDPOINT and friends in its environment,
-    supplied by its SEPEX process definition.
+    The reach network, lake and coast polygons. Rewritten
+    whenever its source is seeded again — but not scratch space: jobs read these
+    files, so removing one breaks work in flight.
     """
-    return reference_data_path(LULC_FILENAME)
-
-
-def lulc_lookup_path() -> str:
-    """The land-cover to Manning's n mapping, published once per deployment.
-
-    The job takes this input as either a dict or a path, and the path is what
-    the loop sends: a payload carrying the mapping inline repeats the same
-    fifteen pairs on every build, and puts a value that must match what identity
-    was predicted from into a place where it can be edited per submission.
-
-    Content, not address, is what identity hashes. The job reads this file and
-    hashes the mapping it resolves to, exactly as it would hash a dict handed to
-    it directly, so moving the mapping out of the payload changes no
-    identity_hash and invalidates nothing already built. What it does require is
-    that this file hold what desired_state holds — seed.py writes both from
-    author_intent.LULC_LOOKUP, and _build_model_payload sends the dict inline
-    rather than this path for any reach that overrides it.
-    """
-    return reference_data_path(LULC_LOOKUP_FILENAME)
+    return f"{version_root()}/workspace/{name}"
 
 
 def reach_network_path() -> str:
     """The reach network as GeoParquet, which is what jobs read instead of the database.
 
-    One file for the whole deployment, under `reference_data/` rather than any
-    reach's folder: it describes the network, not a reach, and every job reads
-    the same copy. Written by scripts/seed.py, sorted by reach_id so a job can
-    fetch one reach without scanning.
+    One file for the whole deployment, under `workspace/` rather than any reach's
+    folder: it describes the network, not a reach, and every job reads the same
+    copy. Written by `seed.py network` from the database, sorted by reach_id so
+    a job can fetch one reach without scanning.
     """
-    return reference_data_path(REACH_NETWORK_FILENAME)
+    return workspace_path(REACH_NETWORK_FILENAME)
 
 
 def boundary_polygon_path(kind: str, feature_id: str) -> str:
@@ -180,9 +162,9 @@ def boundary_polygon_path(kind: str, feature_id: str) -> str:
 
     A terminal reach's normal-depth boundary is the water body it drains into,
     so the polygon is a property of that body and is shared by every reach
-    ending in it — hence `shared/`, written once rather than per reach.
+    ending in it — hence `workspace/`, written once rather than per reach.
     """
-    return f"{version_root()}/shared/{kind}s/{feature_id}.geojson"
+    return workspace_path(f"{kind}s/{feature_id}.geojson")
 
 
 def list_subfolders(path: str, prefix: str = "") -> list[str]:

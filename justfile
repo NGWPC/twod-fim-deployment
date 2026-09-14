@@ -8,19 +8,21 @@ default:
 network:
     @docker network inspect twodfim_net >/dev/null 2>&1 || docker network create twodfim_net
 
-# Start the stack, then register the local processes with its SEPEX
+# Start the stack, register the local processes with its SEPEX, then set up its database
 up-local: network
     docker compose --profile local up -d
     just register-sepex-processes-local
+    just setup-db
 
 # Stop the stack
 down-local:
     docker compose --profile local down
 
-# Start hybrid stack (local DB only, cloud SEPEX + S3), then register the cloud processes
+# Start hybrid stack (local DB only, cloud SEPEX + S3), register the cloud processes, then set up its database
 up-hybrid: network
     docker compose --profile hybrid up -d
     just register-sepex-processes-cloud
+    just setup-db
 
 # Stop hybrid stack
 down-hybrid:
@@ -68,29 +70,52 @@ register-sepex-processes-local:
 register-sepex-processes-cloud:
     uv run --script sepex/register_processes.py sepex/cloud/plugins
 
-# Load the network into the database and storage (truncates reach_network)
-seed:
-    cd orchestrator && uv run python scripts/seed.py
+# Seed the lakes an AOI config names into the database and workspace/lakes/
+seed-lakes aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/seed.py lakes {{aoi_config_path}}
 
-# Author intent for the seven-reach end-to-end scope
-author-intent:
-    cd orchestrator && uv run python scripts/author_intent.py
+# Seed the coasts an AOI config names into the database and workspace/coasts/
+seed-coasts aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/seed.py coasts {{aoi_config_path}}
 
-# Author intent for every reach in the network
-author-intent-all:
-    cd orchestrator && uv run python scripts/author_intent.py --scope all
+# Seed the network an AOI config names into the database and workspace/reach_network.parquet (its lakes and coasts must be seeded)
+seed-network aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/seed.py network {{aoi_config_path}}
 
-# Author intent for the seven-reach end-to-end scope
+# Stage a local file as source data at source_data/<name> (refuses to replace a different file)
+stage-source-data file name:
+    uv run --project orchestrator python orchestrator/scripts/stage_source_data.py {{file}} {{name}}
+
+# Wait for the database, then write its defaults (up-local and up-hybrid run this; after the first write it changes nothing)
+setup-db:
+    docker exec twodfim-db sh -c 'for i in $(seq 60); do pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" && exit 0; sleep 1; done; echo "database not accepting connections after 60s"; exit 1'
+    just author-defaults
+
+# Write desired_state_defaults from the system-wide settings (setup-db runs this; a change needs --yes and re-checks every reach)
+author-defaults *flags:
+    uv run --project orchestrator python orchestrator/scripts/author_intent.py defaults {{flags}}
+
+# Author intent for the network an AOI config names (needs the defaults setup-db writes)
+author-intent aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/author_intent.py aoi {{aoi_config_path}}
+
+# Run the reconciliation loop until the network settles
 reconcile:
     cd orchestrator && uv run python scripts/reconcile.py
 
 
-# Publish everything materialized for flows2fim: scenarios db, library, AEP VRTs
-f2f:
-    cd orchestrator && uv run python scripts/export_f2f_db.py
-    cd orchestrator && uv run python scripts/export_f2f_library.py
-    cd orchestrator && uv run python scripts/create_aep_f2f_vrts.py
+# Publish an AOI's materialized reaches for flows2fim into a local folder: scenarios db, depth grid library, AEP VRTs
+f2f aoi_config_path out_dir:
+    uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios {{aoi_config_path}} {{out_dir}}
+    uv run --project orchestrator python orchestrator/scripts/f2f.py library {{out_dir}}
+    uv run --project orchestrator python orchestrator/scripts/f2f.py aep {{aoi_config_path}} {{out_dir}}
 
 
-# Seed the network and author the small end-to-end scope
-test-e2e: seed author-intent reconcile
+# Seed the test network and author the small end-to-end scope
+test-e2e:
+    just stage-source-data orchestrator/testdata/lulc.tif e2e/lulc.tif
+    just stage-source-data orchestrator/testdata/lulc_lookup.json e2e/lulc_lookup.json
+    just seed-lakes orchestrator/testdata/e2e.aoi_config.json
+    just seed-network orchestrator/testdata/e2e.aoi_config.json
+    just author-intent orchestrator/testdata/e2e.aoi_config.json
+    just reconcile

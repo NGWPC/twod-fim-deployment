@@ -1,126 +1,68 @@
-"""Author intent: what this deployment wants, and for which reaches.
+"""Author intent: what is wanted, in two separate commands.
 
-Dev scaffolding, and the other half of what seed.py used to do. The real
-authoring of intent is a person or an upstream system; this stands in until one
-feeds the database directly, so it is written to be thrown away.
+Seeding loads a network; this says what to build from it.
 
-Split from seed.py because the two are different things with different
-producers. The network is modify_network's output — an observation, rebuildable
-from the GeoPackages at any time. Intent is authored, and the schema calls
-desired_state "preserved at all cost".
+  defaults  desired_state_defaults, the single row every reach falls back to,
+            from the system-wide settings (config.py, .env). Written when the
+            database is set up (`just setup-db`, which up-local and up-hybrid
+            run), and again only to change a default on purpose: any change to the
+            row fires bump_all_reach_revisions, which re-checks every reach of
+            every AOI. So a change is shown first, with how many reaches it
+            re-checks, and written only with --yes.
+  aoi       desired_state, one row per reach of an AOI's own network that the
+            flow statistics cover: discharge bounds from those statistics,
+            placed on a discharge grid, and the AOI's own dem_source,
+            lulc_source and lulc_lookup when it names them (NULL, meaning the
+            default, when it does not). Never touches the defaults row — a
+            command for one AOI must not have a deployment-wide effect.
 
-The split is what makes re-scoping cheap. seed.py truncates reach_network, and
-everything cascades from it: widening the scope used to mean destroying every
-model and every ND library already built. Authoring separately lets the schema
-do what it was designed to do — deleting a desired_state row fires
-forget_applied_revision (09_triggers.sql), which retracts the claim to -1 and
-KEEPS the materialized row, because what it recorded was seen in storage and
-still was. The next check re-observes and restores a real revision. Nothing is
-rebuilt that does not need to be.
+The flow statistics are the AOI's own table when it names one, with its own
+column names, and otherwise the system-wide default: bound_flows.py's CONUS
+output. They are matched on reach_id, which is the NHF flowpath id —
+modify_network keeps the downstream reach's id when it merges reaches.
 
-Two tables, both written here:
+An AOI authors only reaches in its own `network` file, so several AOIs can
+share one database without one authoring over another. Which of them is decided
+by the flow statistics: a reach they do not cover has no discharge range and is
+not authored — and is counted in the report, so a real gap in the statistics is
+seen rather than silently skipped. A test AOI limits its run the same way,
+with a flow file covering only the reaches it wants.
 
-  desired_state_defaults  the single row every reach falls back to, holding the
-                          model identity inputs and the deployment-wide
-                          defaults. Written as an UPSERT, never DELETE+INSERT:
-                          only an UPDATE fires bump_all_reach_revisions, and
-                          without that a changed default would re-check nothing.
-  desired_state           one row per reach in scope. Also an upsert, so a
-                          reach that is already in scope and unchanged keeps its
-                          revision — a rewrite with identical values is not a
-                          change, and the trigger's WHEN guard says so.
+Adds and updates, never deletes. A reach authored before with unchanged values
+keeps its revision, so nothing it has built is invalidated.
 
-Requires seed.py to have run: desired_state.reach_id is a foreign key into
-reach_network, and the scope is checked against the network that is actually
-loaded rather than against a file that might not match it.
+The network must be seeded first: desired_state.reach_id is a foreign key into
+reach_network, and what is authored is checked against the network actually
+loaded.
 
 Usage:
-    uv run python scripts/author_intent.py
-    uv run python scripts/author_intent.py --scope all
+    uv run python scripts/author_intent.py defaults [--yes]
+    uv run python scripts/author_intent.py aoi <aoi-config-path>
+
+<aoi-config-path> is a local path or an s3:// address. See aoi_config.py for the
+keys read here.
 """
 
 import argparse
 import math
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+import aoi_config
+import flow_statistics
 from recon import db, storage
 from recon.config import settings
 
-TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
-DEFAULT_Q_BOUNDS_PARQUET = TESTDATA / "min_max_network_flows.parquet"
-
-# The column the flow-bound table is keyed by.
-REACH_ID_FIELD = "reach_id"
-
-# Mirrors what the deployed job images bake in (twod_fim_jobs/consts.py). The
-# loop predicts artifact addresses from these, so they must match the images or
-# nothing it builds will be found where it looked.
-SDR_COMMIT = "826a602ddcaf58bf4081dc04b65ba15b82cc8c8a"
-SOLVER = "lisflood"
-# Stage increment for the KWSE libraries, in metres. DR-033 ALT-B allows only
-# {0.25, 0.5, 1, 2, 5} and a CHECK constraint enforces it, because the grid it
-# builds is anchored to zero and nothing derives the value.
-#
-# Nothing else in the system supplies it either, so leaving it NULL is not a
-# neutral default: every non-terminal reach then reports awaiting_inputs and no
-# stage library is ever planned. It is set here so a seeded deployment can run
-# the whole ladder without anyone having to know that.
-#
-LD_DS_Z_DELTA = 2.0
-# Library resolution (DR-030), as the acceptance RANGE of each criterion, per the
-# contract agreed with the jobs repo. All three are measured over WET CELLS ONLY
-# and describe the increase between consecutive library discharges.
-#
-# Authored but not yet wired: nothing sends these to a job and nothing checks
-# them, pending the jobs-repo side. They are seeded now so the values are in one
-# place, under review, when that lands.
-LD_Q_MAX_DEPTH_INCREASE_RANGE = "[1.5,2.5]"  # m
-LD_Q_MEDIAN_DEPTH_INCREASE_RANGE = "[0.75,1.5]"  # m
-LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE = "[10,30]"  # percent
-DEM_SOURCE = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/USGS_Seamless_DEM_13.vrt"
-# An address, not a mounted path: the raster is uploaded to storage by seed.py,
-# so a job reads it wherever it runs without a volume being arranged. It is also
-# a model IDENTITY input — the string is hashed — so changing it moves every
-# model's address and invalidates what is already built.
-LULC_SOURCE = storage.lulc_path()
-# What desired_state_defaults records: the address, not the mapping. Identity is
-# over the file's CONTENT, so this path is not itself hashed — which means an
-# edit to the mapping below changes every model's identity while leaving this
-# row untouched, and the revision bump that an intent edit normally triggers
-# does not fire. Re-seed and re-author together, and expect the rebuild.
-LULC_LOOKUP_PATH = storage.lulc_lookup_path()
-# The mapping itself, published to LULC_LOOKUP_PATH by seed.py. It lives here,
-# with the other authored values, because it IS intent — storage is only where
-# it is put so a job can read it.
-LULC_LOOKUP = {
-    "11": 0.04,
-    "21": 0.04,
-    "22": 0.1,
-    "23": 0.08,
-    "24": 0.15,
-    "31": 0.025,
-    "41": 0.16,
-    "42": 0.16,
-    "43": 0.16,
-    "52": 0.1,
-    "71": 0.035,
-    "81": 0.03,
-    "82": 0.035,
-    "90": 0.12,
-    "95": 0.07,
-}
-
-# Q bounds, derived from the flow statistics fixture rather than authored by
-# hand. These are desired_state columns — intent — which is why the formula
-# lives here. seed.py imports it only because the reach network parquet carries
-# the same three columns; drop them from that file and the import goes with them.
-#
-Q_LOWER_BOUND_SRC_FIELD = "high_flow_threshold"
+# Q bounds, derived from flow statistics rather than authored by hand (DR-029
+# ALT-D: the library runs from the high flow threshold to the 100-year
+# discharge). Which columns hold those is the flow table's business
+# (flow_q_lower_column, flow_q_upper_column); how they become bounds is intent,
+# which is why the formula lives here.
 Q_LOWER_BOUND_MULTIPLIER = 1.0
-Q_UPPER_BOUND_SRC_FIELD = "f100year"
 Q_UPPER_BOUND_MULTIPLIER = 1.0
 DQ_STEP_FIELD = "initial_dq_step_for_nd"
 Q_GRID_FIELD = "q_grid_resolution"
@@ -133,20 +75,86 @@ Q_GRID_SEED_CEILING = 10
 # refined until it fits or the menu runs out.
 Q_GRID_MIN_LINES = 10
 
-# How far the e2e scope pulls its discharge bounds inside the DR-029 range.
-#
-# NOT methodology, and deliberately not in the decision record: DR-029 ALT-D
-# says the library runs from the high flow threshold to the 100-year discharge,
-# and `--scope all` authors exactly that. This is a fixture concern. The
-# end-to-end run exists to prove the machinery works, and what it costs is set
-# by how far the adaptive sweep has to travel, so a shorter journey is a shorter
-# run of the same shape.
-E2E_Q_LOWER_FACTOR = 1.3
-E2E_Q_UPPER_FACTOR = 0.7
+# More reaches than this and the report lists counts instead of every reach.
+REPORT_EACH_REACH_UP_TO = 50
 
 
-def narrow_for_e2e(reaches: list[dict]) -> list[dict]:
-    """Pull the discharge bounds inward, for the end-to-end scope only.
+# --- discharge bounds ----------------------------------------------------
+
+
+def read_q_bounds(path: Path, flows: flow_statistics.FlowStatistics) -> pd.DataFrame:
+    """The flow table indexed by reach id, holding just the two bound columns as q_lower and q_upper."""
+    table = flow_statistics.read(
+        path,
+        flows.reach_id_column,
+        {flows.q_lower_column: "flow_q_lower_column", flows.q_upper_column: "flow_q_upper_column"},
+    )
+    return table.rename(columns={flows.q_lower_column: "q_lower", flows.q_upper_column: "q_upper"})
+
+
+def load_q_bounds(bounds: pd.DataFrame, reaches: list[dict]) -> list[dict]:
+    """Look up and append flow bounds to each reach, from read_q_bounds()."""
+    duplicate_ids = list(bounds.index[bounds.index.duplicated()])
+
+    missing_reaches = []
+    nan_bounds = []
+    for r in reaches:
+        reach_id = r["reach_id"]
+        reach_id = int(str(reach_id).split("_")[0])
+        try:
+            row = bounds.loc[reach_id]
+        except KeyError:
+            missing_reaches.append(reach_id)
+            continue
+        if isinstance(row, pd.DataFrame):
+            # duplicate row
+            continue
+        low = max(
+            np.ceil(row["q_lower"] * Q_LOWER_BOUND_MULTIPLIER).astype(
+                int
+            ),
+            1,
+        )
+        high = max(
+            np.ceil(row["q_upper"] * Q_UPPER_BOUND_MULTIPLIER).astype(
+                int
+            ),
+            1,
+        )
+        if pd.isna(low) or pd.isna(high):
+            nan_bounds.append(reach_id)
+            continue
+        if low > high:
+            r["q_lower_bound"] = high
+            r["q_upper_bound"] = low
+        else:
+            r["q_lower_bound"] = low
+            r["q_upper_bound"] = high
+        rng = high - low
+        r[DQ_STEP_FIELD] = max(int(rng / 10), 1)
+    if duplicate_ids:
+        raise RuntimeError(
+            f"Duplicate reach_id entries in the flow statistics for {len(duplicate_ids)} reaches:\n{duplicate_ids}"
+        )
+    if missing_reaches:
+        raise RuntimeError(
+            f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}"
+        )
+    if nan_bounds:
+        raise RuntimeError(
+            f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}"
+        )
+    return reaches
+
+
+def narrow(reaches: list[dict], lower_factor: float, upper_factor: float) -> list[dict]:
+    """Pull the discharge bounds inward by an AOI's q_bound_factors.
+
+    NOT methodology: DR-029 says the library runs from the high flow threshold
+    to the 100-year discharge, and an AOI without factors authors exactly
+    that. Factors exist for test AOIs, whose cost is set by how far the
+    adaptive sweep has to travel, so a shorter journey is a shorter run of the
+    same shape.
 
     The step is deliberately NOT recomputed. It is an absolute increment in cms,
     and leaving it at the value the full range implied is the whole point: the
@@ -170,16 +178,12 @@ def narrow_for_e2e(reaches: list[dict]) -> list[dict]:
     """
     # Tried in order, first fit wins. The last is the authored range itself, so
     # the ladder always lands somewhere.
-    concessions = (
-        (E2E_Q_LOWER_FACTOR, E2E_Q_UPPER_FACTOR),
-        (1.0, E2E_Q_UPPER_FACTOR),
-        (1.0, 1.0),
-    )
+    concessions = ((lower_factor, upper_factor), (1.0, upper_factor), (1.0, 1.0))
     for r in reaches:
         authored = (r["q_lower_bound"], r["q_upper_bound"])
-        for lower_factor, upper_factor in concessions:
-            low = max(math.ceil(authored[0] * lower_factor), 1)
-            high = max(math.floor(authored[1] * upper_factor), 1)
+        for lower, upper in concessions:
+            low = max(math.ceil(authored[0] * lower), 1)
+            high = max(math.floor(authored[1] * upper), 1)
             if low < high:
                 break
         else:  # pragma: no cover - the last concession is the authored range
@@ -188,7 +192,7 @@ def narrow_for_e2e(reaches: list[dict]) -> list[dict]:
         # What the report needs to say how far this reach got: the range it came
         # from, and which factors survived.
         r["narrowed"] = None if (low, high) == authored else authored
-        r["factors"] = (lower_factor, upper_factor)
+        r["factors"] = (lower, upper)
     return reaches
 
 
@@ -202,7 +206,7 @@ def choose_q_grid(low: int, high: int) -> int:
     the menu is walked from coarse to fine and the first that fits wins.
 
     When nothing fits, the finest option is used and the range is simply too
-    narrow to describe a library; `report` says so.
+    narrow to describe a library.
     """
     for grid in sorted(
         (g for g in Q_GRID_MENU if g <= Q_GRID_SEED_CEILING), reverse=True
@@ -246,249 +250,102 @@ def place_on_q_grid(reaches: list[dict]) -> list[dict]:
     return reaches
 
 
-def load_q_bounds(q_bound_parquet: Path, reaches: list[dict]) -> list[dict]:
-    """Lookup and append flow bounds to the reach dataset."""
-    bounds = pd.read_parquet(q_bound_parquet)
+# --- which reaches ------------------------------------------------------
+#
+# Authoring fewer reaches than the network holds does not make a smaller
+# network. It is the same network with a smaller ask, which is the line the
+# loop itself draws: a reach in the network means nothing until intent is
+# authored for it (intent.effective), and the queue puts its question to
+# desired_state, not to reach_network. So the reaches authored still see the
+# true topology, the true mainstem, and the true geometry a full run would give
+# them — check.py's _upstream reads reach_network, not this table.
+#
+# One rule constrains what is authored, and it is the ladder's: every rung above
+# the first waits on the reach DOWNSTREAM. A reach whose downstream has no intent
+# waits on a proof nothing will ever write. What is authored must therefore be
+# DOWNSTREAM-CLOSED — every reach's downstream is authored too, or already has
+# intent — and check_downstream_closed enforces that.
 
-    if bounds.index.name != REACH_ID_FIELD:
-        raise RuntimeError(
-            f"Q bound parquet file is indexed by {bounds.index.name} instead of {REACH_ID_FIELD}"
+
+def reaches_to_author(aoi: dict, own: set[int], seeded: set[int], covered: set[int], flows: str) -> set[int]:
+    """The reaches of the AOI's own network that its flow statistics cover."""
+    unseeded = sorted(own - seeded)
+    if unseeded:
+        sys.exit(
+            f"{len(unseeded)} reach(es) of this AOI's network are not in reach_network: {unseeded[:20]}\n"
+            f"Seed the network first: seed.py network {aoi['_location']}"
         )
-    if not pd.api.types.is_integer_dtype(bounds.index):
-        raise RuntimeError(
-            f"Q bound parquet index must be integer, got {bounds.index.dtype}"
-        )
-
-    duplicate_ids = list(bounds.index[bounds.index.duplicated()])
-
-    missing_reaches = []
-    nan_bounds = []
-    for r in reaches:
-        reach_id = r["reach_id"]
-        reach_id = int(str(reach_id).split("_")[0])
-        try:
-            row = bounds.loc[reach_id]
-        except KeyError:
-            missing_reaches.append(reach_id)
-            continue
-        if isinstance(row, pd.DataFrame):
-            # duplicate row
-            continue
-        low = max(
-            np.ceil(row[Q_LOWER_BOUND_SRC_FIELD] * Q_LOWER_BOUND_MULTIPLIER).astype(
-                int
-            ),
-            1,
-        )
-        high = max(
-            np.ceil(row[Q_UPPER_BOUND_SRC_FIELD] * Q_UPPER_BOUND_MULTIPLIER).astype(
-                int
-            ),
-            1,
-        )
-        if pd.isna(low) or pd.isna(high):
-            nan_bounds.append(reach_id)
-            continue
-        if low > high:
-            r["q_lower_bound"] = high
-            r["q_upper_bound"] = low
-        else:
-            r["q_lower_bound"] = low
-            r["q_upper_bound"] = high
-        rng = high - low
-        r[DQ_STEP_FIELD] = max(int(rng / 10), 1)
-    if duplicate_ids:
-        raise RuntimeError(
-            f"Duplicate reach_id entries in Q bound parquet for {len(duplicate_ids)} reaches:\n{duplicate_ids}"
-        )
-    if missing_reaches:
-        raise RuntimeError(
-            f"Missing flow bound data for {len(missing_reaches)} reaches:\n{missing_reaches}"
-        )
-    if nan_bounds:
-        raise RuntimeError(
-            f"NAN flow values found for {len(nan_bounds)} reaches:\n{nan_bounds}"
-        )
-    return reaches
+    wanted = own & covered
+    if not wanted:
+        sys.exit(f"{flows} covers no reach of this AOI's network")
+    return wanted
 
 
-# ---------------------------------------------------------------------------
-# Scope: which reaches intent is authored for.
-#
-# A scope is not a smaller network. It is the same network with a smaller ask,
-# which is the line the loop itself draws: a reach in the network means nothing
-# until intent is authored for it (intent.effective), and the queue puts its
-# question to desired_state, not to reach_network. So the reaches in scope still
-# see the true topology, the true mainstem, and the true geometry a full run
-# would give them — check.py's _upstream reads reach_network, not this table.
-#
-# One rule constrains any scope, and it is the ladder's: every rung above the
-# first waits on the reach DOWNSTREAM. A reach whose downstream has no intent
-# waits on a proof nothing will ever write. A scope must therefore be
-# DOWNSTREAM-CLOSED — choosing a reach chooses every reach between it and its
-# terminal — and verify_scope enforces that rather than trusting the list below.
-#
-# The e2e scope. Two components, seven reaches, drawn downstream-first with each
-# indent a step upstream, the direction results travel:
-#
-#   1269876933415184                      lake terminal
-#   └── 1269877024692972                  one above a terminal
-#       └── 1269877035720873              confluence
-#           ├── 1269877039396680          mainstem branch (DA 101)
-#           │   └── 1269877088730144      headwater
-#           └── 1269877051885631          tributary branch (DA 19)
-#
-#   1269869447554114                      outlet terminal
-#
-#   1269874503448786                      lake terminal, nothing above it
-#
-# Chosen for the shape of the work, not the size of the river. The ladder is
-# four rungs from a headwater down to a lake, so results have somewhere to
-# travel, and every reach in it is small.
-#
-# The outlet terminal is the exception, and deliberately so. The extract has
-# exactly two, and the other — 1269869556169965 — is a 13.7 km single-reach
-# component whose centerline bounding box is 22 km2, three and a half times the
-# largest here, before any bankfull buffer. This one drains far more area, 2607
-# km2 against its 68, but its centerline is short and compact: 6 km2 of bounding
-# box, in line with the rest of the scope. Domain extent is what costs, and
-# drainage area only reaches it through the buffer.
-#
-# It earns its place twice over: it is the only reach here whose nd job is sent
-# no outflow polygon at all, and the only terminal with reaches above it, so
-# build_model picks a mainstem for a reach that has nothing below it.
-#
-# That last property is why the third component exists. The reach it replaced
-# was isolated — nothing above, nothing below — which is the shortest ladder the
-# loop can be asked to walk, and a case worth keeping. 1269874503448786 covers
-# it at a fifth of the cost: 2 km2 of bounding box, the second smallest here.
-E2E_REACHES = {
-    1269876933415184: "drains into lake 120053033; nd gets that polygon",
-    1269877024692972: "sits on a terminal, so its kwse has no kwse below to seed from",
-    1269877035720873: "two authored branches meet here; a mainstem is chosen between them",
-    1269877039396680: "the mainstem branch: full kwse, seeded from the library below it",
-    1269877051885631: "the tributary branch: same rung, not the mainstem",
-    1269877088730144: "nothing above it, so build_model is given no mainstem reach",
-    1269869447554114: "names no water body, so nd is sent no outflow polygon at all",
-    1269874503448786: "nothing above and nothing below: the shortest ladder there is",
-}
+def check_downstream_closed(reaches: list[dict], authored: set[int], intended: set[int]) -> None:
+    """Refuse to author reaches that cannot finish.
 
-# The forks a scope has to keep alive. Each is a branch the loop actually takes
-# — a different payload, a different rung, or a different reason to wait — not a
-# property of the data collected for its own sake.
-CASES = {
-    "terminal:lake": "nd is given the lake's polygon as its outflow area",
-    "terminal:outlet": "nd is given no polygon at all; the job derives one",
-    "above:terminal": "kwse over a terminal: nothing below has a stage library",
-    "above:non-terminal": "kwse waits on all three below, and seeds from their kwse",
-    "confluence": "two authored upstreams: a mainstem is picked, and both are woken",
-    "headwater": "no upstream at all, so build_model gets no mainstem",
-    "isolated": "no upstream and no downstream: the shortest ladder there is",
-}
-
-# In the loop, absent from this network. Nothing in testdata sets coast_to_id,
-# so the coast arm of _nd_boundary is unreachable from any scope of it — the
-# full network included. Named so its absence is a known gap and not a silence.
-UNCOVERABLE = {"terminal:coast": "no reach in testdata names a coast"}
-
-
-def _upstream_of(reaches: list[dict]) -> dict[int, list[int]]:
-    """Who flows into whom, derived rather than read off is_headwater.
-
-    Derived because this is the question check.py asks of the database
-    (_UPSTREAM, keyed on reach_to_id), and a flag that disagreed with the links
-    would report coverage the loop does not have.
+    Silent otherwise: a dangling reach authors cleanly and then sits at
+    awaiting_downstream until someone reads the activity log.
     """
-    upstream: dict[int, list[int]] = {}
-    for r in reaches:
-        if r["reach_to_id"] is not None:
-            upstream.setdefault(r["reach_to_id"], []).append(r["reach_id"])
-    return upstream
-
-
-def cases_covered(reaches: list[dict], authored: set[int]) -> dict[int, list[str]]:
-    """Which cases each authored reach exercises, judged on the loaded network."""
+    satisfied = authored | intended
     by_id = {r["reach_id"]: r for r in reaches}
-    upstream = _upstream_of(reaches)
-    covered = {}
-    for reach_id in sorted(authored):
-        r = by_id[reach_id]
-        ups = upstream.get(reach_id, [])
-        cases = []
-        if r["is_terminal"]:
-            cases.append(f"terminal:{r['terminal_reason']}")
-        elif by_id[r["reach_to_id"]]["is_terminal"]:
-            cases.append("above:terminal")
-        else:
-            cases.append("above:non-terminal")
-        if sum(1 for u in ups if u in authored) >= 2:
-            cases.append("confluence")
-        if not ups:
-            cases.append("headwater")
-            if r["is_terminal"]:
-                cases.append("isolated")
-        covered[reach_id] = cases
-    return covered
-
-
-def verify_scope(reaches: list[dict], authored: set[int]) -> dict[int, list[str]]:
-    """Refuse to author a scope that cannot finish, or that has stopped covering.
-
-    Both failures are silent otherwise. A dangling scope authors cleanly and
-    then sits at awaiting_downstream until someone reads the activity log; a
-    scope that has lost a case authors cleanly and passes an end-to-end run that
-    no longer proves what it claims to. E2E_REACHES is a claim about the
-    network, so it is checked against the network every time it is used.
-    """
-    by_id = {r["reach_id"]: r for r in reaches}
-
-    unknown = sorted(authored - set(by_id))
-    if unknown:
-        sys.exit(f"scope names reaches that are not in this network: {unknown}")
-
     dangling = [
         (reach_id, by_id[reach_id]["reach_to_id"])
         for reach_id in sorted(authored)
         if by_id[reach_id]["reach_to_id"] is not None
-        and by_id[reach_id]["reach_to_id"] not in authored
+        and by_id[reach_id]["reach_to_id"] not in satisfied
     ]
     if dangling:
-        lines = "\n".join(f"    {r} -> {ds}" for r, ds in dangling)
+        lines = "\n".join(f"    {r} -> {ds}" for r, ds in dangling[:20])
         sys.exit(
-            "scope is not downstream-closed; these reaches would wait forever on a\n"
+            "not downstream-closed; these reaches would wait forever on a\n"
             f"downstream reach nothing is authored for:\n{lines}"
         )
 
-    covered = cases_covered(reaches, authored)
-    seen = {case for cases in covered.values() for case in cases}
-    missing = [case for case in CASES if case not in seen]
-    if missing:
-        lines = "\n".join(f"    {case}  {CASES[case]}" for case in missing)
-        sys.exit(f"scope no longer covers every case:\n{lines}")
-    return covered
+
+# --- sources -------------------------------------------------------------
 
 
-# Everything a scope decision depends on. Read from the database rather than the
-# GeoPackage so the scope is checked against the network that is actually
-# loaded — including load_network's clip rule, which is what turns a reach
-# pointing off the edge of the extract into the outlet terminal this scope needs.
-_NETWORK = """
-    SELECT reach_id, reach_to_id, is_terminal, terminal_reason
-    FROM reach_network
-    ORDER BY reach_id
-"""
+def defaults_from_settings() -> dict:
+    """The defaults row, from the system-wide settings."""
+    return {
+        "sdr_commit": settings.sdr_commit,
+        "grid_resolution": settings.grid_resolution,
+        "epsg_code": settings.epsg_code,
+        "dem_source": aoi_config.job_address("dem_source", settings.dem_source, "settings"),
+        "lulc_source": aoi_config.job_address("lulc_source", settings.lulc_source, "settings"),
+        "lulc_lookup": aoi_config.job_address("lulc_lookup", settings.lulc_lookup, "settings"),
+        "solver": settings.solver,
+        "ld_ds_z_delta": settings.ld_ds_z_delta,
+        "ld_q_max_depth_increase_range": settings.ld_q_max_depth_increase_range,
+        "ld_q_median_depth_increase_range": settings.ld_q_median_depth_increase_range,
+        "ld_q_flooded_area_prcnt_increase_range": settings.ld_q_flooded_area_prcnt_increase_range,
+    }
 
-# Upsert, not DELETE+INSERT. bump_all_reach_revisions is a BEFORE UPDATE
-# trigger, so a delete and re-insert would slip past it: the defaults would
-# change and not one reach would be re-checked. Its WHEN guard means re-running
-# with the same values bumps nothing.
+
+def lookup_readable(address: str) -> bool:
+    """The loop reads the lookup to predict identity, so a missing one matters
+    before any reach relies on it."""
+    return storage.read_json(address) is not None
+
+
+# --- database ------------------------------------------------------------
+
+# Read from the database rather than the GeoPackage so what is authored is checked
+# against the network that is actually loaded — including seed.py's clip rule,
+# which turns a reach pointing off the edge of the extract into an outlet.
+_NETWORK = "SELECT reach_id, reach_to_id FROM reach_network ORDER BY reach_id"
+
 _DEFAULTS = """
     INSERT INTO desired_state_defaults
         (id, sdr_commit, grid_resolution, epsg_code, dem_source, lulc_source,
          lulc_lookup, solver, ld_ds_z_delta,
          ld_q_max_depth_increase_range, ld_q_median_depth_increase_range,
          ld_q_flooded_area_prcnt_increase_range)
-    VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (1, %(sdr_commit)s, %(grid_resolution)s, %(epsg_code)s, %(dem_source)s,
+            %(lulc_source)s, %(lulc_lookup)s, %(solver)s, %(ld_ds_z_delta)s,
+            %(ld_q_max_depth_increase_range)s, %(ld_q_median_depth_increase_range)s,
+            %(ld_q_flooded_area_prcnt_increase_range)s)
     ON CONFLICT (id) DO UPDATE SET
         sdr_commit      = EXCLUDED.sdr_commit,
         grid_resolution = EXCLUDED.grid_resolution,
@@ -503,53 +360,131 @@ _DEFAULTS = """
         ld_q_flooded_area_prcnt_increase_range = EXCLUDED.ld_q_flooded_area_prcnt_increase_range
 """
 
-# Retract intent for anything that has left the scope. The AFTER DELETE trigger
-# sets applied_revision to -1 in every materialized_* table for the reach and
-# leaves the rows themselves alone, so what was observed in storage survives and
-# only the claim about it is withdrawn.
-_RETRACT = "DELETE FROM desired_state WHERE reach_id <> ALL(%s) RETURNING reach_id"
+# Upsert again, for the same reason: a reach already authored with the same
+# values is not a change, so its revision holds and nothing it has built is
+# invalidated. A source the AOI config does not name is written as NULL, which
+# is "use the default" — the AOI config is the author of these rows.
+# Each default's column type, so settings are compared with the row in force by
+# Postgres itself: a numrange written "[1.50,2.5]" equals "[1.5,2.5]", 30 equals
+# 30.0. Comparing the text would call those changes and re-check every reach.
+_DEFAULT_TYPES = {
+    "sdr_commit": "text",
+    "grid_resolution": "double precision",
+    "epsg_code": "integer",
+    "dem_source": "text",
+    "lulc_source": "text",
+    "lulc_lookup": "text",
+    "solver": "text",
+    "ld_ds_z_delta": "double precision",
+    "ld_q_max_depth_increase_range": "numrange",
+    "ld_q_median_depth_increase_range": "numrange",
+    "ld_q_flooded_area_prcnt_increase_range": "numrange",
+}
 
-# Upsert again, for the same reason: a reach already in scope with the same
-# bounds is not a change, so its revision holds and nothing it has built is
-# invalidated.
+
+def defaults_changes(proposed: dict, conn) -> list[tuple[str, str, str]] | None:
+    """(column, in force, from settings) for each default that differs; None when no row exists yet."""
+    select = ", ".join(
+        f"{column}::text AS {column}, {column} IS DISTINCT FROM %({column})s::{kind} AS {column}__changed"
+        for column, kind in _DEFAULT_TYPES.items()
+    )
+    row = db.one(f"SELECT {select} FROM desired_state_defaults WHERE id = 1", proposed, conn=conn)
+    if row is None:
+        return None
+    return [(c, row[c], str(proposed[c])) for c in _DEFAULT_TYPES if row[f"{c}__changed"]]
+
+
+def author_defaults(yes: bool) -> None:
+    """Write desired_state_defaults from the system-wide settings.
+
+    A first write goes straight in and an unchanged row is left alone. A change
+    re-checks every reach with intent, in every AOI, so it is shown first and
+    written only with --yes.
+    """
+    proposed = defaults_from_settings()
+    with db.connect() as conn:
+        changes = defaults_changes(proposed, conn)
+        reaches = db.one("SELECT count(*) AS n FROM desired_state", conn=conn)["n"]
+        if changes is None:
+            conn.execute(_DEFAULTS, proposed)
+            print("defaults        written (no row existed)")
+        elif not changes:
+            print("defaults        unchanged: the settings match the row in force")
+        else:
+            print("defaults        the settings differ from the row in force:")
+            for column, current, new in changes:
+                print(f"  {column:<40} {current}  ->  {new}")
+            if not yes:
+                sys.exit(
+                    f"\nWriting this re-checks all {reaches} reach(es) with intent, in every AOI.\n"
+                    "Nothing written. Rerun with --yes to write it."
+                )
+            conn.execute(_DEFAULTS, proposed)
+            print(f"written         {reaches} reach(es) will be re-checked")
+
+    for column in _DEFAULT_TYPES:
+        print(f"  {column:<40} {proposed[column]}")
+    if not lookup_readable(proposed["lulc_lookup"]):
+        print(
+            f"\nNote: no land-cover lookup at {proposed['lulc_lookup']} yet. Reaches that fall back\n"
+            "      to it cannot be authored until it is staged in source_data."
+        )
+
+
 _AUTHOR = """
     INSERT INTO desired_state
         (reach_id, q_lower_bound, q_upper_bound, initial_dq_step_for_nd,
-         q_grid_resolution)
+         q_grid_resolution, dem_source, lulc_source, lulc_lookup)
     VALUES (%(reach_id)s, %(q_lower_bound)s, %(q_upper_bound)s, %(initial_dq_step_for_nd)s,
-            %(q_grid_resolution)s)
+            %(q_grid_resolution)s, %(dem_source)s, %(lulc_source)s, %(lulc_lookup)s)
     ON CONFLICT (reach_id) DO UPDATE SET
         q_lower_bound          = EXCLUDED.q_lower_bound,
         q_upper_bound          = EXCLUDED.q_upper_bound,
         initial_dq_step_for_nd = EXCLUDED.initial_dq_step_for_nd,
-        q_grid_resolution      = EXCLUDED.q_grid_resolution
+        q_grid_resolution      = EXCLUDED.q_grid_resolution,
+        dem_source             = EXCLUDED.dem_source,
+        lulc_source            = EXCLUDED.lulc_source,
+        lulc_lookup            = EXCLUDED.lulc_lookup
 """
 
 
-def author(scope: str, q_bound_parquet: Path) -> None:
-    """Write the defaults row and one desired_state row per reach in scope.
+def author(aoi: dict) -> None:
+    """Write one desired_state row per reach the AOI authors."""
+    defaults = db.one("SELECT lulc_lookup FROM desired_state_defaults WHERE id = 1")
+    if defaults is None:
+        sys.exit("desired_state_defaults has no row yet, so the database is not set up; run `just setup-db`")
+    sources = {key: aoi.get(key) for key in ("dem_source", "lulc_source", "lulc_lookup")}
+    # The lookup these reaches will actually use: the AOI's, or the default in
+    # force in the database — not whatever .env on this machine says.
+    lookup = sources["lulc_lookup"] or defaults["lulc_lookup"]
+    if not lookup_readable(lookup):
+        whose = "this AOI's" if sources["lulc_lookup"] else "the default in force"
+        sys.exit(f"No land-cover lookup at {lookup} ({whose}); stage it in source_data first")
 
-    The scope decides two things, and only one of them is which reaches: `e2e`
-    also pulls the discharge bounds inside what DR-029 asks for, to keep the run
-    short. `all` authors the methodology as written.
-    """
-    with db.connect() as conn:
+    factors = aoi.get("q_bound_factors")
+    if factors is not None and not (
+        isinstance(factors, list) and len(factors) == 2 and factors[0] >= 1 and 0 < factors[1] <= 1
+    ):
+        sys.exit("`q_bound_factors` must be [lower >= 1, 0 < upper <= 1]")
+
+    own = aoi_config.network_reach_ids(aoi)
+    flows = flow_statistics.for_aoi(aoi)
+    with tempfile.TemporaryDirectory() as tmp, db.connect() as conn:
+        bounds = read_q_bounds(aoi_config.local_copy(flows.location, Path(tmp)), flows)
+        covered = {int(i) for i in bounds.index}
         reaches = db.query(_NETWORK, conn=conn)
-        if not reaches:
-            sys.exit("reach_network is empty; run scripts/seed.py first")
-        authored = (
-            {r["reach_id"] for r in reaches} if scope == "all" else set(E2E_REACHES)
+        intended = {r["reach_id"] for r in db.query("SELECT reach_id FROM desired_state", conn=conn)}
+        authored = reaches_to_author(aoi, own, {r["reach_id"] for r in reaches}, covered, flows.location)
+        check_downstream_closed(reaches, authored, intended)
+        authoring = load_q_bounds(
+            bounds,
+            [{"reach_id": r["reach_id"]} for r in reaches if r["reach_id"] in authored],
         )
-        covered = verify_scope(reaches, authored)
-
-        in_scope = load_q_bounds(
-            q_bound_parquet, [r for r in reaches if r["reach_id"] in authored]
-        )
-        if scope == "e2e":
-            in_scope = narrow_for_e2e(in_scope)
+        if factors is not None:
+            authoring = narrow(authoring, *factors)
         # Last, so the grid is chosen from the range that actually survived and
         # the bounds written to the row are the ones on it.
-        in_scope = place_on_q_grid(in_scope)
+        authoring = place_on_q_grid(authoring)
 
         # Revisions as they stand, so the report can say what actually moved
         # rather than what was written over.
@@ -557,98 +492,75 @@ def author(scope: str, q_bound_parquet: Path) -> None:
             r["reach_id"]: r["revision"]
             for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)
         }
-
-        conn.execute(
-            _DEFAULTS,
-            (
-                SDR_COMMIT,
-                settings.grid_resolution,
-                settings.epsg_code,
-                DEM_SOURCE,
-                LULC_SOURCE,
-                LULC_LOOKUP_PATH,
-                SOLVER,
-                LD_DS_Z_DELTA,
-                LD_Q_MAX_DEPTH_INCREASE_RANGE,
-                LD_Q_MEDIAN_DEPTH_INCREASE_RANGE,
-                LD_Q_FLOODED_AREA_PRCNT_INCREASE_RANGE,
-            ),
-        )
-        retracted = [
-            r["reach_id"] for r in db.query(_RETRACT, (sorted(authored),), conn=conn)
-        ]
-        for r in in_scope:
-            conn.execute(_AUTHOR, r)
-
+        with conn.cursor() as cur:
+            cur.executemany(_AUTHOR, [r | sources for r in authoring])
         after = {
             r["reach_id"]: r["revision"]
-            for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)
+            for r in db.query(
+                "SELECT reach_id, revision FROM desired_state WHERE reach_id = ANY(%s)",
+                (sorted(authored),),
+                conn=conn,
+            )
         }
 
     new = [r for r in after if r not in before]
     moved = [r for r in after if r in before and after[r] != before[r]]
 
-    print(f"intent authored {len(after)} reach(es)")
+    print("\ndefaults        as in force in the database (`just author-defaults` changes them)")
+    for key, value in sources.items():
+        print(f"{key:<16}{value or 'default'}")
+    print(
+        f"flows           {flow_statistics.describe(flows)} "
+        f"[{flows.reach_id_column}: {flows.q_lower_column} .. {flows.q_upper_column}]"
+    )
+    print(f"authored        {len(authored)} of {len(own)} reach(es) in this AOI's network")
+    if len(own) > len(authored):
+        print(f"  no flows      {len(own) - len(authored)} (not covered by {flows.location})")
     print(f"  new           {len(new)}")
     print(f"  revision moved{len(moved):>3}")
     print(f"  unchanged     {len(after) - len(new) - len(moved)}")
-    if retracted:
-        print(f"  retracted     {len(retracted)} (claims withdrawn, observations kept)")
+    if factors is not None:
+        print(f"bounds          narrowed by {factors[0]}x lower, {factors[1]}x upper (q_bound_factors, not DR-029)")
+
+    if len(authoring) > REPORT_EACH_REACH_UP_TO:
+        return
     print()
-    bounds = {r["reach_id"]: r for r in in_scope}
-    for reach_id, cases in covered.items():
-        r = bounds[reach_id]
+    for r in sorted(authoring, key=lambda r: r["reach_id"]):
         rng = f"{r['q_lower_bound']}-{r['q_upper_bound']} cms"
-        # Say so when the range on the row is not the one DR-029 implies, so
-        # nobody reads these bounds back as the methodology — and say which
-        # factors a tight reach had to give up to stay a valid range.
-        was, factors = r.get("narrowed"), r.get("factors")
-        if factors is None:  # not the e2e scope; nothing was narrowed
+        # Say so when the range on the row is not the one DR-029 implies, and
+        # which factors a tight reach had to give up to stay a valid range.
+        was, kept = r.get("narrowed"), r.get("factors")
+        if kept is None:
             note = ""
         elif was is None:
             note = "  (no room to narrow)"
-        elif factors[0] == 1.0:
+        elif kept[0] == 1.0 and factors[0] != 1.0:
             note = f"  (from {was[0]}-{was[1]}, lower factor given up for room)"
         else:
             note = f"  (from {was[0]}-{was[1]})"
-        print(
-            f"  {reach_id}  {rng:>16}, dq {r[DQ_STEP_FIELD]:>3}{note}  {', '.join(cases)}"
-        )
-    for case, why in UNCOVERABLE.items():
-        print(f"  not covered   {case} ({why})")
+        print(f"  {r['reach_id']}  {rng:>16}, dq {r[DQ_STEP_FIELD]:>3}, grid {r[Q_GRID_FIELD]:>3}{note}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument(
-        "--scope",
-        choices=("e2e", "all"),
-        default="e2e",
-        help="reaches to author for, and whether the range is narrowed "
-        "(default: e2e, seven reaches with bounds pulled inside DR-029)",
+    sub = ap.add_subparsers(dest="what", required=True)
+    defaults = sub.add_parser("defaults", help="write desired_state_defaults from the system-wide settings")
+    defaults.add_argument(
+        "--yes", action="store_true", help="write a change to the row in force (re-checks every reach)"
     )
-    ap.add_argument(
-        "--q-bound-parquet",
-        type=Path,
-        default=DEFAULT_Q_BOUNDS_PARQUET,
-        help="flow statistics the discharge bounds are derived from",
-    )
+    one = sub.add_parser("aoi", help="author one AOI's own network")
+    aoi_config.add_argument(one)
     args = ap.parse_args()
 
-    if not args.q_bound_parquet.exists():
-        sys.exit(f"No such flow bounds parquet: {args.q_bound_parquet}")
+    if args.what == "defaults":
+        author_defaults(args.yes)
+        return
 
-    print(f"scope    {args.scope}")
-    print(f"q bounds {args.q_bound_parquet}")
-    if args.scope == "e2e":
-        print(
-            f"bounds   narrowed to {E2E_Q_LOWER_FACTOR}x lower, "
-            f"{E2E_Q_UPPER_FACTOR}x upper (fixture only, not DR-029)"
-        )
-    print()
-    author(args.scope, args.q_bound_parquet)
+    aoi = aoi_config.load(args.aoi_config_path)
+    print(f"aoi config      {aoi_config.describe(aoi)}")
+    author(aoi)
 
 
 if __name__ == "__main__":
