@@ -8,17 +8,19 @@ default:
 network:
     @docker network inspect twodfim_net >/dev/null 2>&1 || docker network create twodfim_net
 
-# Start the stack
+# Start the stack, then register the local processes with its SEPEX
 up-local: network
     docker compose -f docker-compose-local.yml up -d
+    just register-sepex-processes-local
 
 # Stop the stack
 down-local:
     docker compose -f docker-compose-local.yml down
 
-# Start hybrid stack (local DB only, cloud SEPEX + S3 via .env)
+# Start hybrid stack (local DB only, cloud SEPEX + S3), then register the cloud processes
 up-hybrid: network
     docker compose -f docker-compose-local.yml up -d db
+    just register-sepex-processes-cloud
 
 # Stop hybrid stack
 down-hybrid:
@@ -58,28 +60,13 @@ wipe confirm="":
     just down-local
     docker run --rm -v "$DATA":/data alpine rm -rf /data/db /data/minio /data/sepex
 
-# Re-register plugin definitions after editing a plugin yml (keeps db, bucket, job history)
-reload-plugins:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # SEPEX imports the mounted definitions ONCE, into its own data folder, and
-    # thereafter serves from that copy. Reimporting needs BOTH halves: the copy
-    # gone, and PLUGINS_LOAD_DIR set to say where to read from. Miss the second
-    # and it starts with no processes at all; miss the first and it exits fatal.
-    # sepex_local.env keeps the variable commented for exactly that reason, so
-    # this turns it on for the reload boot and puts it back afterwards.
-    ENV="{{justfile_directory()}}/sepex_local.env"
-    restore() { sed -i "s|^PLUGINS_LOAD_DIR=|# PLUGINS_LOAD_DIR=|" "$ENV"; }
-    trap restore EXIT
-    sed -i "s|^# PLUGINS_LOAD_DIR=|PLUGINS_LOAD_DIR=|" "$ENV"
-    docker stop sepex >/dev/null
-    docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/sepex/plugins
-    docker compose -f docker-compose-local.yml up -d sepex >/dev/null
-    for _ in $(seq 60); do
-      curl -sf localhost:5050/processes >/dev/null && break
-      sleep 2
-    done
-    curl -s localhost:5050/processes | grep -o '"id":"[^"]*"'
+# Register sepex/local/plugins with the SEPEX in .env (up-local runs this; rerun after editing a yml)
+register-sepex-processes-local:
+    uv run --script sepex/register_processes.py sepex/local/plugins
+
+# Register sepex/cloud/plugins with the SEPEX in .env (up-hybrid runs this; rerun after editing a yml)
+register-sepex-processes-cloud:
+    uv run --script sepex/register_processes.py sepex/cloud/plugins
 
 # Load the network into the database and storage (truncates reach_network)
 seed:
