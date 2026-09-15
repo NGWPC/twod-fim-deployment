@@ -93,7 +93,14 @@ CREATE TABLE IF NOT EXISTS desired_state(
     -- A path, as in the defaults row. A reach that wants its own mapping points
     -- at its own file rather than carrying a copy of one here.
     lulc_lookup text,
-    model_domain geometry(polygon, 5070),
+    -- A bbox, [xmin, ymin, xmax, ymax], in the reach's effective epsg_code CRS:
+    -- the same shape the job builds its domain in. An array rather than box2d,
+    -- which carries no SRID and silently reorders corners on input.
+    -- Any values are accepted, on the grid or not. The loop snaps the bbox
+    -- outward to the effective grid_resolution, as the job does with a domain
+    -- it computes, so changing the resolution never has to fight a domain
+    -- authored against the old one.
+    model_domain double precision[],
     -- override system TBD
     override_id bigint,
     -- Library resolution (DR-030), one acceptance RANGE per criterion rather
@@ -134,7 +141,11 @@ CREATE TABLE IF NOT EXISTS desired_state(
 	(q_lower_bound IS NULL OR q_lower_bound % q_grid_resolution = 0) AND
 	(q_upper_bound IS NULL OR q_upper_bound % q_grid_resolution = 0) AND
 	(initial_dq_step_for_nd IS NULL
-	    OR initial_dq_step_for_nd % q_grid_resolution = 0)))
+	    OR initial_dq_step_for_nd % q_grid_resolution = 0))),
+    CONSTRAINT desired_state_model_domain_bbox_chk CHECK (model_domain IS NULL OR (
+	array_ndims(model_domain) = 1 AND array_lower(model_domain, 1) = 1
+	AND cardinality(model_domain) = 4 AND array_position(model_domain, NULL) IS NULL
+	AND model_domain[1] < model_domain[3] AND model_domain[2] < model_domain[4]))
 );
 
 COMMENT ON TABLE desired_state IS 'Authored intent, one row per reach. NULL field = use default source; non-NULL = authored. Preserved at all cost.';
@@ -149,7 +160,7 @@ COMMENT ON COLUMN desired_state.q_grid_resolution IS 'The discharge grid every l
 
 COMMENT ON COLUMN desired_state.solver IS 'Hydraulic engine; NULL = system default, currently lisflood.';
 
-COMMENT ON COLUMN desired_state.model_domain IS 'Authored domain polygon (EPSG:5070); NULL = system computes. A change forces a model rebuild.';
+COMMENT ON COLUMN desired_state.model_domain IS 'Authored domain bbox [xmin, ymin, xmax, ymax] in the effective epsg_code CRS; NULL = system computes. Any values; the loop snaps it outward to the effective grid_resolution before sending it to the job and checking the model against it. A change forces a model rebuild.';
 
 COMMENT ON COLUMN desired_state.override_id IS 'Active override pointer (overrides table TBD); NULL = no override.';
 
