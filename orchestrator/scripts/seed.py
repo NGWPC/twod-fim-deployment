@@ -1,59 +1,137 @@
-"""Seed the database and storage from hydrofabric GeoPackages.
+"""Seed the database from an AOI config's sources, and publish to workspace/ what jobs read.
 
-Dev scaffolding. The real producer of the modelling network is the
-modify_network job in twod-fim-jobs; this stands in until it feeds the database
-directly, so it is written to be thrown away.
+Three separate commands, each reading its source from an AOI config
+(aoi_config.py):
 
-The network only. What is WANTED of it is authored by author_intent.py, which
-is a different thing with a different producer and a different lifecycle — and
-keeping them apart is what lets intent be re-scoped without truncating
-reach_network and destroying every model cascading from it.
+  lakes    every lake polygon in `lakes` (layer lakes_polygons, keyed by lake_id)
+           into the lakes table, and each to workspace/lakes/<lake_id>.geojson
+  coasts   every coastal influence polygon in `coasts` (layer
+           coastal_influence_polygons, keyed by coast_id) into the coasts table,
+           and each to workspace/coasts/<coast_id>.geojson
+  network  modify_network's network.gpkg in `network` (layer reach_network) into
+           reach_network, then the whole table to
+           workspace/reach_network.parquet
 
-Two sources, because they are two different things:
+Lakes and coasts are whole datasets, usually seeded once per storage root
+however many networks follow. A network names the lakes and coasts its terminal
+reaches drain into, so those must already be seeded; `network` checks, and says
+which are missing.
 
-  network.gpkg  the MODIFIED network — reach_id / reach_to_id, terminal flags,
-                lake_to_id. This is modify_network's output shape.
-  nhf.gpkg      the raw hydrofabric, which is where the lake polygons live
-                (layer `lakes_polygons`).
+The polygons go to storage because the jobs take a PATH to a terminal reach's
+outflow area, not geometry. The network goes to storage because build_model
+reads that file instead of connecting to the database.
 
-Lake polygons are written to storage as well as to the database. The hydraulic
-jobs take a *path* to an outflow-area polygon, not geometry, so a terminal
-reach's boundary condition needs its lake to exist as a file the job can read.
+Adds and updates, never deletes. A row already present is updated in place, so
+seeding the same data twice changes nothing. A clean slate is `just wipe-db`.
 
-Nothing here is usable on its own: a network with no intent authored against it
-leaves the loop idle, by design. Run author_intent.py next.
+Intent is not authored here. Run author_intent.py after the network.
 
 Usage:
-    uv run python scripts/seed.py
-    uv run python scripts/seed.py --nhf-gpkg testdata/nhf.gpkg
+    uv run python scripts/seed.py lakes|coasts|network <aoi-config-path>
+
+<aoi-config-path> is a local path or an s3:// address.
 """
 
 import argparse
-import json
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
 import geopandas as gpd
 import pandas as pd
 import pyarrow.parquet as pq
-from author_intent import DEFAULT_Q_BOUNDS_PARQUET, LULC_LOOKUP, load_q_bounds
+import shapely
+
+import aoi_config
 from recon import db, storage
-from recon.config import settings
 
 # The column the network is keyed and sorted by. Named once because the parquet
 # writer, the sort, and the row-group statistics all have to agree on it.
 REACH_ID_FIELD = "reach_id"
+NETWORK_LAYER = aoi_config.NETWORK_LAYER
 
-TESTDATA = Path(__file__).resolve().parents[1] / "testdata"
-DEFAULT_NETWORK_GPKG = TESTDATA / "network.gpkg"
-DEFAULT_NHF_GPKG = TESTDATA / "nhf.gpkg"
-# Land cover for the test network, clipped from the NLCD CONUS mosaic to the
-# network's extent plus a margin. Half a megabyte instead of 1.4 GB, which is
-# what makes it a fixture that can live beside the GeoPackages rather than a
-# download every machine has to arrange for itself.
-DEFAULT_LULC_TIF = TESTDATA / "lulc.tif"
-NETWORK_LAYER = "reach_network"
-LAKES_LAYER = "lakes_polygons"
+# kind -> (AOI config key, layer, id field, table). A kind's table is keyed by its id
+# field, and boundary_polygon_path files it under workspace/<kind>s/.
+WATER_BODIES = {
+    "lake": ("lakes", "lakes_polygons", "lake_id", "lakes"),
+    "coast": ("coasts", "coastal_influence_polygons", "coast_id", "coasts"),
+}
+
+# Every reach_network column but the geometry, in the order the parquet carries.
+NETWORK_COLUMNS = (
+    "reach_id",
+    "reach_to_id",
+    "is_terminal",
+    "is_headwater",
+    "terminal_reason",
+    "lake_to_id",
+    "coast_to_id",
+    "lake_inlet",
+    "lake_outlet",
+    "is_trimmed",
+    "total_da_sqkm",
+    "stream_order",
+    "length_km",
+)
+
+
+# --- lakes and coasts ----------------------------------------------------
+
+
+def load_water_bodies(gpkg_path: Path, layer: str, id_field: str) -> list[dict]:
+    """Every polygon in the layer, one per id.
+
+    Parts that share an id are unioned, because the table holds one polygon per
+    body and a job reads one file for it.
+    """
+    gdf = gpd.read_file(gpkg_path, layer=layer)
+    if id_field not in gdf.columns:
+        sys.exit(f"{gpkg_path} layer {layer} has no {id_field} column")
+    if gdf.crs and gdf.crs.to_epsg() != 5070:
+        gdf = gdf.to_crs(epsg=5070)
+    gdf[id_field] = gdf[id_field].map(aoi_config.as_id)
+    merged = gdf[[id_field, "geometry"]].dissolve(by=id_field)
+    return [{"id": body_id, "wkt": geom.wkt, "geom": geom} for body_id, geom in merged.geometry.items()]
+
+
+def publish_polygons(kind: str, bodies: list[dict]) -> int:
+    """Write each body to storage as GeoJSON. Concurrent, because a national
+    dataset is tens of thousands of small objects."""
+    s3 = storage.get_s3_client()
+
+    def put(body: dict) -> None:
+        bucket, key = storage.parse_s3_path(storage.boundary_polygon_path(kind, body["id"]))
+        geojson = gpd.GeoSeries([body["geom"]], crs=5070).to_json()
+        s3.put_object(Bucket=bucket, Key=key, Body=geojson.encode())
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(put, bodies))
+    return len(bodies)
+
+
+def seed_water_bodies(kind: str, aoi: dict) -> None:
+    key, layer, id_field, table = WATER_BODIES[kind]
+    source = aoi_config.require(aoi, key)
+    with tempfile.TemporaryDirectory() as tmp:
+        bodies = load_water_bodies(aoi_config.local_copy(source, Path(tmp)), layer, id_field)
+
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.executemany(
+            f"""INSERT INTO {table} ({id_field}, geom)
+                VALUES (%(id)s, ST_Multi(ST_GeomFromText(%(wkt)s, 5070)))
+                ON CONFLICT ({id_field}) DO UPDATE SET geom = EXCLUDED.geom""",
+            bodies,
+        )
+    published = publish_polygons(kind, bodies)
+    total = db.one(f"SELECT count(*) AS n FROM {table}")["n"]
+
+    print(f"\nloaded          {len(bodies)} {kind}(s) from {source}")
+    print(f"{table:<16}{total} in the database")
+    print(f"published       {published} to {storage.workspace_path(kind + 's')}/")
+
+
+# --- network -------------------------------------------------------------
 
 
 def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
@@ -71,11 +149,11 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
         sys.exit(f"{gpkg_path} layer {layer} is missing: {sorted(missing)}")
 
     if gdf.crs and gdf.crs.to_epsg() != 5070:
-        print(f"  reprojecting {gdf.crs.to_string()} -> EPSG:5070")
+        print(f"reprojecting    {gdf.crs.to_string()} -> EPSG:5070")
         gdf = gdf.to_crs(epsg=5070)
 
     known = set(gdf.columns)
-    in_file = set(gdf["reach_id"].astype("int64"))
+    in_file = {aoi_config.as_id(i) for i in gdf["reach_id"]}
     rows, clipped = [], []
     for _, r in gdf.iterrows():
 
@@ -86,16 +164,15 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
 
         geom = r.geometry
         if geom.geom_type == "MultiLineString" and len(geom.geoms) == 1:
-            geom = geom.geoms[
-                0
-            ]  # the column is LineString; a 1-part multi is the same line
+            # the column is LineString; a 1-part multi is the same line
+            geom = geom.geoms[0]
 
-        reach_id = int(r["reach_id"])
-        reach_to_id = value("reach_to_id", int)
+        reach_id = aoi_config.as_id(r["reach_id"])
+        reach_to_id = value("reach_to_id", aoi_config.as_id)
         is_terminal = bool(value("is_terminal", bool, False))
         terminal_reason = value("terminal_reason", str)
 
-        # This file is a clip of a larger network, so a reach at its edge can
+        # The file can be a clip of a larger network, so a reach at its edge can
         # point at a downstream neighbour that was not included. The FK cannot
         # hold a dangling reference, and leaving the link NULL while the reach
         # claims to be non-terminal would make it wait forever on a reach that
@@ -113,8 +190,8 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
                 "is_terminal": is_terminal,
                 "is_headwater": bool(value("is_headwater", bool, False)),
                 "terminal_reason": terminal_reason,
-                "lake_to_id": value("lake_to_id", str),
-                "coast_to_id": value("coast_to_id", str),
+                "lake_to_id": value("lake_to_id", aoi_config.as_id),
+                "coast_to_id": value("coast_to_id", aoi_config.as_id),
                 "lake_inlet": bool(value("lake_inlet", bool, False)),
                 "lake_outlet": bool(value("lake_outlet", bool, False)),
                 "is_trimmed": bool(value("is_trimmed", bool, False)),
@@ -126,36 +203,40 @@ def load_network(gpkg_path: Path, layer: str = NETWORK_LAYER) -> list[dict]:
         )
 
     if clipped:
-        print(
-            f"  {len(clipped)} reach(es) point outside this network; treated as outlet terminals:"
-        )
+        print(f"{len(clipped)} reach(es) point outside this network; treated as outlet terminals:")
         for reach_id, missing in clipped:
             print(f"    {reach_id} -> {missing} (not in file)")
     return rows
 
 
-def load_lakes(gpkg_path: Path, layer: str = LAKES_LAYER) -> list[dict]:
-    """Read lake polygons. Multipart geometry is kept as-is."""
-    gdf = gpd.read_file(gpkg_path, layer=layer)
-    if "lake_id" not in gdf.columns:
-        sys.exit(f"{gpkg_path} layer {layer} has no lake_id column")
-    if gdf.crs and gdf.crs.to_epsg() != 5070:
-        gdf = gdf.to_crs(epsg=5070)
-    return [
-        {"lake_id": str(r["lake_id"]), "geom": r.geometry, "wkt": r.geometry.wkt}
-        for _, r in gdf.iterrows()
-    ]
+def check_water_bodies_seeded(reaches: list[dict]) -> None:
+    """Stop before writing anything if the network names a lake or coast that is not seeded."""
+    for kind, (key, _, id_field, table) in WATER_BODIES.items():
+        named = sorted({r[f"{kind}_to_id"] for r in reaches if r[f"{kind}_to_id"] is not None})
+        if not named:
+            continue
+        present = {
+            r[id_field]
+            for r in db.query(f"SELECT {id_field} FROM {table} WHERE {id_field} = ANY(%s)", (named,))
+        }
+        missing = [i for i in named if i not in present]
+        if missing:
+            sys.exit(
+                f"The network names {len(missing)} {kind}(s) not in the {table} table: "
+                f"{missing[:20]}\nSeed them first: seed.py {key} <aoi-config-path>"
+            )
 
-def lake_polygon_uri(lake_id: str) -> str:
-    """Where a lake's polygon lives in storage.
 
-    Under `shared/` rather than a reach folder: one lake bounds many reaches, so
-    it belongs to none of them.
-    """
-    return (
-        f"s3://{settings.artifacts_s3_bucket}/version=v{settings.major_version}"
-        f"/shared/lakes/{lake_id}.geojson"
-    )
+# An upsert rather than a plain insert, so seeding a network that is already
+# there updates it instead of failing, and nothing is deleted to make room.
+# reach_network has no triggers; an update here changes the row and nothing else.
+_REACH = f"""
+    INSERT INTO reach_network ({", ".join(NETWORK_COLUMNS)}, geom)
+    VALUES ({", ".join(f"%({c})s" for c in NETWORK_COLUMNS)}, ST_GeomFromText(%(geom)s, 5070))
+    ON CONFLICT (reach_id) DO UPDATE SET
+        {", ".join(f"{c} = EXCLUDED.{c}" for c in NETWORK_COLUMNS if c != REACH_ID_FIELD)},
+        geom = EXCLUDED.geom
+"""
 
 
 # How many reaches share a row group. Point queries are the only access
@@ -171,23 +252,27 @@ def lake_polygon_uri(lake_id: str) -> str:
 REACH_ROW_GROUP_SIZE = 8192
 
 
-def export_reach_network(reaches: list[dict]) -> str:
-    """Write the reach network as GeoParquet, sorted by reach_id.
+def export_reach_network() -> str:
+    """Write the database's reach network as GeoParquet, sorted by reach_id.
 
-    This is what build_model reads INSTEAD OF connecting to the database. A job
-    that can open a file needs no credentials, no network route to Postgres, and
-    no schema coupling to a table it does not own — the reason the db_uri input
-    is gone.
+    Exported from the table rather than from the file just loaded, so it is the
+    network the loop reasons over, every AOI seeded into this database.
 
     Sorted by reach_id, with the sort recorded in the file metadata, so a reader
     can use each row group's min/max to skip straight to the group holding a
     reach. Unsorted, those statistics overlap and every group has to be read.
     """
+    rows = db.query(
+        f"SELECT {', '.join(NETWORK_COLUMNS)}, ST_AsBinary(geom) AS geom_wkb "
+        # Byte order, not the database's collation: the parquet row-group
+        # min/max a reader skips by are compared bytewise.
+        f'FROM reach_network ORDER BY {REACH_ID_FIELD} COLLATE "C"'
+    )
     gdf = gpd.GeoDataFrame(
-        [{k: v for k, v in r.items() if k != "geom"} for r in reaches],
-        geometry=gpd.GeoSeries.from_wkt([r["geom"] for r in reaches]),
+        [{c: r[c] for c in NETWORK_COLUMNS} for r in rows],
+        geometry=shapely.from_wkb([bytes(r["geom_wkb"]) for r in rows]),
         crs=5070,
-    ).sort_values(REACH_ID_FIELD, ignore_index=True)
+    )
 
     uri = storage.reach_network_path()
     with tempfile.TemporaryDirectory() as tmp:
@@ -201,105 +286,19 @@ def export_reach_network(reaches: list[dict]) -> str:
             sorting_columns=[pq.SortingColumn(gdf.columns.get_loc(REACH_ID_FIELD))],
         )
         bucket, key = storage.parse_s3_path(uri)
-        storage.get_s3_client().put_object(
-            Bucket=bucket, Key=key, Body=local.read_bytes()
-        )
+        storage.get_s3_client().put_object(Bucket=bucket, Key=key, Body=local.read_bytes())
     return uri
 
 
-def export_lulc(lulc_tif: Path) -> str:
-    """Publish the land-cover raster to storage, where jobs can address it.
+def seed_network(aoi: dict) -> None:
+    source = aoi_config.require(aoi, "network")
+    with tempfile.TemporaryDirectory() as tmp:
+        reaches = load_network(aoi_config.local_copy(source, Path(tmp)))
 
-    Uploaded rather than mounted. A mount has to be arranged by whatever starts
-    the container — which under SEPEX means every process definition declaring
-    the same volume, and a cloud deployment needing a different answer
-    entirely. An object in the bucket is reachable from all of them with the
-    credentials jobs already carry.
-    """
-    if not lulc_tif.exists():
-        sys.exit(f"No such land cover raster: {lulc_tif}")
-    uri = storage.lulc_path()
-    bucket, key = storage.parse_s3_path(uri)
-    storage.get_s3_client().put_object(
-        Bucket=bucket, Key=key, Body=lulc_tif.read_bytes()
-    )
-    return uri
-
-
-def export_lulc_lookup() -> str:
-    """Publish the land-cover to Manning's n mapping as JSON, and return its path.
-
-    Written from author_intent.LULC_LOOKUP, the same constant author_intent.py
-    writes into desired_state_defaults, so the published file and the intent the
-    loop predicts identity from cannot say different things. That is the whole
-    requirement: the job hashes the mapping it resolves, not the address it came
-    from, so identity is unchanged as long as the two agree.
-
-    Exported here rather than from author_intent.py because this is where the
-    deployment's shared reference data is published — the land-cover raster and
-    the reach network go up in the same pass, and a job reading one reads all
-    three the same way.
-    """
-    uri = storage.lulc_lookup_path()
-    bucket, key = storage.parse_s3_path(uri)
-    storage.get_s3_client().put_object(
-        Bucket=bucket, Key=key, Body=json.dumps(LULC_LOOKUP, sort_keys=True).encode()
-    )
-    return uri
-
-
-def export_lake_polygons(lakes: list[dict]) -> list[str]:
-    """Write each lake to storage as GeoJSON, and return the paths written."""
-    s3 = storage.get_s3_client()
-    written = []
-    for lake in lakes:
-        uri = lake_polygon_uri(lake["lake_id"])
-        bucket, key = storage.parse_s3_path(uri)
-        body = gpd.GeoSeries([lake["geom"]], crs=5070).to_json()
-        s3.put_object(Bucket=bucket, Key=key, Body=body.encode())
-        written.append(uri)
-    return written
-
-
-def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Path) -> None:
-    reaches = load_network(network_gpkg)
-    # Bounds are intent, and author_intent.py is what writes them to
-    # desired_state. They are resolved here too because the reach network
-    # parquet carries the same three columns; drop them from that file and this
-    # call, and the import above, go with them.
-    reaches = load_q_bounds(q_bound_parquet, reaches)
-    lakes = load_lakes(nhf_gpkg)
-
-    # CASCADE reaches desired_state and every materialized_* table. That is the
-    # cost of reloading the network, and the reason authoring is a separate
-    # script: re-scoping intent must not come through here.
-    with db.connect() as conn:
-        conn.execute("TRUNCATE reach_network, lakes, coasts CASCADE")
-
-        for lake in lakes:
-            conn.execute(
-                "INSERT INTO lakes (lake_id, geom) VALUES (%s, ST_GeomFromText(%s, 5070))",
-                (lake["lake_id"], lake["wkt"]),
-            )
-
-        # One transaction, any order: the self FK is deferred to commit.
-        for r in reaches:
-            conn.execute(
-                """INSERT INTO reach_network
-                       (reach_id, reach_to_id, is_terminal, is_headwater, terminal_reason,
-                        lake_to_id, coast_to_id, lake_inlet, lake_outlet, is_trimmed,
-                        total_da_sqkm, stream_order, length_km, geom)
-                   VALUES (%(reach_id)s, %(reach_to_id)s, %(is_terminal)s, %(is_headwater)s,
-                           %(terminal_reason)s, %(lake_to_id)s, %(coast_to_id)s, %(lake_inlet)s,
-                           %(lake_outlet)s, %(is_trimmed)s, %(total_da_sqkm)s, %(stream_order)s,
-                           %(length_km)s, ST_GeomFromText(%(geom)s, 5070))""",
-                r,
-            )
-
-    written = export_lake_polygons(lakes)
-    network_uri = export_reach_network(reaches)
-    lulc_uri = export_lulc(lulc_tif)
-    lulc_lookup_uri = export_lulc_lookup()
+    check_water_bodies_seeded(reaches)
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.executemany(_REACH, reaches)
+    network_uri = export_reach_network()
 
     summary = db.one("""
         SELECT count(*) AS reaches,
@@ -308,22 +307,18 @@ def seed(network_gpkg: Path, nhf_gpkg: Path, lulc_tif: Path, q_bound_parquet: Pa
                count(*) FILTER (WHERE terminal_reason = 'coast') AS coast_terminals,
                count(*) FILTER (WHERE terminal_reason = 'outlet') AS outlet_terminals
         FROM reach_network""")
-    print(f"reaches         {summary['reaches']}")
+    print(f"\nloaded          {len(reaches)} reach(es) from {source}")
+    print(f"reach_network   {summary['reaches']} reach(es) in the database")
     print(
         f"terminals       {summary['terminals']} "
         f"(lake {summary['lake_terminals']}, coast {summary['coast_terminals']}, "
         f"outlet {summary['outlet_terminals']})"
     )
-    print(f"lakes           {len(lakes)}")
-    for uri in written:
-        print(f"  exported      {uri}")
-    print(f"  network       {network_uri}")
-    print(f"  land cover    {lulc_uri}")
-    print(f"  lulc lookup   {lulc_lookup_uri}")
+    print(f"published       {network_uri}")
     if summary["outlet_terminals"]:
-        # Not a warning any more. An outlet names no lake or coast, and needs
-        # none: the outflow polygon input is optional and the run job derives an
-        # area from the model's own domain and centreline when it is absent.
+        # Not a warning. An outlet names no lake or coast, and needs none: the
+        # outflow polygon input is optional and the run job derives an area from
+        # the model's own domain and centreline when it is absent.
         print(
             f"\nNote: {summary['outlet_terminals']} outlet terminal(s) name no water body.\n"
             "      Their outflow area is derived by the run job from the model itself."
@@ -335,42 +330,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument(
-        "--network-gpkg",
-        type=Path,
-        default=DEFAULT_NETWORK_GPKG,
-        help="modified network (modify_network output)",
-    )
-    ap.add_argument(
-        "--nhf-gpkg",
-        type=Path,
-        default=DEFAULT_NHF_GPKG,
-        help="hydrofabric holding the lakes_polygons layer",
-    )
-    ap.add_argument(
-        "--lulc-tif",
-        type=Path,
-        default=DEFAULT_LULC_TIF,
-        help="land cover raster to publish to storage",
-    )
-    ap.add_argument(
-        "--q-bound-parquet",
-        type=Path,
-        default=DEFAULT_Q_BOUNDS_PARQUET,
-        help="flow statistics written into the reach network parquet",
-    )
+    ap.add_argument("what", choices=("lakes", "coasts", "network"), help="what to seed")
+    aoi_config.add_argument(ap)
     args = ap.parse_args()
 
-    for path in (args.network_gpkg, args.nhf_gpkg):
-        if not path.exists():
-            sys.exit(f"No such GeoPackage: {path}")
-    if not args.lulc_tif.exists():
-        sys.exit(f"No such land cover raster: {args.lulc_tif}")
-
-    print(f"network  {args.network_gpkg}")
-    print(f"nhf      {args.nhf_gpkg}")
-    print(f"lulc     {args.lulc_tif}\n")
-    seed(args.network_gpkg, args.nhf_gpkg, args.lulc_tif, args.q_bound_parquet)
+    aoi = aoi_config.load(args.aoi_config_path)
+    print(f"aoi config      {aoi_config.describe(aoi)}")
+    if args.what == "network":
+        seed_network(aoi)
+    else:
+        seed_water_bodies(args.what.removesuffix("s"), aoi)
 
 
 if __name__ == "__main__":

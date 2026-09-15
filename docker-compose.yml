@@ -1,0 +1,115 @@
+# One stack, one profile per mode. Every service names the modes it runs in:
+#   local   `just up-local`   db, MinIO, SEPEX
+#   hybrid  `just up-hybrid`  db only; S3 and SEPEX are cloud services named in .env
+# Local SEPEX comes in two hardware variants, one profile each, and `just up-local`
+# adds the one GPU_AVAILABLE in .env calls for:
+#   local-cpu  sepex
+#   local-gpu  sepex-gpu, the same service with the host's NVIDIA GPUs
+
+# SEPEX, shared by its two hardware variants below. A YAML anchor rather than
+# `extends`, because extends merges the profiles lists and would start the GPU
+# variant in the CPU profile too.
+x-sepex: &sepex
+  image: ghcr.io/dewberry/sepex:0.3.0-rc.1
+  # One container name for both variants, so SEPEX is `sepex` at localhost:5050
+  # either way. Only one of the two profiles is ever started.
+  container_name: sepex
+  ports:
+    - '5050:5050'
+  env_file:
+    - sepex_local.env
+  volumes:
+    - ./.data/sepex:/.data
+    - /var/run/docker.sock:/var/run/docker.sock
+  depends_on:
+    minio-init:
+      condition: service_completed_successfully
+  networks:
+    - twodfim_net
+
+services:
+  db:
+    profiles: [ local, hybrid ]
+    image: postgis/postgis:16-3.4
+    container_name: twodfim-db
+    # Only what Postgres reads, not all of .env: in hybrid that file holds real
+    # AWS credentials, and a database has no use for them.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      # Auto-apply the schema on first boot. README.md and child folders are ignored (only *.sql/*.sh run).
+      - ./db/schema:/docker-entrypoint-initdb.d:ro
+      - ./.data/db:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - twodfim_net
+
+  minio:
+    profiles: [ local ]
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: twodfim-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - ./.data/minio:/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - twodfim_net
+
+  minio-init:
+    profiles: [ local ]
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: twodfim-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    # Read inside the container rather than interpolated here, so hybrid, which
+    # never runs this and has no SEPEX_STORAGE_BUCKET, has nothing to resolve.
+    env_file: [ .env ]
+    # The buckets are the first path segment of the two roots, so they are cut
+    # out of them rather than named again.
+    entrypoint: >
+      /bin/sh -c " mc alias set local http://minio:9000 $$AWS_ACCESS_KEY_ID $$AWS_SECRET_ACCESS_KEY && for root in $$TWOD_FIM_DATA_ROOT_PREFIX $$TWOD_FIM_SOURCE_DATA_PREFIX; do bucket=$${root#s3://}; mc mb --ignore-existing local/$${bucket%%/*} || exit 1; done && mc mb --ignore-existing local/$$SEPEX_STORAGE_BUCKET && echo 'Buckets ready.' "
+    networks:
+      - twodfim_net
+
+  sepex:
+    <<: *sepex
+    profiles: [ local-cpu ]
+
+  sepex-gpu:
+    # sepex plus the host's GPUs, which the GPU variants of run_nd_scenarios /
+    # run_kwse_scenarios need. Requires the NVIDIA Container Toolkit: on a host
+    # without it SEPEX fails to start, and asking for zero GPUs does not help
+    # (the nvidia driver is still required), which is why this is a separate
+    # service rather than a count set from .env.
+    <<: *sepex
+    profiles: [ local-gpu ]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+networks:
+  twodfim_net:
+    external: true

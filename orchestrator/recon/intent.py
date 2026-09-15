@@ -77,7 +77,7 @@ _EFFECTIVE = """
 """
 
 
-def effective(reach_id: int, *, conn: psycopg.Connection | None = None) -> db.Row | None:
+def effective(reach_id: str, *, conn: psycopg.Connection | None = None) -> db.Row | None:
     """This reach's effective intent, or None if nothing is wanted for it.
 
     None has two causes worth telling apart when it surprises you: no

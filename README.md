@@ -15,11 +15,13 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 
 ```
 ├── README.md
+├── RUNBOOK.md               # producing libraries for an AOI
 ├── justfile
 ├── compatibility_policy   	 # placeholder for future document
-├── docker-compose-local.yml # local infrastructure (db, minio, sepex)
+├── docker-compose.yml       # profiles: local (db, minio) + local-cpu or local-gpu (sepex), hybrid (db)
 ├── example.env
 ├── example.cloud.env
+├── example.aoi_config.jsonc # every AOI config option, commented (see RUNBOOK.md)
 ├── orchestrator/            # reconciliation loop and job execution
 │   ├── pyproject.toml
 │   ├── Dockerfile

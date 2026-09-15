@@ -8,21 +8,36 @@ default:
 network:
     @docker network inspect twodfim_net >/dev/null 2>&1 || docker network create twodfim_net
 
-# Start the stack
+# Start the stack (SEPEX with the GPUs when GPU_AVAILABLE is true), register the local processes with its SEPEX, then set up its database
 up-local: network
-    docker compose -f docker-compose-local.yml up -d
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # GPU_AVAILABLE from the environment, else from .env; true the same way
+    # recon/check.py reads it (true, 1, yes, y, on).
+    gpu="${GPU_AVAILABLE:-$(sed -n 's/^[[:space:]]*GPU_AVAILABLE[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null | tail -n 1)}"
+    gpu="$(printf '%s' "${gpu//[\"\']/}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "$gpu" in
+      true|1|yes|y|on) hardware=local-gpu; echo "GPU_AVAILABLE=true: SEPEX with the host's GPUs" ;;
+      *) hardware=local-cpu; echo "GPU_AVAILABLE=false: SEPEX without GPUs" ;;
+    esac
+    docker compose --profile local --profile "$hardware" up -d
+    just register-sepex-processes-local
+    just setup-db
 
-# Stop the stack
+# Stop the stack, whichever SEPEX variant it started
 down-local:
-    docker compose -f docker-compose-local.yml down
+    docker compose --profile local --profile local-cpu down
+    docker compose --profile local --profile local-gpu down
 
-# Start hybrid stack (local DB only, cloud SEPEX + S3 via .env)
+# Start hybrid stack (local DB only, cloud SEPEX + S3), register the cloud processes, then set up its database
 up-hybrid: network
-    docker compose -f docker-compose-local.yml up -d db
+    docker compose --profile hybrid up -d
+    just register-sepex-processes-cloud
+    just setup-db
 
 # Stop hybrid stack
 down-hybrid:
-    docker compose -f docker-compose-local.yml down
+    docker compose --profile hybrid down
 
 # Wipe sepex only
 wipe-sepex: down-local
@@ -58,52 +73,60 @@ wipe confirm="":
     just down-local
     docker run --rm -v "$DATA":/data alpine rm -rf /data/db /data/minio /data/sepex
 
-# Re-register plugin definitions after editing a plugin yml (keeps db, bucket, job history)
-reload-plugins:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # SEPEX imports the mounted definitions ONCE, into its own data folder, and
-    # thereafter serves from that copy. Reimporting needs BOTH halves: the copy
-    # gone, and PLUGINS_LOAD_DIR set to say where to read from. Miss the second
-    # and it starts with no processes at all; miss the first and it exits fatal.
-    # sepex_local.env keeps the variable commented for exactly that reason, so
-    # this turns it on for the reload boot and puts it back afterwards.
-    ENV="{{justfile_directory()}}/sepex_local.env"
-    restore() { sed -i "s|^PLUGINS_LOAD_DIR=|# PLUGINS_LOAD_DIR=|" "$ENV"; }
-    trap restore EXIT
-    sed -i "s|^# PLUGINS_LOAD_DIR=|PLUGINS_LOAD_DIR=|" "$ENV"
-    docker stop sepex >/dev/null
-    docker run --rm -v {{justfile_directory()}}/.data/:/data alpine rm -rf /data/sepex/plugins
-    docker compose -f docker-compose-local.yml up -d sepex >/dev/null
-    for _ in $(seq 60); do
-      curl -sf localhost:5050/processes >/dev/null && break
-      sleep 2
-    done
-    curl -s localhost:5050/processes | grep -o '"id":"[^"]*"'
+# Register sepex/local/plugins with the SEPEX in .env (up-local runs this; rerun after editing a yml)
+register-sepex-processes-local:
+    uv run --script sepex/register_processes.py sepex/local/plugins
 
-# Load the network into the database and storage (truncates reach_network)
-seed:
-    cd orchestrator && uv run python scripts/seed.py
+# Register sepex/cloud/plugins with the SEPEX in .env (up-hybrid runs this; rerun after editing a yml)
+register-sepex-processes-cloud:
+    uv run --script sepex/register_processes.py sepex/cloud/plugins
 
-# Author intent for the seven-reach end-to-end scope
-author-intent:
-    cd orchestrator && uv run python scripts/author_intent.py
+# Seed the lakes an AOI config names into the database and workspace/lakes/
+seed-lakes aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/seed.py lakes {{aoi_config_path}}
 
-# Author intent for every reach in the network
-author-intent-all:
-    cd orchestrator && uv run python scripts/author_intent.py --scope all
+# Seed the coasts an AOI config names into the database and workspace/coasts/
+seed-coasts aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/seed.py coasts {{aoi_config_path}}
 
-# Author intent for the seven-reach end-to-end scope
+# Seed the network an AOI config names into the database and workspace/reach_network.parquet (its lakes and coasts must be seeded)
+seed-network aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/seed.py network {{aoi_config_path}}
+
+# Stage a local file as source data at <TWOD_FIM_SOURCE_DATA_PREFIX>/<name> (refuses to replace a different file)
+stage-source-data file name:
+    uv run --project orchestrator python orchestrator/scripts/stage_source_data.py {{file}} {{name}}
+
+# Wait for the database, then write its defaults (up-local and up-hybrid run this; after the first write it changes nothing)
+setup-db:
+    docker exec twodfim-db sh -c 'for i in $(seq 60); do pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" && exit 0; sleep 1; done; echo "database not accepting connections after 60s"; exit 1'
+    just author-defaults
+
+# Write desired_state_defaults from the system-wide settings (setup-db runs this; a change needs --yes and re-checks every reach)
+author-defaults *flags:
+    uv run --project orchestrator python orchestrator/scripts/author_intent.py defaults {{flags}}
+
+# Author intent for the network an AOI config names (needs the defaults setup-db writes)
+author-intent aoi_config_path:
+    uv run --project orchestrator python orchestrator/scripts/author_intent.py aoi {{aoi_config_path}}
+
+# Run the reconciliation loop until the network settles
 reconcile:
     cd orchestrator && uv run python scripts/reconcile.py
 
 
-# Publish everything materialized for flows2fim: scenarios db, library, AEP VRTs
-f2f:
-    cd orchestrator && uv run python scripts/export_f2f_db.py
-    cd orchestrator && uv run python scripts/export_f2f_library.py
-    cd orchestrator && uv run python scripts/create_aep_f2f_vrts.py
+# Publish an AOI's materialized reaches for flows2fim into a local folder: scenarios db, depth grid library, AEP VRTs
+f2f aoi_config_path out_dir:
+    uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios {{aoi_config_path}} {{out_dir}}
+    uv run --project orchestrator python orchestrator/scripts/f2f.py library {{out_dir}}
+    uv run --project orchestrator python orchestrator/scripts/f2f.py aep {{aoi_config_path}} {{out_dir}}
 
 
-# Seed the network and author the small end-to-end scope
-test-e2e: seed author-intent reconcile
+# Seed the test network and author the small end-to-end scope
+test-e2e:
+    just stage-source-data orchestrator/testdata/lulc.tif e2e/lulc.tif
+    just stage-source-data orchestrator/testdata/lulc_lookup.json e2e/lulc_lookup.json
+    just seed-lakes orchestrator/testdata/e2e.aoi_config.json
+    just seed-network orchestrator/testdata/e2e.aoi_config.json
+    just author-intent orchestrator/testdata/e2e.aoi_config.json
+    just reconcile

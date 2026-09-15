@@ -64,7 +64,7 @@ COMMENT ON COLUMN desired_state_defaults.revision IS 'DB owned. Changing any def
 
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS desired_state(
-    reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
+    reach_id text PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     -- Every field below is nullable on purpose: NULL = "use the default source",
     -- a value = authored intent (guide.md, Key Design Decisions). A column DEFAULT
     -- would erase that distinction by making an unauthored field look authored,

@@ -15,7 +15,7 @@ import pytest
 from recon import check, gap
 from recon.execution import JobStatus
 
-REACH, REVISION = 100, 7
+REACH, REVISION = "100", 7
 
 
 class RecordingExecution:

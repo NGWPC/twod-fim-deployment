@@ -56,7 +56,7 @@ SCENARIO_DIR = "nd=1.0E03/q=100"
 
 def sound_scenario(**kw) -> dict:
     obj, digest = identity.run_identity(RUN_INTENT)
-    return {"reach_id": 5, "identity": obj, "identity_hash": digest,
+    return {"reach_id": "5", "identity": obj, "identity_hash": digest,
             "model_id": "abcd1234_N10S10E10W10",
             "scenario_code": "ND1.0E03Q100",
             "properties": {"nominal_wse": 283.2}, **kw}
@@ -64,14 +64,14 @@ def sound_scenario(**kw) -> dict:
 
 def test_a_sound_scenario_manifest_is_adopted():
     m = sound_scenario()
-    assert identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR) == []
+    assert identity.verify_scenario_manifest(m, "5", m["identity_hash"], m["model_id"], SCENARIO_DIR) == []
 
 
 def test_a_scenario_from_another_model_is_refused():
     """The same reach and solver, but built against a model intent no longer
     asks for — its results are a previous intent's, not this one's."""
     m = sound_scenario()
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], "ffff0000_N10S10E10W10", SCENARIO_DIR)
+    problems = identity.verify_scenario_manifest(m, "5", m["identity_hash"], "ffff0000_N10S10E10W10", SCENARIO_DIR)
     assert any("model_id" in p for p in problems)
 
 
@@ -80,7 +80,7 @@ def test_a_scenario_in_the_wrong_folder_is_refused():
     whether misfiled or copied."""
     m = sound_scenario()
     problems = identity.verify_scenario_manifest(
-        m, 5, m["identity_hash"], m["model_id"], "nd=1.0E03/q=90")
+        m, "5", m["identity_hash"], m["model_id"], "nd=1.0E03/q=90")
     assert any("scenario_code" in p for p in problems)
 
 
@@ -90,7 +90,7 @@ def test_the_slope_half_is_checked_too():
     passed."""
     m = sound_scenario()
     problems = identity.verify_scenario_manifest(
-        m, 5, m["identity_hash"], m["model_id"], "nd=9.9E99/q=100")
+        m, "5", m["identity_hash"], m["model_id"], "nd=9.9E99/q=100")
     assert any("scenario_code" in p for p in problems)
 
 
@@ -100,21 +100,21 @@ def test_an_unrecognised_scenario_code_is_refused():
     cannot check."""
     m = sound_scenario(scenario_code="WHAT1234")
     problems = identity.verify_scenario_manifest(
-        m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
+        m, "5", m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("scenario_code" in p for p in problems)
 
 
 def test_a_drifted_run_recipe_is_caught_by_the_self_check():
     m = sound_scenario()
     m["identity"] = {**m["identity"], "solver": "sfincs"}
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
+    problems = identity.verify_scenario_manifest(m, "5", m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("drifted" in p for p in problems)
 
 
 def test_a_non_string_solver_is_refused():
     m = sound_scenario()
     m["identity"] = {**m["identity"], "solver": {"name": "lisflood", "version": "8.1.0"}}
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
+    problems = identity.verify_scenario_manifest(m, "5", m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("solver must be a string" in p for p in problems)
 
 
@@ -123,7 +123,7 @@ def test_an_unknown_run_identity_dimension_is_refused():
     Refusing is how it announces itself, instead of a silent network rebuild."""
     m = sound_scenario()
     m["identity"] = {**m["identity"], "gpu_model": "A100"}
-    problems = identity.verify_scenario_manifest(m, 5, m["identity_hash"], m["model_id"], SCENARIO_DIR)
+    problems = identity.verify_scenario_manifest(m, "5", m["identity_hash"], m["model_id"], SCENARIO_DIR)
     assert any("unknown" in p for p in problems)
 
 

@@ -25,7 +25,7 @@ BACKOFF_CAP_SECONDS = 3600
 # Halt threshold lives in settings so it can be tightened while developing.
 
 
-def start_check(reach_id: int, *, conn: psycopg.Connection | None = None) -> None:
+def start_check(reach_id: str, *, conn: psycopg.Connection | None = None) -> None:
     """Stamp last_checked_at at the moment a check begins.
 
     At the beginning, never at the end. A check asks for its own next check
@@ -50,7 +50,7 @@ def start_check(reach_id: int, *, conn: psycopg.Connection | None = None) -> Non
 
 
 def mark_in_flight(
-    reach_id: int,
+    reach_id: str,
     step: str,
     ref: str,
     revision: int,
@@ -81,7 +81,7 @@ def mark_in_flight(
 
 
 def clear_step(
-    reach_id: int, ref: str | None = None, *, conn: psycopg.Connection | None = None
+    reach_id: str, ref: str | None = None, *, conn: psycopg.Connection | None = None
 ) -> bool:
     """Clear the in-flight marker. Returns whether anything was cleared.
 
@@ -109,7 +109,7 @@ def clear_step(
 
 
 def wait_on(
-    reach_id: int, downstream_reach_id: int | None, *, conn: psycopg.Connection | None = None
+    reach_id: str, downstream_reach_id: str | None, *, conn: psycopg.Connection | None = None
 ) -> None:
     """Record which reach this one is waiting for; None clears it.
 
@@ -145,7 +145,7 @@ def _tail(error: str) -> str:
 
 
 def record_failure(
-    reach_id: int, error: str, *, conn: psycopg.Connection | None = None
+    reach_id: str, error: str, *, conn: psycopg.Connection | None = None
 ) -> db.Row:
     """Count a failure, back off, and park the reach if it has failed enough.
 
@@ -188,7 +188,7 @@ def record_failure(
     )[0]
 
 
-def clear_failures(reach_id: int, *, conn: psycopg.Connection | None = None) -> bool:
+def clear_failures(reach_id: str, *, conn: psycopg.Connection | None = None) -> bool:
     """Forget a failure streak because work has landed. Returns whether it had one.
 
     "Consecutive" is only true if something ends the run, and success is the only
@@ -213,7 +213,7 @@ def clear_failures(reach_id: int, *, conn: psycopg.Connection | None = None) -> 
         (reach_id,), conn=conn))
 
 
-def clear_halt(reach_id: int, *, conn: psycopg.Connection | None = None) -> None:
+def clear_halt(reach_id: str, *, conn: psycopg.Connection | None = None) -> None:
     """Un-park a reach, after a person has dealt with whatever was wrong.
 
     Resets the failure count as well: leaving it in place would halt the reach

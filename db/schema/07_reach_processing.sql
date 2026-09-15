@@ -16,7 +16,7 @@
 -- that removing a materialization removes the claim in the same statement.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS reach_processing(
-    reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
+    reach_id text PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     -- Failed too many times; parked until a person clears it. This is the ONLY
     -- status stored, because it is the only one that is not derivable and the
     -- only one that changes what the loop does — a halted reach stops being
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS reach_processing(
     -- do not exist yet. Lets a viewer draw the wait graph without recomputing
     -- the gap. Such a reach stays a check candidate: the downstream reach asks
     -- for a check here when it finishes, and the sweep finds it regardless.
-    blocked_on_reach_id bigint REFERENCES reach_network(reach_id) ON DELETE SET NULL,
+    blocked_on_reach_id text REFERENCES reach_network(reach_id) ON DELETE SET NULL,
     -- ------------------------------------------------------------------
     -- The job in flight (NULL when none is). A check submits a job, records it
     -- here, and ends — it does NOT wait. A later check reads
@@ -126,7 +126,7 @@ COMMENT ON COLUMN reach_processing.next_retry_at IS 'Do not check before this ti
 -- row opened when a step started.
 CREATE TABLE IF NOT EXISTS reach_activity(
     activity_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    reach_id bigint NOT NULL REFERENCES reach_network(reach_id) ON DELETE CASCADE,
+    reach_id text NOT NULL REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     started_at timestamptz NOT NULL DEFAULT now(),
     ended_at timestamptz,
     action text NOT NULL CONSTRAINT reach_activity_action_chk CHECK (action IN ('check', 'build_model', 'run_nd_scenarios',

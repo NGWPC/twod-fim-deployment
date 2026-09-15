@@ -25,7 +25,7 @@
 -- gap, or to construct the work that closes it. Anything else belongs in the
 -- manifest, which is the full record by design.
 CREATE TABLE IF NOT EXISTS materialized_models(
-    reach_id bigint PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
+    reach_id text PRIMARY KEY REFERENCES reach_network(reach_id) ON DELETE CASCADE,
     -- Compared against the identity the reconciler predicts from effective
     -- intent. That comparison IS the model gap: differ, or absent, and a build
     -- is owed. No revision bookkeeping needed for identity-affecting changes —

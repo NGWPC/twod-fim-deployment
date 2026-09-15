@@ -10,7 +10,7 @@ info:
 
 host:
   type: docker
-  image: build_model:local
+  image: ghcr.io/ngwpc/twod-fim-jobs/build_model:dev
 
 command: []
 
@@ -19,13 +19,7 @@ config:
     cpus: 1
     memory: 2048
   envVars:
-    - BUILDMODEL_AWS_ENDPOINT_URL
-    - BUILDMODEL_AWS_ACCESS_KEY_ID
-    - BUILDMODEL_AWS_SECRET_ACCESS_KEY
-    - BUILDMODEL_AWS_DEFAULT_REGION
-    - BUILDMODEL_AWS_S3_ENDPOINT
-    - BUILDMODEL_AWS_VIRTUAL_HOSTING
-    - BUILDMODEL_AWS_HTTPS
+    - BUILDMODEL_AWS_REQUEST_PAYER
 
 inputs:
   - id: reach_id

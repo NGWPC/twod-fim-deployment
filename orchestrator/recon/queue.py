@@ -76,7 +76,7 @@ def due_reaches(
     return db.query(sql, (limit,) if limit is not None else None, conn=conn)
 
 
-def request_check(reach_id: int, *, conn: psycopg.Connection | None = None) -> None:
+def request_check(reach_id: str, *, conn: psycopg.Connection | None = None) -> None:
     """Ask for a reach to be checked soon.
 
     One write, and requests collapse: several things asking before the next
@@ -99,7 +99,7 @@ def request_check(reach_id: int, *, conn: psycopg.Connection | None = None) -> N
 
 
 def request_check_upstream(
-    reach_id: int, *, conn: psycopg.Connection | None = None
+    reach_id: str, *, conn: psycopg.Connection | None = None
 ) -> list[int]:
     """Ask for a check on every reach that flows into this one.
 

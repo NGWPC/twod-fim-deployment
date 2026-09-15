@@ -18,7 +18,7 @@ import pytest
 
 from recon import check, scenarios, storage
 
-UPSTREAM, DOWNSTREAM = 100, 200
+UPSTREAM, DOWNSTREAM = "100", "200"
 OWN_MODEL = "5f14368c_N350S296E449W355"
 DS_MODEL = "aa119e0c_N120S140E200W180"
 RUN_HASH = "af1436c4"
