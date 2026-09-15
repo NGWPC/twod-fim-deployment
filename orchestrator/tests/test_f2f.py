@@ -5,10 +5,12 @@ to end where the export does, and a forecast has to leave out what it cannot
 forecast rather than stop. The full run is exercised against a stack.
 """
 
+import sqlite3
 import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -25,9 +27,21 @@ def test_library_grids_are_named_by_integral_flow():
     assert f2f.library_grid_name(150.0) == "f_150.tif"
 
 
-def test_the_library_path_of_a_scenario():
+def test_the_library_name_of_a_scenario():
     source = {"reach_id": 7, "boundary_condition": "kwse", "ds_wse": 12.5, "us_flow": 40.0}
-    assert f2f.library_path(Path("/lib"), source) == Path("/lib/7/z_12_5/f_40.tif")
+    assert f2f.library_name(source) == "library/7/z_12_5/f_40.tif"
+
+
+def test_an_out_dir_in_storage_is_worked_on_locally_and_opened_through_vsis3(tmp_path):
+    out = f2f.OutDir("s3://bucket/exports/huc/", tmp_path)
+    assert out.local("scenarios.db") == tmp_path / "scenarios.db"
+    assert out.address("scenarios.db") == "s3://bucket/exports/huc/scenarios.db"
+    assert out.gdal_path("library") == "/vsis3/bucket/exports/huc/library"
+
+
+def test_a_local_out_dir_is_its_own_working_folder(tmp_path):
+    out = f2f.OutDir(str(tmp_path / "out"), tmp_path / "unused")
+    assert out.local("scenarios.db") == tmp_path / "out" / "scenarios.db"
 
 
 def test_a_link_out_of_the_export_becomes_an_outlet():
@@ -45,13 +59,40 @@ def test_start_reaches_are_the_reaches_with_nowhere_to_drain_at_normal_depth(tmp
     assert path.read_text().splitlines() == ["reach_id,control_stage", "2,nd", "3,nd"]
 
 
-def test_flows2fim_numbers_are_kept_across_exports(tmp_path):
+def test_flows2fim_numbers_follow_reach_id_order():
+    assert f2f.flows2fim_numbers({"20", "10_2", "10_1"}) == {"10_1": 1, "10_2": 2, "20": 3}
+
+
+def test_an_export_goes_into_an_empty_out_dir(tmp_path):
+    out = f2f.OutDir(str(tmp_path / "out"), tmp_path / "unused")
+    assert not out.holds()
+    (tmp_path / "out").mkdir()
+    assert not out.holds()
+    (tmp_path / "out" / "scenarios.db").touch()
+    assert out.holds()
+    with pytest.raises(SystemExit, match="not empty"):
+        f2f.export_scenarios(None, out)
+
+
+def test_an_interrupted_download_is_not_taken_for_a_whole_grid(tmp_path):
+    destination = tmp_path / "library" / "1" / "z_nd" / "f_5.tif"
+    destination.parent.mkdir(parents=True)
+    destination.with_suffix(".tif.part").write_bytes(b"half")
+
+    class S3:
+        def download_file(self, bucket, key, path):
+            Path(path).write_bytes(b"whole")
+
+    assert f2f.download_grid(S3(), {"depth_grid": "s3://b/k.tif"}, destination) == "copied"
+    assert destination.read_bytes() == b"whole"
+    assert f2f.download_grid(S3(), {"depth_grid": "s3://b/k.tif"}, destination) == "present"
+
+
+def test_an_export_of_every_materialized_reach_names_no_aoi_config(tmp_path):
     path = tmp_path / "scenarios.db"
-    first = f2f.flows2fim_numbers(path, {"20", "10_2"})
-    assert first == {"10_2": 1, "20": 2}
-    f2f.write_scenarios_db(path, [], [], [], first, {"_location": "aoi.json"})
-    second = f2f.flows2fim_numbers(path, {"20", "10_1", "10_2"})
-    assert second == {"10_2": 1, "20": 2, "10_1": 3}
+    f2f.write_scenarios_db(path, [], [], [], {}, None)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT aoi_config FROM export_provenance").fetchone() == (None,)
 
 
 def test_a_forecast_leaves_out_reaches_without_flows():
@@ -76,8 +117,33 @@ def test_vrt_sources_become_relative_to_the_vrt(tmp_path):
         "<SimpleSource><SourceFilename>/out/library/7/z_nd/f_40.tif</SourceFilename></SimpleSource>"
         "</VRTRasterBand></VRTDataset>"
     )
-    f2f.post_process_vrt(vrt, f2f.Flows2Fim(f2f.IMAGE, out))
+    f2f.post_process_vrt(vrt, f2f.OutDir(str(out), tmp_path / "unused"))
     text = vrt.read_text()
     assert '<SourceFilename relativeToVRT="1">../../library/7/z_nd/f_40.tif</SourceFilename>' in text
     assert "<PixelFunctionType>max</PixelFunctionType>" in text
     assert 'subClass="VRTDerivedRasterBand"' in text
+
+
+def test_vrt_sources_in_storage_stay_vsis3_paths(tmp_path):
+    out = f2f.OutDir("s3://bucket/exports/huc", tmp_path)
+    vrt = out.local("aep/f5year/depth.vrt")
+    vrt.parent.mkdir(parents=True)
+    source = "/vsis3/bucket/exports/huc/library/7/z_nd/f_40.tif"
+    vrt.write_text(
+        '<VRTDataset rasterXSize="1" rasterYSize="1"><VRTRasterBand dataType="Float32" band="1">'
+        f"<SimpleSource><SourceFilename>{source}</SourceFilename></SimpleSource>"
+        "</VRTRasterBand></VRTDataset>"
+    )
+    f2f.post_process_vrt(vrt, out)
+    text = vrt.read_text()
+    assert f"<SourceFilename>{source}</SourceFilename>" in text
+    assert "<PixelFunctionType>max</PixelFunctionType>" in text
+
+
+def test_an_out_dir_inside_the_storage_or_source_data_root_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(f2f.settings, "twod_fim_data_root_prefix", "s3://bucket/version=1")
+    monkeypatch.setattr(f2f.settings, "twod_fim_source_data_prefix", "s3://bucket/source_data")
+    for location in ("s3://bucket/version=1", "s3://bucket/version=1/f2f", "s3://bucket/source_data/x"):
+        with pytest.raises(SystemExit):
+            f2f.OutDir(location, tmp_path)
+    assert f2f.OutDir("s3://bucket/version=10/f2f", tmp_path).in_storage

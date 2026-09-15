@@ -24,14 +24,16 @@ Row = dict[str, Any]
 
 
 @contextmanager
-def connect(dsn: str | None = None):
+def connect(dsn: str | None = None, *, read_only: bool = False):
     """Open one connection to the twodfim database.
 
-    Commits on a clean exit, rolls back if the block raises.
+    Commits on a clean exit, rolls back if the block raises. `read_only` has
+    the database refuse any write made through it.
     """
     with psycopg.connect(
         dsn or settings.pipeline_db_connection_string, row_factory=dict_row
     ) as conn:
+        conn.read_only = read_only
         yield conn
 
 

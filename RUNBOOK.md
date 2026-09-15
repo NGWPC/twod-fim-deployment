@@ -14,7 +14,7 @@ are listed at the end.
 | `<aoi-name>`         | The AOI's name, e.g. `huc6_120401`, for its file names and record folder                             |
 | `<workdir>`          | A local working folder for modifying the network                                                     |
 | `<aoi-config-path>`  | The AOI config the commands are given (step 3), a local path or an `s3://` address                   |
-| `<out-dir>`          | A local folder the flows2fim outputs are written to (step 8)                                         |
+| `<out-dir>`          | A new, empty local folder or `s3://` address the flows2fim outputs are written to (step 8)           |
 | `<sepex-url>`        | SEPEX's address (`SEPEX_URL` in `.env`)                                                              |
 
 ## Where things live
@@ -224,14 +224,16 @@ aws s3 ls <storage-root>/results/ --recursive | wc -l
 twod-fim outputs and flows2fim are not yet directly compatible, so the outputs have to be adapted for flows2fim. The following command does that, and also creates sample AEP grids for the AOI.
 
 ```bash
-just f2f <aoi-config-path> <out-dir>
+just f2f <out-dir> <aoi-config-path>
 ```
+
+`<out-dir>` is a local folder or an `s3://` address outside the storage root and the source data root, f2f only reads the database and storage; `<out-dir>` is the one thing it writes. Each export needs a new, empty out-dir, for example `s3://<exports-bucket>/<aoi-name>/<date>`: it is a snapshot of what is materialized when it runs, so exporting again after more reaches are materialized is a new out-dir too. Leave out `<aoi-config-path>` to export every materialized reach in the database, forecast with the system-wide flow statistics.
 
 It runs three steps, each also a command of `orchestrator/scripts/f2f.py`:
 
 - **`scenarios`** writes `<out-dir>/scenarios.db`, the tables flows2fim reads, for the AOI's materialized reaches, and `<out-dir>/start_reaches.csv`, the reaches flows2fim starts from. The report counts reaches not materialized yet. Start reaches are the ones with nowhere left to drain in the export, each at normal depth: true terminals, and, as a fallback, reaches whose downstream neighbour isn't exported.
-- **`library`** downloads the depth grids `scenarios.db` names to `<out-dir>/library/`. Running it again downloads only what changed; grids no longer named are reported, and removed with `--prune`.
-- **`aep`** writes `<out-dir>/aep/<column>/`: `flows.csv`, flows2fim's `controls.csv` (started from `start_reaches.csv`), and `depth.vrt`, for each AEP column. Reaches without a flow in a column are left out of that forecast and counted. flows2fim runs in Docker.
+- **`library`** copies the depth grids `scenarios.db` names to `<out-dir>/library/`. Running it again after an interruption skips grids already copied. A grid storage does not hold is reported, and its scenario gets `map_exists = 0`, so flows2fim does not choose it.
+- **`aep`** writes `<out-dir>/aep/<column>/`: `flows.csv`, flows2fim's `controls.csv` (started from `start_reaches.csv`), and `depth.vrt`, for each AEP column. Reaches without a flow in a column are left out of that forecast and counted. flows2fim runs in Docker; with an `s3://` out-dir it reads the library from storage, and the VRT names its grids by `/vsis3/` path.
 
 Several AOIs are several out-dirs. See `orchestrator/README.md`, section 5, for why the export follows the database rather than storage.
 

@@ -147,23 +147,46 @@ source, a local path or an `s3://` address:
 
 ### 5. Publish for flows2fim
 
-One command per AOI, into a local folder:
+One command per AOI, into a local folder or an `s3://` address:
 
 ```bash
-just f2f orchestrator/testdata/e2e.aoi_config.json <out-dir>
+just f2f <out-dir> orchestrator/testdata/e2e.aoi_config.json
 ```
+
+Without an AOI config (`just f2f <out-dir>`) it exports every materialized reach
+in the database's network, forecast with the system-wide flow statistics.
 
 It runs the three steps of `scripts/f2f.py` in order, each also runnable on its own:
 
 ```bash
-uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios <aoi-config-path> <out-dir>
-uv run --project orchestrator python orchestrator/scripts/f2f.py library <out-dir> [--prune]
-uv run --project orchestrator python orchestrator/scripts/f2f.py aep <aoi-config-path> <out-dir> [--image IMAGE]
+uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios [aoi-config-path] <out-dir>
+uv run --project orchestrator python orchestrator/scripts/f2f.py library <out-dir>
+uv run --project orchestrator python orchestrator/scripts/f2f.py aep [aoi-config-path] <out-dir> [--image IMAGE]
 ```
 
-- `scenarios` writes `<out-dir>/scenarios.db` for the reaches of the AOI config's `network` that are materialized, and `<out-dir>/start_reaches.csv`, the reaches controls start from
-- `library` downloads the depth grids it names from storage into `<out-dir>/library/`
+- `scenarios` writes `<out-dir>/scenarios.db` for the reaches of the AOI config's `network` (or of the database's network) that are materialized, and `<out-dir>/start_reaches.csv`, the reaches controls start from
+- `library` copies the depth grids it names from the results tree into `<out-dir>/library/`
 - `aep` forecasts each of the AOI's AEP columns (`flow_aep_columns`, from its `flow_statistics`, falling back to the settings) and runs flows2fim `controls` and `fim -fmt VRT` into `<out-dir>/aep/<column>/`
+
+Each export goes into a new, empty out-dir, and `scenarios` stops otherwise. An
+export is a snapshot of what is materialized when it runs; exporting again, for
+more reaches or other ones, is a new out-dir. Running `library` or `aep` again
+within one export is fine: `library` skips grids an interrupted run already
+copied. A depth grid a materialized scenario names but storage does not hold
+gets `map_exists = 0` in `scenarios.db`, which flows2fim `controls` honours by
+not choosing that scenario.
+
+f2f is read only. It reads the database through a connection that refuses
+writes, and storage by reading and copying from it; the only thing it writes is
+`<out-dir>`, which it refuses inside the storage root or the source data root.
+
+sqlite and flows2fim only work on local files, so when `<out-dir>` is in storage
+every file is written in a temporary folder and uploaded from there. The library
+is the exception: it is copied object to object, and flows2fim reads it where
+it is through GDAL's `/vsis3/`, with this
+machine's AWS credentials handed to the container. A VRT in storage names its
+grids by `/vsis3/` path, since S3 keys do not resolve `../`; a local one names
+them relative to itself.
 
 The first step reads `materialized_nd_runs` and `materialized_kwse_runs`, not
 the results tree, and that is the whole point of the split. A reach's adopted
@@ -183,8 +206,8 @@ flows2fim (0.5.0) parses reach ids as integers, and reach ids here are text: a
 reach `modify_network` split out of one flowpath is `<flowpath id>_<n>`. So
 everything flows2fim reads (`scenarios`, `network`, `start_reaches.csv`,
 `flows.csv`, `library/<n>/`) names a reach by a number, and the `reach_ids`
-table in `scenarios.db` maps each number to its reach id. A reach keeps its
-number across exports into the same out-dir, so the library does not move.
+table in `scenarios.db` maps each number to its reach id. The numbers belong to
+one export, 1, 2, ... in reach id order, and go once flows2fim takes text ids.
 Every piece of a split flowpath is forecast with the flowpath's flows.
 
 Controls are traced upstream from the reaches with nowhere left to drain in
