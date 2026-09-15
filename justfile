@@ -115,8 +115,9 @@ reconcile:
     cd orchestrator && uv run python scripts/reconcile.py
 
 
-# Publish an AOI's materialized reaches for flows2fim into a local folder: scenarios db, depth grid library, AEP VRTs
-f2f aoi_config_path out_dir:
+# Publish materialized reaches for flows2fim into a local folder or s3:// address: scenarios db, depth grid library, AEP VRTs
+# (an AOI's reaches, or every materialized reach when no AOI config is given)
+f2f-snapshot out_dir aoi_config_path="":
     uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios {{aoi_config_path}} {{out_dir}}
     uv run --project orchestrator python orchestrator/scripts/f2f.py library {{out_dir}}
     uv run --project orchestrator python orchestrator/scripts/f2f.py aep {{aoi_config_path}} {{out_dir}}

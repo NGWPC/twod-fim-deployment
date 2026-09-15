@@ -37,7 +37,7 @@ Keys:
   q_bound_factors  optional [lower, upper]: pull the discharge bounds inward,
                    to keep a test run short
 
-  read by f2f.py
+  read by f2f.py, which also runs without an AOI config
   network          only its reaches are exported
   flow_statistics, flow_reach_id_column
                    as above
@@ -104,12 +104,16 @@ NETWORK_REACH_ID = "reach_id"
 # --- command line --------------------------------------------------------
 
 
-def add_argument(parser: argparse.ArgumentParser) -> None:
-    """The one argument every AOI command takes, so it reads the same everywhere."""
+def add_argument(parser: argparse.ArgumentParser, optional: str | None = None) -> None:
+    """The one argument every AOI command takes, so it reads the same everywhere.
+
+    `optional`, for a command that also runs without one, says what it does then.
+    """
     parser.add_argument(
         "aoi_config_path",
         metavar="aoi-config-path",
-        help="the AOI config to read: a local path or an s3:// address",
+        nargs="?" if optional else None,
+        help=f"the AOI config to read: a local path or an s3:// address{optional or ''}",
     )
 
 
