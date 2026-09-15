@@ -26,8 +26,9 @@ Two representation details are load-bearing, learned from the job's own types:
 
 import hashlib
 import json
+import math
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from shapely import wkb as shapely_wkb
 
@@ -112,7 +113,57 @@ def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     return identity, hash_dict(identity)
 
 
-def verify_manifest(manifest: Mapping[str, Any], reach_id: str, model_id: str) -> list[str]:
+def snap_bbox(bbox: Sequence[float], grid_resolution: float) -> list[float]:
+    """An authored domain bbox snapped outward to the grid, as the job snaps one.
+
+    Mirrors the snapping in the jobs repo's build_model_domain: mins floor, maxes
+    ceil, so the snapped bbox always contains what was authored. The database
+    accepts any values, so this is what makes an authored domain one the job
+    can build and the loop can predict; everything downstream — the payload,
+    the domain code, the manifest comparison — uses the snapped bbox, never the
+    raw one.
+    """
+    resolution = float(grid_resolution)
+    xmin, ymin, xmax, ymax = (float(v) for v in bbox)
+    return [
+        math.floor(xmin / resolution) * resolution,
+        math.floor(ymin / resolution) * resolution,
+        math.ceil(xmax / resolution) * resolution,
+        math.ceil(ymax / resolution) * resolution,
+    ]
+
+
+def domain_code(bbox: Sequence[float], geom_wkb: bytes, grid_resolution: float) -> str:
+    """The realization code a snapped domain bbox (snap_bbox) implies for this reach.
+
+    Mirrors the jobs repo's build_model_domain + Domain.offset_str, float
+    operation for float operation, so the code comes out as the job writes it:
+    the anchor is the reach centroid snapped DOWN to the grid, and each offset is
+    the distance from the anchor to one bbox edge in grid cells, truncated by
+    int() as offset_str does. A computed domain cannot be predicted this way —
+    its bbox depends on what the job derives — but an authored one is exactly
+    the bbox the job is handed, which is what makes this address knowable.
+
+    The centroid is taken from the geometry as the database holds it, the same
+    bytes reach_geom_hash reads, so this carries the same assumption identity
+    prediction already does: that the job reads the reach in that CRS.
+    """
+    resolution = float(grid_resolution)
+    centroid = shapely_wkb.loads(bytes(geom_wkb)).centroid
+    ax = math.floor(centroid.x / resolution) * resolution
+    ay = math.floor(centroid.y / resolution) * resolution
+    xmin, ymin, xmax, ymax = (float(v) for v in bbox)
+    offsets = ((ymax - ay) / resolution, (ay - ymin) / resolution,
+               (xmax - ax) / resolution, (ax - xmin) / resolution)
+    return "N{}S{}E{}W{}".format(*[int(i) for i in offsets])
+
+
+def verify_manifest(
+    manifest: Mapping[str, Any],
+    reach_id: str,
+    model_id: str,
+    authored_domain: Sequence[float] | None = None,
+) -> list[str]:
     """Why this manifest should NOT be adopted; empty list means it is sound.
 
     Checks are about trust, not correctness of the model itself:
@@ -120,15 +171,27 @@ def verify_manifest(manifest: Mapping[str, Any], reach_id: str, model_id: str) -
       - its identity object hashes to the identity_hash it claims (self-check;
         this is what catches drift between this copy and the job's recipe)
       - its identity carries exactly the keys this copy knows
+      - when a domain is authored, the domain it was built over IS that bbox,
+        as snap_bbox snaps it (callers pass the snapped bbox)
 
     `model_id` is the folder the manifest was found in, and BOTH halves of it
     are checked: the identity hash, and the realization code after it. Trusting
     the folder name for the realization is what let a model manifest be adopted
     under a domain code that was not its own — the same misfiling a scenario
     manifest is refused for.
+
+    The authored domain check is what the address alone cannot give. The domain
+    code is offsets from an anchor, so it names a bbox only relative to where
+    the job put that anchor; the manifest records the bbox itself, and that is
+    what intent is compared with.
     """
     problems = []
     folder_hash, _, _ = model_id.partition("_")
+    if authored_domain is not None:
+        built = (manifest.get("domain") or {}).get("bbox")
+        wanted = [float(v) for v in authored_domain]
+        if not isinstance(built, list) or [float(v) for v in built] != wanted:
+            problems.append(f"manifest domain bbox {built} != authored model_domain {wanted}")
     if manifest.get("reach_id") != reach_id:
         problems.append(f"manifest reach_id {manifest.get('reach_id')} != {reach_id}")
     claimed = manifest.get("identity_hash", "")

@@ -242,7 +242,7 @@ def _build_model_payload(reach_id: str) -> dict:
     if wanted is None:
         raise RuntimeError(f"no effective intent for reach {reach_id}")
     upstream = _upstream(reach_id)
-    return {
+    payload = {
         "reach_id": reach_id,
         "reach_network_path": storage.reach_network_path(),
         "upstream_reach_ids": upstream["reach_ids"],
@@ -264,6 +264,15 @@ def _build_model_payload(reach_id: str) -> dict:
         # number would override that estimate with a worse one.
         "other_geometries": _model_geometries(reach_id, wanted),
     }
+    # Sent only when authored. Absent, the job computes the domain from the
+    # reach and other_geometries and the loop accepts what it computes; present,
+    # the job builds exactly this bbox, and observe looks for it at the address
+    # the bbox implies. Authored values need not be on the grid, so it is
+    # snapped outward first — the same snap observe applies before predicting
+    # the address, which is what keeps the two in agreement.
+    if wanted["model_domain"] is not None:
+        payload["domain"] = identity.snap_bbox(wanted["model_domain"], wanted["grid_resolution"])
+    return payload
 
 
 def _nd_boundary(reach_id: str, wanted: dict) -> dict:

@@ -55,6 +55,11 @@ _EFFECTIVE = """
         -- adaptive sweep chooses, and the loop reads the result back from
         -- materialized_nd_runs.
         d.q_set,
+        -- Authored domain bbox [xmin, ymin, xmax, ymax]. Per reach only, no
+        -- fallback: NULL means the job computes the domain and whatever it
+        -- computes is accepted. A value is sent to the job and becomes part of
+        -- the model check, because it makes the domain code predictable.
+        d.model_domain,
         -- The resolution the library must achieve, read back by
         -- observe_nd_runs. Still not sent to the job: it carries its own
         -- defaults, and the loop's business is judging the result rather than

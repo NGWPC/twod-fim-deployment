@@ -156,6 +156,22 @@ inputs:
     minOccurs: 0
     maxOccurs: 99
 
+  - id: domain
+    title: domain
+    description: >-
+      Authored model domain bbox [xmin, ymin, xmax, ymax] in epsg_code CRS
+      units, already snapped to the grid_resolution grid. Used exactly as given;
+      other_geometries and domain_buffer then do not affect the domain. Omit to
+      let the job compute the domain. Sourced from desired_state.model_domain,
+      snapped by the loop.
+    input:
+      literalDataDomain:
+        dataType: value
+        valueDefinition:
+          anyValue: true
+    minOccurs: 0
+    maxOccurs: 4
+
   - id: ds_of_lake
     title: ds_of_lake
     description: >-
