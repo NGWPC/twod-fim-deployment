@@ -10,6 +10,9 @@ Three steps, each a command, run in order by `just f2f`:
             knows each reach by
             <out-dir>/start_reaches.csv: the reaches flows2fim controls start
             from, and the stage each starts at
+            <out-dir>/models.gpkg: the `domains`, `inflows` and `reaches`
+            layers of the models those reaches' runs were made with, each
+            row carrying its reach_id
   library   <out-dir>
             <out-dir>/library/<number>/z_<stage>/f_<flow>.tif: the depth
             grids scenarios.db names, copied from the results tree
@@ -68,6 +71,7 @@ Usage:
 """
 
 import argparse
+import io
 import os
 import shutil
 import sqlite3
@@ -81,6 +85,7 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 import boto3
+import geopandas as gpd
 import pandas as pd
 from botocore.exceptions import ClientError
 
@@ -91,6 +96,9 @@ from recon.config import settings
 
 SCENARIOS_DB = "scenarios.db"
 START_REACHES = "start_reaches.csv"
+MODELS_GPKG = "models.gpkg"
+# Each layer of models.gpkg, and the model manifest asset it is read from.
+MODEL_LAYERS = {"domains": "domain", "inflows": "inflow_line", "reaches": "centerline"}
 REACH_IDS = "reach_ids"
 LIBRARY_DIR = "library"
 AEP_DIR = "aep"
@@ -413,6 +421,89 @@ def reaches_in_scope(conn, aoi: dict | None) -> tuple[set[str], str]:
     return aoi_config.network_reach_ids(aoi), "this AOI's network"
 
 
+def run_models(conn, reach_ids: set[str]) -> dict[str, str]:
+    """The model each of these reaches' runs were made with: reach id -> model_id.
+
+    Read from the run tables rather than materialized_models, because the maps
+    come from the runs, and a model rebuilt since would not be the one they
+    were made with. A reach's nd and kwse runs share a model; nd is read first.
+    """
+    return {
+        r["reach_id"]: r["model_id"]
+        for r in db.query(
+            """
+            SELECT DISTINCT ON (reach_id) reach_id, model_id
+            FROM (
+                SELECT reach_id, model_id, 0 AS preference FROM materialized_nd_runs WHERE reach_id = ANY(%(ids)s)
+                UNION ALL
+                SELECT reach_id, model_id, 1 FROM materialized_kwse_runs WHERE reach_id = ANY(%(ids)s)
+            ) runs
+            ORDER BY reach_id, preference
+            """,
+            {"ids": sorted(reach_ids)},
+            conn=conn,
+        )
+    }
+
+
+def model_asset_address(manifest_address: str, href: str) -> str:
+    """Where a manifest's asset is: its href when that is an s3:// address, else that file beside the manifest."""
+    if href.startswith("s3://"):
+        return href
+    return f"{manifest_address.rsplit('/', 1)[0]}/{PurePosixPath(href).name}"
+
+
+def read_model_layers(s3, reach_id: str, model_id: str) -> dict[str, gpd.GeoDataFrame] | None:
+    """One model's domain, inflow line and centerline, each tagged with the reach id; None if any is not in storage."""
+    manifest_address = storage.model_artifact_path(reach_id, model_id)
+    manifest = storage.read_json(manifest_address)
+    if manifest is None:
+        return None
+    layers = {}
+    for layer, asset in MODEL_LAYERS.items():
+        bucket, key = storage.parse_s3_path(model_asset_address(manifest_address, manifest["assets"][asset]["href"]))
+        try:
+            body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        except ClientError as exc:
+            if is_missing(exc):
+                return None
+            raise
+        layers[layer] = tag_reach(gpd.read_file(io.BytesIO(body)), reach_id)
+    return layers
+
+
+def tag_reach(frame: gpd.GeoDataFrame, reach_id: str) -> gpd.GeoDataFrame:
+    """The frame with reach_id as its first column, replacing any reach_id the file carried."""
+    frame = frame.drop(columns=["reach_id"], errors="ignore")
+    frame.insert(0, "reach_id", reach_id)
+    return frame
+
+
+def write_model_layers(path: Path, models: list[dict[str, gpd.GeoDataFrame]]) -> dict[str, int]:
+    """Write every model's layers into one GeoPackage, a layer each; the row count of each layer."""
+    counts = {}
+    for layer in MODEL_LAYERS:
+        frames = [model[layer] for model in models]
+        if not frames:
+            continue
+        crs = frames[0].crs
+        merged = pd.concat([f if f.crs == crs else f.to_crs(crs) for f in frames], ignore_index=True)
+        gpd.GeoDataFrame(merged, geometry="geometry", crs=crs).to_file(path, layer=layer, driver="GPKG")
+        counts[layer] = len(merged)
+    return counts
+
+
+def export_model_layers(models: dict[str, str], path: Path) -> tuple[dict[str, int], list[str]]:
+    """models.gpkg for these reaches' models; the row count of each layer, and the reaches whose model was not found."""
+    s3 = storage.get_s3_client()
+    reach_ids = sorted(models)
+    # Concurrent, because it is four reads per reach.
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        read = list(pool.map(lambda r: read_model_layers(s3, r, models[r]), reach_ids))
+    missing = [r for r, layers in zip(reach_ids, read) if layers is None]
+    return write_model_layers(path, [layers for layers in read if layers is not None]), missing
+
+
 def export_scenarios(aoi: dict | None, out: OutDir) -> None:
     if out.holds():
         sys.exit(f"{out.location} is not empty; each export goes into a new, empty out-dir")
@@ -433,6 +524,7 @@ def export_scenarios(aoi: dict | None, out: OutDir) -> None:
                 conn=conn,
             )
         ]
+        models = run_models(conn, exported)
     links, cut = network_rows(links, exported)
 
     path = out.local(SCENARIOS_DB)
@@ -440,7 +532,8 @@ def export_scenarios(aoi: dict | None, out: OutDir) -> None:
     described = None if aoi is None else aoi_config.describe(aoi)
     write_scenarios_db(path, scenario_rows, nd_sources + kwse_sources, links, numbers, described)
     starts = write_start_reaches(out.local(START_REACHES), links, numbers)
-    out.publish(SCENARIOS_DB, START_REACHES)
+    layer_counts, models_missing = export_model_layers(models, out.local(MODELS_GPKG))
+    out.publish(SCENARIOS_DB, START_REACHES, *([MODELS_GPKG] if layer_counts else []))
 
     print(f"\nexported        {len(exported)} of {len(own)} reach(es) in {scope}")
     if len(own) > len(exported):
@@ -452,8 +545,17 @@ def export_scenarios(aoi: dict | None, out: OutDir) -> None:
         print(f"  {reach_id} -> {downstream_id}")
     if len(cut) > 20:
         print(f"  ... and {len(cut) - 20} more")
+    print(f"models          {', '.join(f'{layer} {n}' for layer, n in layer_counts.items()) or 'none found'}")
+    if models_missing:
+        print(f"  not found     {len(models_missing)} reach(es)' model manifest or layers, left out of {MODELS_GPKG}:")
+        for reach_id in models_missing[:10]:
+            print(f"  {storage.model_artifact_path(reach_id, models[reach_id])}")
+        if len(models_missing) > 10:
+            print(f"  ... and {len(models_missing) - 10} more")
     print(f"wrote           {out.address(SCENARIOS_DB)}")
     print(f"                {out.address(START_REACHES)}")
+    if layer_counts:
+        print(f"                {out.address(MODELS_GPKG)}")
 
 
 # --- library -------------------------------------------------------------

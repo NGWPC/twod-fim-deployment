@@ -9,6 +9,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import geopandas as gpd
 import pandas as pd
 import pytest
 
@@ -147,3 +148,32 @@ def test_an_out_dir_inside_the_storage_or_source_data_root_is_refused(tmp_path, 
         with pytest.raises(SystemExit):
             f2f.OutDir(location, tmp_path)
     assert f2f.OutDir("s3://bucket/version=10/f2f", tmp_path).in_storage
+
+
+def test_a_model_asset_is_its_href_or_the_file_beside_the_manifest():
+    manifest = "s3://b/root/models/reach=1/abc_N1S1E1W1/model_manifest.json"
+    assert f2f.model_asset_address(manifest, "s3://b/elsewhere/domain.geojson") == "s3://b/elsewhere/domain.geojson"
+    assert f2f.model_asset_address(manifest, "tests/x/domain.geojson") == "s3://b/root/models/reach=1/abc_N1S1E1W1/domain.geojson"
+
+
+def test_model_layers_are_one_layer_each_with_the_reach_id_first(tmp_path):
+    from shapely.geometry import LineString, box
+
+    def model(reach_id, x):
+        return {
+            "domains": f2f.tag_reach(gpd.GeoDataFrame({"offset_str": ["N1"]}, geometry=[box(x, 0, x + 1, 1)], crs=5070), reach_id),
+            "inflows": f2f.tag_reach(gpd.GeoDataFrame({"ind": [1]}, geometry=[LineString([(x, 0), (x, 1)])], crs=5070), reach_id),
+            # A centerline carries the reach id the network gave it, as a float in older models.
+            "reaches": f2f.tag_reach(
+                gpd.GeoDataFrame({"reach_id": [1.0], "stream_order": [3]}, geometry=[LineString([(x, 0), (x + 1, 1)])], crs=5070),
+                reach_id,
+            ),
+        }
+
+    path = tmp_path / "models.gpkg"
+    counts = f2f.write_model_layers(path, [model("10_1", 0), model("20", 5)])
+    assert counts == {"domains": 2, "inflows": 2, "reaches": 2}
+    reaches = gpd.read_file(path, layer="reaches")
+    assert list(reaches.columns[:2]) == ["reach_id", "stream_order"]
+    assert reaches["reach_id"].tolist() == ["10_1", "20"]
+    assert gpd.read_file(path, layer="domains").crs.to_epsg() == 5070

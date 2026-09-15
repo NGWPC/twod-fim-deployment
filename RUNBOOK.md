@@ -231,7 +231,7 @@ just f2f <out-dir> <aoi-config-path>
 
 It runs three steps, each also a command of `orchestrator/scripts/f2f.py`:
 
-- **`scenarios`** writes `<out-dir>/scenarios.db`, the tables flows2fim reads, for the AOI's materialized reaches, and `<out-dir>/start_reaches.csv`, the reaches flows2fim starts from. The report counts reaches not materialized yet. Start reaches are the ones with nowhere left to drain in the export, each at normal depth: true terminals, and, as a fallback, reaches whose downstream neighbour isn't exported.
+- **`scenarios`** writes `<out-dir>/scenarios.db`, the tables flows2fim reads, for the AOI's materialized reaches, `<out-dir>/start_reaches.csv`, the reaches flows2fim starts from, and `<out-dir>/models.gpkg`, with a `domains`, `inflows` and `reaches` layer of the models behind those reaches, each row carrying its `reach_id`. The report counts reaches not materialized yet. Start reaches are the ones with nowhere left to drain in the export, each at normal depth: true terminals, and, as a fallback, reaches whose downstream neighbour isn't exported.
 - **`library`** copies the depth grids `scenarios.db` names to `<out-dir>/library/`. Running it again after an interruption skips grids already copied. A grid storage does not hold is reported, and its scenario gets `map_exists = 0`, so flows2fim does not choose it.
 - **`aep`** writes `<out-dir>/aep/<column>/`: `flows.csv`, flows2fim's `controls.csv` (started from `start_reaches.csv`), and `depth.vrt`, for each AEP column. Reaches without a flow in a column are left out of that forecast and counted. flows2fim runs in Docker; with an `s3://` out-dir it reads the library from storage, and the VRT names its grids by `/vsis3/` path.
 

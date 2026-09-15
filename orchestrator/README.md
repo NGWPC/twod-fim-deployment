@@ -164,7 +164,7 @@ uv run --project orchestrator python orchestrator/scripts/f2f.py library <out-di
 uv run --project orchestrator python orchestrator/scripts/f2f.py aep [aoi-config-path] <out-dir> [--image IMAGE]
 ```
 
-- `scenarios` writes `<out-dir>/scenarios.db` for the reaches of the AOI config's `network` (or of the database's network) that are materialized, and `<out-dir>/start_reaches.csv`, the reaches controls start from
+- `scenarios` writes `<out-dir>/scenarios.db` for the reaches of the AOI config's `network` (or of the database's network) that are materialized, `<out-dir>/start_reaches.csv`, the reaches controls start from, and `<out-dir>/models.gpkg`, the `domains`, `inflows` and `reaches` layers of the models those reaches' runs were made with (read from each model manifest's assets), every row carrying its `reach_id`
 - `library` copies the depth grids it names from the results tree into `<out-dir>/library/`
 - `aep` forecasts each of the AOI's AEP columns (`flow_aep_columns`, from its `flow_statistics`, falling back to the settings) and runs flows2fim `controls` and `fim -fmt VRT` into `<out-dir>/aep/<column>/`
 
