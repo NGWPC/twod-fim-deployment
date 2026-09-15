@@ -224,7 +224,7 @@ aws s3 ls <storage-root>/results/ --recursive | wc -l
 twod-fim outputs and flows2fim are not yet directly compatible, so the outputs have to be adapted for flows2fim. The following command does that, and also creates sample AEP grids for the AOI.
 
 ```bash
-just f2f <out-dir> <aoi-config-path>
+just f2f-snapshot <out-dir> <aoi-config-path>
 ```
 
 `<out-dir>` is a local folder or an `s3://` address outside the storage root and the source data root, f2f only reads the database and storage; `<out-dir>` is the one thing it writes. Each export needs a new, empty out-dir, for example `s3://<exports-bucket>/<aoi-name>/<date>`: it is a snapshot of what is materialized when it runs, so exporting again after more reaches are materialized is a new out-dir too. Leave out `<aoi-config-path>` to export every materialized reach in the database, forecast with the system-wide flow statistics.
