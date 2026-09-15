@@ -53,12 +53,28 @@ def observe_reach(reach_id: str, *, conn: psycopg.Connection | None = None) -> d
     _, predicted = identity.model_identity(wanted)
     base = storage.model_base_path(reach_id)
 
+    # Which folders can hold this reach's model. With the domain unauthored only
+    # the identity half of the address is predictable, and any domain the job
+    # computed satisfies intent, so every folder under the identity hash is a
+    # candidate. With it authored the domain code is predictable too, so the
+    # whole address is: one folder, and a model under any other domain code is
+    # not the one intent asks for.
+    authored = wanted["model_domain"]
+    if authored is None:
+        candidates = storage.list_subfolders(base, prefix=f"{predicted}_")
+    else:
+        # Snapped exactly as the payload snaps it, so this is the bbox the job
+        # was handed and the address it wrote to.
+        authored = identity.snap_bbox(authored, wanted["grid_resolution"])
+        code = identity.domain_code(authored, wanted["geom_wkb"], wanted["grid_resolution"])
+        candidates = [f"{predicted}_{code}"]
+
     found_model_id, refused = None, []
-    for name in storage.list_subfolders(base, prefix=f"{predicted}_"):
+    for name in candidates:
         manifest = storage.read_json(f"{base}/{name}/{storage.MANIFEST_FILENAME}")
         if manifest is None:
-            continue  # build not finished; the manifest is written last
-        problems = identity.verify_manifest(manifest, reach_id, name)
+            continue  # absent, or build not finished; the manifest is written last
+        problems = identity.verify_manifest(manifest, reach_id, name, authored)
         if problems:
             refused.append({"folder": name, "problems": problems})
             logger.warning("refused manifest at %s/%s: %s", base, name, problems)
