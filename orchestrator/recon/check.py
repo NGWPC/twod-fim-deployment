@@ -353,10 +353,35 @@ def _library_scenarios(reach_id: str, model_id: str, wanted: db.Row) -> list[str
     ]
 
 
+def _authored_bands(wanted: db.Row) -> dict:
+    """The authored resolution ranges, in the shape the job takes them.
+
+    Sent so the sweep targets the resolution intent asks for, rather than the
+    defaults in its own image — which are tighter than the ones authored here,
+    and were what every library before this was actually built to.
+
+    A range nobody authored, on the reach or the defaults row, is not sent: the
+    job then uses its own default for that criterion and `adopt` does not judge
+    it either (guide.md, on promoting an emergent dimension). So the pair stays
+    in step — a criterion is either authored, sent and judged, or none of the
+    three.
+    """
+    payload = {}
+    for field in ("ld_q_max_depth_increase_range",
+                  "ld_q_median_depth_increase_range",
+                  "ld_q_flooded_area_prcnt_increase_range"):
+        band = wanted[field]
+        if band is None or band.lower is None or band.upper is None:
+            continue
+        payload[field] = [float(band.lower), float(band.upper)]
+    return payload
+
+
 def _run_nd_payload(reach_id: str) -> dict:
     """What run_nd_scenarios needs to produce the library intent asks for.
 
-    The discharge range is authored intent passed straight through. The step is
+    The discharge range and the resolution ranges are authored intent passed
+    straight through. The step is
     only a STARTING increment — the job grows and shrinks it as the reach's
     response curve demands — which is why the loop cannot predict the resulting
     discharges and reads them back instead.
@@ -403,6 +428,9 @@ def _run_nd_payload(reach_id: str) -> dict:
         # job's, so it is told rather than left to go looking -- and being told
         # is what makes a retry cheap and the sweep idempotent.
         "existing_scenarios": _library_scenarios(reach_id, model["model_id"], wanted),
+        # The resolution the library must reach. The same ranges adopt() judges
+        # the finished library by, so the sweep aims at what will be checked.
+        **_authored_bands(wanted),
         **_nd_boundary(reach_id, wanted),
         "volume_convergence_tolerance": settings.volume_convergence_tolerance,
         "allow_water_on_edges": settings.allow_water_on_edges,
