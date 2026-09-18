@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml", "python-dotenv"]
+# ///
 """Register a folder of process definitions with SEPEX.
 
 Reads <folder>/*/*.yml and adds or replaces each process. SEPEX_URL must be set

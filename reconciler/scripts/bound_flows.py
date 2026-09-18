@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["geopandas>=1.0", "pandas", "numpy", "scipy>=1.13", "matplotlib>=3.10", "pyarrow>=15"]
+# ///
 """Build and subset the CONUS flow statistics table.
 
 "build" joins NHF flowpaths to an AEP source and writes a per-reach parquet.
