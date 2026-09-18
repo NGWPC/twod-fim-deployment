@@ -12,9 +12,12 @@ network:
 up-local: network
     #!/usr/bin/env bash
     set -euo pipefail
-    # GPU_AVAILABLE from the environment, else from .env; true the same way
-    # recon/check.py reads it (true, 1, yes, y, on).
-    gpu="${GPU_AVAILABLE:-$(sed -n 's/^[[:space:]]*GPU_AVAILABLE[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null | tail -n 1)}"
+    unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+    set -a
+    source .env
+    set +a
+    # recon/check.py reads GPU_AVAILABLE as true, 1, yes, y, or on.
+    gpu="${GPU_AVAILABLE:-}"
     gpu="$(printf '%s' "${gpu//[\"\']/}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
     case "$gpu" in
       true|1|yes|y|on) hardware=local-gpu; echo "GPU_AVAILABLE=true: SEPEX with the host's GPUs" ;;
@@ -31,6 +34,12 @@ down-local:
 
 # Start hybrid stack (local DB only, cloud SEPEX + S3), register the cloud processes, then set up its database
 up-hybrid: network
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+    set -a
+    source .env
+    set +a
     docker compose --profile hybrid up -d
     just register-sepex-processes-cloud
     just setup-db
