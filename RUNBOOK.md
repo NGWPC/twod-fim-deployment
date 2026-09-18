@@ -247,8 +247,3 @@ Optionally upload your AOI config and its related files to S3 to preserve them f
 aws s3 cp <aoi-config-path> <storage-root>/provenance/aois/<aoi-name>/aoi_config.jsonc
 aws s3 cp <workdir>/<identity_hash>/ <storage-root>/provenance/aois/<aoi-name>/networks/<identity_hash>/ --recursive
 ```
-
-## Open decisions
-
-- **`bound_flows.py`:** turn it into a tool like the seed, author and f2f scripts, with arguments instead of fixed paths.
-- **NHF subsetting:** the tool or command for step 2.2.
