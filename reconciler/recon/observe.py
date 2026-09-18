@@ -1,22 +1,7 @@
-"""Look where intent says this reach's model should be, and record what is true.
+"""Observation.
 
-Intent implies an identity (identity.py); the identity implies an address; this
-module looks at that address. A lookup, not a search: a model built from other
-inputs may sit in the bucket beside it, and it is a previous intent's leftovers,
-not this reach's state — nothing here sorts candidates or picks a newest.
-
-The materialized_models row this writes is PROOF that model intent is
-materialized, stamped with the revision it proves. Finding nothing at the
-address deletes the row, which retracts the proof in the same statement — this
-is the only writer of that table, so recording a finished job and noticing a
-deletion are one mechanism seen from two sides.
-
-A model counts as existing when its manifest is present and sound. build_model
-writes model_manifest.json last, so a half-written build has artifacts but no
-manifest and is correctly invisible; a manifest that fails verification
-(belongs to another reach, sits in a folder its own realization code does not
-name, or its identity does not hash to what it claims) is treated as absent and
-reported, never adopted.
+Looks where intent implies a reach's artifacts should be, judges what is there,
+and records the result.
 """
 
 import json
@@ -33,17 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 def observe_reach(reach_id: str, *, conn: psycopg.Connection | None = None) -> dict:
-    """Reconcile materialized_models for one reach against storage.
-
-    Returns what happened, for the check to log and a notebook to show:
-      predicted   the identity hash intent implies (None if no intent)
-      found       the model_id adopted, or None
-      changed     whether the table was altered
-      refused     verification problems, when a manifest was found but not trusted
-    """
+    """Reconcile materialized_models for one reach against storage."""
     wanted = intent.effective(reach_id, conn=conn)
     if wanted is None:
-        # No intent, nothing to be materialized; retract any stale proof.
         removed = bool(db.query(
             "DELETE FROM materialized_models WHERE reach_id = %s RETURNING reach_id",
             (reach_id,), conn=conn))
@@ -53,18 +30,10 @@ def observe_reach(reach_id: str, *, conn: psycopg.Connection | None = None) -> d
     _, predicted = identity.model_identity(wanted)
     base = storage.model_base_path(reach_id)
 
-    # Which folders can hold this reach's model. With the domain unauthored only
-    # the identity half of the address is predictable, and any domain the job
-    # computed satisfies intent, so every folder under the identity hash is a
-    # candidate. With it authored the domain code is predictable too, so the
-    # whole address is: one folder, and a model under any other domain code is
-    # not the one intent asks for.
     authored = wanted["model_domain"]
     if authored is None:
         candidates = storage.list_subfolders(base, prefix=f"{predicted}_")
     else:
-        # Snapped exactly as the payload snaps it, so this is the bbox the job
-        # was handed and the address it wrote to.
         authored = identity.snap_bbox(authored, wanted["grid_resolution"])
         code = identity.domain_code(authored, wanted["geom_wkb"], wanted["grid_resolution"])
         candidates = [f"{predicted}_{code}"]
@@ -73,7 +42,7 @@ def observe_reach(reach_id: str, *, conn: psycopg.Connection | None = None) -> d
     for name in candidates:
         manifest = storage.read_json(f"{base}/{name}/{storage.MANIFEST_FILENAME}")
         if manifest is None:
-            continue  # absent, or build not finished; the manifest is written last
+            continue
         problems = identity.verify_manifest(manifest, reach_id, name, authored)
         if problems:
             refused.append({"folder": name, "problems": problems})
@@ -118,29 +87,13 @@ class Adoption(NamedTuple):
     """The library adopted from what storage holds, and what it cost to say so."""
 
     q_set: list[int]
-    # Why no library could be adopted at all. The reach does not prove.
     holes: list[str]
-    # Steps the bands would not have chosen, which nothing can improve on.
-    # Either the reach changes faster than its discharge grid can follow, or it
-    # changes so little that no line clears a floor -- both mean the grid cannot
-    # express what the bands ask for, and the sweep took the nearest line
-    # (DR-030, DR-041). Not findings: this is the normal state of a library
-    # wherever the bands and the grid disagree. Recorded for anyone tuning
-    # either of them.
     expected: list[str]
-    # How many scenarios in storage the library does not need. Not reported:
-    # the sweep publishes every trial it runs so that a later attempt can reuse
-    # it, so surplus is the normal state of a folder rather than a finding. Kept
-    # for anyone measuring how much of the bucket is reclaimable.
     passed_over: int
 
 
 def _bands(wanted: db.Row) -> list[tuple[str, str, float, float, bool]]:
-    """The authored resolution, as (label, manifest key, floor, ceiling, relative).
-
-    A range nobody authored, on either desired_state or the defaults row, asks
-    for nothing and takes no part in any verdict.
-    """
+    """The authored resolution, as (label, manifest key, floor, ceiling, relative)."""
     authored = (
         ("max depth", "max_depth", wanted["ld_q_max_depth_increase_range"], False),
         ("median depth", "median_depth",
@@ -161,13 +114,7 @@ def _change(earlier: dict, later: dict, key: str, relative: bool) -> float:
 
 
 def _verdict(earlier: dict, later: dict, bands: list) -> tuple[str, str]:
-    """The sweep's own rule, asked of any two scenarios rather than consecutive
-    ones. Returns the verdict and which criteria decided it.
-
-    A criterion moving backwards is not a special case: it simply failed to
-    reach its floor, which is `reject_low` like any other change too small to be
-    worth keeping.
-    """
+    """Apply the acceptance rule to two scenarios."""
     over = [f"{label} {_change(earlier, later, key, rel):+.3g} over {ceiling:.3g}"
             for label, key, _, ceiling, rel in bands
             if _change(earlier, later, key, rel) > ceiling]
@@ -181,12 +128,7 @@ def _verdict(earlier: dict, later: dict, bands: list) -> tuple[str, str]:
 
 
 def _off_centre(earlier: dict, later: dict, bands: list) -> float:
-    """How far a step lands from the middle of the bands, summed over all three.
-
-    Only ever a tie-break. Two libraries of the same length are not equally
-    good: one whose steps sit centred has room for the next scenario to be
-    slightly off without breaching anything.
-    """
+    """How far a step lands from the middle of the bands, summed over all three."""
     total = 0.0
     for _, key, floor, ceiling, rel in bands:
         middle = (floor + ceiling) / 2
@@ -195,53 +137,18 @@ def _off_centre(earlier: dict, later: dict, bands: list) -> float:
 
 
 def _nothing_finer(earlier: int, later: int, grid: int | None, apart: int) -> bool:
-    """Whether any discharge could have gone between these two.
-
-    On a grid this is a fact about the axis: two adjacent grid values have
-    nothing between them, and any wider pair skipped values that could have
-    been run. A
-    step over a ceiling is tolerable in the first case and is a library the
-    sweep left unfinished in the second — and the difference is decidable
-    without knowing anything about how the sweep behaved (DR-041).
-
-    Without a grid nothing is decidable, and adjacency in storage is the only
-    thing left to go on. It cannot tell the two apart, which is the whole reason
-    the grid exists.
-    """
+    """Whether any discharge could have gone between these two."""
     if grid is None:
         return apart == 1
     return later - earlier <= grid
 
 
 def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
-    """The cheapest library, out of everything present, that satisfies intent.
-
-    Storage may hold more scenarios than intent asked for, and they need not
-    have come from one sweep — run identity does not capture the job version, so
-    a changed algorithm writes alongside its predecessor. None of that is
-    consulted here. Every scenario is judged only on the three readings in its
-    own manifest, against the authored bands, exactly as the sweep judges a
-    trial against its reference.
-
-    The search is over every PAIR rather than consecutive ones, which is what
-    lets it step over a scenario that leads nowhere instead of committing to it.
-    Sorted by discharge with edges pointing one way, it is a shortest path
-    through a DAG: `best[j]` is the cheapest way to reach scenario j from the
-    first, and the answer is read back through parent pointers from the last.
-
-    Cost is compared in order — unavoidable gaps first, then how many scenarios
-    the library costs, then how centred its steps are. A step over a ceiling is
-    only allowed between neighbours: anywhere else there is a scenario in
-    between to route through, and without that rule the cheapest answer is a
-    single enormous stride from the bottom of the range to the top.
-    """
+    """The cheapest library, out of everything present, that satisfies intent."""
     bands = _bands(wanted)
     order = [entry["q"] for entry in metrics]
     if not bands or len(metrics) < 2:
         return Adoption(order, [], [], 0)
-    # The discharge axis this library had to land on. Without one there is no
-    # way to tell a step nothing could improve on from a stretch the sweep
-    # skipped, so adjacency in storage is the only fallback available.
     grid = wanted["q_grid_resolution"]
 
     infinite = (math.inf, math.inf, math.inf)
@@ -290,36 +197,7 @@ def adopt(metrics: list[dict], wanted: db.Row) -> Adoption:
 
 
 def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) -> dict:
-    """Reconcile materialized_nd_runs for one reach against storage.
-
-    Lookup down to the run identity, listing the rest of the way. Intent fixes
-    the address down to model identity and run identity, so getting there is a
-    prediction. Below that, nothing is intent's to say: the job derives the
-    slope itself from the reach's own DEM, and the adaptive step algorithm
-    decides which discharges are hydraulically distinct enough to keep — so the
-    loop reads both back and judges them, via storage.nd_library_path for the
-    slope and the q= listing below it.
-
-    Judged how: the library must SPAN the authored discharge range. Resolution
-    is not a pass/fail — it decides what gets ADOPTED. `q_set` is the smallest
-    set of discharges meeting the authored `ld_q_*` ranges, and it is the
-    library as far as everything downstream is concerned. Storage may hold
-    more, and the loop does not care: an earlier sweep's runs share the folder
-    because run identity does not capture the job version. Metrics come from
-    the scenario manifests, which carry max_depth, median_depth and
-    flooded_area, so this judges what was published rather than what the job
-    reported. See `adopt`.
-
-    Rejected trials count towards the span. The adaptive stepper publishes every
-    scenario it tries, so more discharges are present than it labelled accepted,
-    and that is right: a rejected trial is still a valid run at a valid
-    discharge, and what makes a library usable is what is in it.
-
-    Anything short of a whole, verified library writes no row. A row is proof,
-    and proof of a partial library is not a smaller proof — it is none.
-
-    Returns what happened, for the check to log and a notebook to show.
-    """
+    """Reconcile materialized_nd_runs for one reach against storage."""
     out: dict = {"reach_id": reach_id, "step": "nd", "found": None, "changed": False}
     before = db.one("SELECT run_identity_hash, q_set, applied_revision FROM materialized_nd_runs"
                     " WHERE reach_id = %s", (reach_id,), conn=conn)
@@ -334,9 +212,6 @@ def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) ->
     if wanted is None:
         return retract("no effective intent")
 
-    # Runs are addressed under the model they were run against, so a reach
-    # whose model intent is not itself materialized has nowhere to look. The
-    # model rung will be the gap in that case anyway.
     _, predicted_model = identity.model_identity(wanted)
     model = db.one("SELECT identity_hash, model_id FROM materialized_models WHERE reach_id = %s",
                    (reach_id,), conn=conn)
@@ -349,8 +224,6 @@ def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) ->
     _, run_hash = identity.run_identity(wanted)
     library = storage.nd_library_path(reach_id, model["model_id"], run_hash)
     if library is None:
-        # Either nothing has been written yet, or more than one nd= folder is
-        # there and none of them can be called the library. storage logs which.
         return retract("no single nd=<slope> folder to read")
     out.update({"predicted": run_hash, "library": library})
 
@@ -368,13 +241,7 @@ def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) ->
         return retract(f"library spans {min(discharges)}-{max(discharges)}, "
                        f"intent asks for {lower}-{upper}")
 
-    # Every scenario must be readable and sound before any of them counts. The
-    # job publishes the max-q run last, so a library caught mid-publish usually
-    # fails the span check above and never reaches this loop.
     curve, metrics, refused = [], [], []
-    # The realization directory as it appears under the run identity:
-    # `<nd|kwse>=<value>/q=<value>`. A scenario manifest claims one of these in
-    # its scenario_code, and verification is that claim against this location.
     nd_folder = library.rsplit("/", 1)[-1]
     for q in discharges:
         scenario_dir = f"{nd_folder}/{identity.q_folder(q)}"
@@ -400,14 +267,9 @@ def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) ->
     for hole in adoption.holes:
         logger.error("reach %s nd library: %s", reach_id, hole)
     if adoption.holes:
-        # No proof. The library in storage does not meet the resolution intent
-        # asks for, and a row here would tell every later step that it does.
         return {**retract(adoption.holes[0]), "refused": refused}
     adopted = adoption.q_set
 
-    # The values the reach ABOVE will need, at this reach's upstream end. One
-    # ND run per discharge, so the minimum WSE at a discharge is simply that
-    # run's — the curve gains other members only when KWSE runs join it.
     us_wse_max = max(point["wse"] for point in curve)
 
     db.query(
@@ -441,28 +303,7 @@ def observe_nd_runs(reach_id: str, *, conn: psycopg.Connection | None = None) ->
 
 
 def observe_kwse_runs(reach_id: str, *, conn: psycopg.Connection | None = None) -> dict:
-    """Reconcile materialized_kwse_runs for one reach against storage.
-
-    The address is a prediction all the way down, unlike the nd case. Intent
-    fixes the model and run identity, and the loop itself chose every stage
-    target, so there is nothing here to discover by listing — each scenario is
-    looked up at the exact folder the plan names.
-
-    WHAT IS ASKED FOR IS THE PLAN, NOT THE GRID. DR-033 skips a stage target
-    with no downstream run within Δz/2, so a check that looked for every stage
-    between the bounds could never be satisfied: it would find the library short
-    on every pass, resubmit forever with no backoff, and never let the reach
-    above it start. plan.py is a function of current state, so the plan
-    recomputed here is the plan the job was given, and a skipped target is
-    absent from both.
-
-    An empty plan is materialized, not pending. A reach whose whole envelope was
-    skipped, or whose ceiling sat below its floor, is asking for nothing and has
-    it — recording that unblocks the reach above rather than stalling it.
-
-    Anything short of every planned scenario writes no row. A row is proof, and
-    proof of a partial library is not a smaller proof, it is none.
-    """
+    """Reconcile materialized_kwse_runs for one reach against storage."""
     out: dict = {"reach_id": reach_id, "step": "kwse", "found": None, "changed": False}
     before = db.one("SELECT run_identity_hash, scenario_index, applied_revision"
                     " FROM materialized_kwse_runs WHERE reach_id = %s",
@@ -478,8 +319,6 @@ def observe_kwse_runs(reach_id: str, *, conn: psycopg.Connection | None = None) 
     if wanted is None:
         return retract("no effective intent")
 
-    # Runs are addressed under the model they were run against, so a reach whose
-    # model intent is not itself materialized has nowhere to look.
     _, predicted_model = identity.model_identity(wanted)
     model = db.one("SELECT identity_hash FROM materialized_models WHERE reach_id = %s",
                    (reach_id,), conn=conn)
@@ -492,8 +331,6 @@ def observe_kwse_runs(reach_id: str, *, conn: psycopg.Connection | None = None) 
     try:
         context = scenarios.planned(reach_id, conn=conn)
     except scenarios.NotPlannable as why:
-        # Includes the ordinary cases: a terminal reach, or a downstream
-        # neighbour still building. The gap calculation reports which.
         return retract(str(why))
 
     out["planned"] = len(context.plan.scenarios)
@@ -502,8 +339,6 @@ def observe_kwse_runs(reach_id: str, *, conn: psycopg.Connection | None = None) 
     index: dict[int, list[dict]] = {}
     refused = []
     for scenario in context.plan.scenarios:
-        # The same test check.py uses to leave a scenario out of a submission,
-        # so what is missing here is exactly what gets run.
         found = scenarios.look_up(reach_id, context, scenario)
         if found.manifest is None:
             return {**retract(f"scenario kwse={scenario.z:g}/q={scenario.q} has no "
@@ -513,9 +348,6 @@ def observe_kwse_runs(reach_id: str, *, conn: psycopg.Connection | None = None) 
             logger.warning("refused scenario manifest at %s: %s", found.path, found.problems)
             return {**retract(f"scenario {found.folder} refused"), "refused": refused}
         manifest = found.manifest
-        # The two stages this run carries: what it achieved at this reach's
-        # upstream end, which the reach above matches against, and what was
-        # imposed at its downstream end, which named the folder it sits in.
         index.setdefault(scenario.q, []).append(
             {"wse": float(manifest["properties"]["nominal_wse"]), "bc": scenario.z})
 

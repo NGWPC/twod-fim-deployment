@@ -1,11 +1,4 @@
-"""The run_nd_scenarios payload: what the sweep is told to aim at.
-
-The resolution ranges matter most here. They are authored in the database and
-`adopt` judges the finished library by them, so sending them is what keeps the
-sweep and the check asking for the same thing. Left out, the job falls back to
-the defaults in its own image — tighter than the authored ones, which had every
-library built to a resolution nobody asked for.
-"""
+"""Tests for ND payload assembly."""
 
 from types import SimpleNamespace
 
@@ -52,12 +45,8 @@ def test_authored_ranges_are_sent_as_two_element_arrays(wired):
 
 
 def test_the_sweep_aims_at_what_adopt_will_judge(wired):
-    """The bands in the payload and the bands adopt() reads are one thing
-    authored once, so a library built to satisfy the sweep satisfies the check."""
     from recon.observe import _bands
 
-    # _bands names each criterion by its MANIFEST key; the payload and the
-    # database name it by its column.
     column = {"max_depth": "ld_q_max_depth_increase_range",
               "median_depth": "ld_q_median_depth_increase_range",
               "flooded_area": "ld_q_flooded_area_prcnt_increase_range"}
@@ -70,9 +59,6 @@ def test_the_sweep_aims_at_what_adopt_will_judge(wired):
 
 
 def test_an_unauthored_range_is_not_sent(wired):
-    """Nothing authored means the job uses its own default for that criterion,
-    and adopt() does not judge it either. Sending a range we will not check, or
-    checking one we did not send, is what puts the two out of step."""
     wired.intent = intent_for(ld_q_median_depth_increase_range=None)
     payload = check._run_nd_payload(REACH)
     assert "ld_q_median_depth_increase_range" not in payload
@@ -80,7 +66,5 @@ def test_an_unauthored_range_is_not_sent(wired):
 
 
 def test_a_half_open_range_is_not_sent(wired):
-    """A range with one end missing cannot be a [min, max] pair. _bands ignores
-    it for the same reason."""
     wired.intent = intent_for(ld_q_max_depth_increase_range=Range(0.75, None))
     assert "ld_q_max_depth_increase_range" not in check._run_nd_payload(REACH)

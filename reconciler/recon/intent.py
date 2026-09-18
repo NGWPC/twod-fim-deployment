@@ -1,13 +1,7 @@
-"""Effective intent: what is actually wanted for a reach, defaults resolved.
+"""Effective intent.
 
-Intent lives in two tables. desired_state holds what is authored per reach,
-nullable throughout; desired_state_defaults holds the single row everything
-falls back to. Effective intent is the COALESCE of the two, and this module is
-the one place that resolution happens, so nothing else ever reads the tables
-half-resolved.
-
-The geometry rides along as WKB because identity prediction hashes it, and
-prediction must use the same bytes the job will read.
+What is actually wanted for a reach, with per-reach values and the
+deployment-wide defaults resolved into one row.
 """
 
 import psycopg
@@ -23,12 +17,7 @@ _EFFECTIVE = """
         rn.terminal_reason,
         rn.lake_to_id,
         rn.coast_to_id,
-        -- A lake immediately upstream (DR-007.4). The build job takes this as
-        -- ds_of_lake and moves the inflow line onto this reach's own centerline,
-        -- because there is no upstream mainstem to walk up.
         rn.lake_outlet,
-        -- Not intent, but the KWSE ceiling scales by it (DR-044 ALT-G), for
-        -- this reach and for the one below.
         rn.total_da_sqkm,
         ST_AsBinary(rn.geom) AS geom_wkb,
         f.sdr_commit,
@@ -36,34 +25,14 @@ _EFFECTIVE = """
         COALESCE(d.epsg_code,       f.epsg_code)       AS epsg_code,
         COALESCE(d.dem_source,      f.dem_source)      AS dem_source,
         COALESCE(d.lulc_source,     f.lulc_source)     AS lulc_source,
-        -- A path to the mapping, not the mapping. Identity is over the file's
-        -- content, so predicting an address reads it; the payload just passes
-        -- the address through. A reach overriding the default overrides which
-        -- FILE it points at, which needs no special handling anywhere.
         COALESCE(d.lulc_lookup,     f.lulc_lookup)     AS lulc_lookup,
         COALESCE(d.solver,          f.solver)          AS solver,
         d.q_lower_bound,
         d.q_upper_bound,
         d.initial_dq_step_for_nd,
-        -- The discharge axis this reach's library must land on (DR-041). Per
-        -- reach only, so no fallback: a NULL here means seeding never placed
-        -- the reach on a grid, and the loop cannot verify its resolution.
         d.q_grid_resolution,
-        -- Authored library discharges. Per reach only: desired_state_defaults
-        -- has no q_set, because one deployment-wide list of discharges would
-        -- mean nothing across reaches of different size. NULL = the nd job's
-        -- adaptive sweep chooses, and the loop reads the result back from
-        -- materialized_nd_runs.
         d.q_set,
-        -- Authored domain bbox [xmin, ymin, xmax, ymax]. Per reach only, no
-        -- fallback: NULL means the job computes the domain and whatever it
-        -- computes is accepted. A value is sent to the job and becomes part of
-        -- the model check, because it makes the domain code predictable.
         d.model_domain,
-        -- The resolution the library must achieve, read back by
-        -- observe_nd_runs. Still not sent to the job: it carries its own
-        -- defaults, and the loop's business is judging the result rather than
-        -- dictating how the sweep reaches it.
         COALESCE(d.ld_q_max_depth_increase_range,
                  f.ld_q_max_depth_increase_range) AS ld_q_max_depth_increase_range,
         COALESCE(d.ld_q_median_depth_increase_range,
@@ -71,8 +40,6 @@ _EFFECTIVE = """
         COALESCE(d.ld_q_flooded_area_prcnt_increase_range,
                  f.ld_q_flooded_area_prcnt_increase_range)
                  AS ld_q_flooded_area_prcnt_increase_range,
-        -- KWSE fields. Both fall back to the defaults row like everything
-        -- above; the stage grid cannot be built without them.
         COALESCE(d.ld_ds_z_delta,    f.ld_ds_z_delta)    AS ld_ds_z_delta,
         COALESCE(d.kwse_upper_bound, f.kwse_upper_bound) AS kwse_upper_bound
     FROM desired_state d
@@ -83,13 +50,7 @@ _EFFECTIVE = """
 
 
 def effective(reach_id: str, *, conn: psycopg.Connection | None = None) -> db.Row | None:
-    """This reach's effective intent, or None if nothing is wanted for it.
-
-    None has two causes worth telling apart when it surprises you: no
-    desired_state row (a reach in the network means nothing until intent is
-    authored), or an empty desired_state_defaults table (the deployment's
-    fallback row has not been seeded, so no reach can resolve its intent).
-    """
+    """This reach's effective intent, or None if nothing is wanted for it."""
     return db.one(_EFFECTIVE, (reach_id,), conn=conn)
 
 

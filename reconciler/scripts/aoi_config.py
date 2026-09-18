@@ -1,65 +1,8 @@
-"""An AOI config: the payload for one area of interest's seed, author and f2f commands.
+"""AOI config loading.
 
-Every command is given its path, a local path or an s3:// address, and reads
-what it needs from it. Nothing looks an AOI config up, stores it, or assumes
-where it is kept. Copying one into provenance afterwards, beside the network it
-names, is record keeping by people (RUNBOOK.md), and nothing reads it from
-there. The repo keeps only an example (example.aoi_config.jsonc, which lists
-every key with what leaving it out does) and the test AOI
-(testdata/e2e.aoi_config.json).
-
-Not to be confused with config.py, the system-wide settings: an AOI config says
-what to produce for one AOI, and whatever it leaves out comes from the
-database's defaults or those settings (below).
-
-JSON with `//` comments (JSONC), like the jobs repo's specs-and-manifests
-examples; a plain .json file works too.
-
-Keys:
-
-  name             optional label for people, printed by the commands
-  description      optional free text
-
-  read by seed.py
-  network          modify_network's network.gpkg (layer reach_network)
-  lakes            GeoPackage with layer lakes_polygons
-  coasts           GeoPackage with layer coastal_influence_polygons
-
-  read by author_intent.py
-  flow_statistics  optional: a table (.parquet or .csv) of per-reach flows; the
-                   reaches of `network` it covers are the ones authored
-  flow_reach_id_column, flow_q_lower_column, flow_q_upper_column
-                   optional: what that table calls the reach id and the two
-                   columns the discharge bounds come from
-  dem_source       optional: where a job reads elevation for these reaches
-  lulc_source      optional: where a job reads land cover
-  lulc_lookup      optional: the land-cover to Manning's n JSON, in s3://
-  q_bound_factors  optional [lower, upper]: pull the discharge bounds inward,
-                   to keep a test run short
-
-  read by f2f.py, which also runs without an AOI config
-  network          only its reaches are exported
-  flow_statistics, flow_reach_id_column
-                   as above
-  flow_aep_columns optional: the columns of that table forecast as AEP flows,
-                   one set of controls and one depth VRT each
-
-A command reads only the keys it needs, and says so when one is missing. An AOI
-config only overrides: dem_source, lulc_source and lulc_lookup left out are
-authored as NULL, so those reaches follow the database's own
-desired_state_defaults; the flow statistics keys left out fall back to the
-system-wide settings of the same name (config.py, .env), in one place:
-flow_statistics.py.
-
-dem_source, lulc_source and lulc_lookup are read by jobs, so they must be
-addresses a job can open (s3://, https://, /vsi...), never local paths; and
-lulc_lookup must be s3://, because the loop reads it too.
-
-Locations inside the file are s3:// addresses or local paths. A relative one is
-relative to the AOI config itself. One placeholder keeps an AOI config free of
-bucket names:
-
-  {source_data}   TWOD_FIM_SOURCE_DATA_PREFIX, from .env
+Reads an AOI config from a local path or an s3:// address, fills the
+{source_data} placeholder from the environment, and resolves relative paths
+against the config's own location. See example.aoi_config.jsonc for the format.
 """
 
 import argparse
@@ -89,26 +32,16 @@ KEYS = {
     "lulc_lookup",
     "q_bound_factors",
 }
-# Read by a command on this machine: local paths are fine, relative ones are
-# relative to the AOI config.
 LOCATIONS = {"network", "lakes", "coasts", "flow_statistics"}
-# Read by jobs: only addresses a job can open.
 JOB_ADDRESSES = {"dem_source", "lulc_source", "lulc_lookup"}
 _JOB_READABLE = re.compile(r"^(s3://|https?://|/vsi)")
 
-# The layer of `network` that holds the reaches, and the column they are keyed by.
 NETWORK_LAYER = "reach_network"
 NETWORK_REACH_ID = "reach_id"
 
 
-# --- command line --------------------------------------------------------
-
-
 def add_argument(parser: argparse.ArgumentParser, optional: str | None = None) -> None:
-    """The one argument every AOI command takes, so it reads the same everywhere.
-
-    `optional`, for a command that also runs without one, says what it does then.
-    """
+    """The one argument every AOI command takes, so it reads the same everywhere."""
     parser.add_argument(
         "aoi_config_path",
         metavar="aoi-config-path",
@@ -117,16 +50,11 @@ def add_argument(parser: argparse.ArgumentParser, optional: str | None = None) -
     )
 
 
-# --- reading -------------------------------------------------------------
-
-
 def fill(value: str) -> str:
     """Replace the placeholder with this deployment's address."""
     return value.replace("{source_data}", storage.source_data_path("").rstrip("/"))
 
 
-# A JSON string, or a `//` comment. Strings are matched first and kept, so a
-# `//` inside one — https:// — is never mistaken for a comment.
 _STRING_OR_COMMENT = re.compile(r'"(?:\\.|[^"\\])*"|//[^\n]*')
 
 
@@ -156,10 +84,7 @@ def read_text(location: str) -> str:
 
 
 def load(location: str) -> dict:
-    """The AOI config at `location`, with every location in it resolved.
-
-    The file's own location rides along under `_location`, for messages.
-    """
+    """The AOI config at `location`, with every location in it resolved."""
     aoi = json.loads(strip_comments(read_text(location)))
 
     unknown = set(aoi) - KEYS

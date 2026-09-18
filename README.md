@@ -1,7 +1,8 @@
 # twod-fim-deployment
 
-> [!WARNING]
-> Draft Software. Many individual functions and code pieces are AI generated.
+> [!NOTE]
+>
+> This repo is draft software developed for OWP by the NGWPC team led by Entarian. The repo is not production ready. Further experiments, testing, quality control, and careful consideration are required before adopting this software. Many individual code pieces and functions are *AI generated* and not carefully reviewed.
 
 Deployment + reconciliation for the 2D-FIM system. This repo is the **reconciler**
 and the **platform** it runs on. It does *not* contain the modeling jobs

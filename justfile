@@ -4,11 +4,11 @@
 default:
     @just --list
 
-# Create the external docker network shared by the stack and spawned job containers
+# Create the external docker network shared by the stack and job containers
 network:
     @docker network inspect twodfim_net >/dev/null 2>&1 || docker network create twodfim_net
 
-# Start the stack (SEPEX with the GPUs when GPU_AVAILABLE is true), register the local processes with its SEPEX, then set up its database
+# Start the stack, register the local processes, set up the database
 up-local: network
     #!/usr/bin/env bash
     set -euo pipefail
@@ -16,7 +16,7 @@ up-local: network
     set -a
     source .env
     set +a
-    # recon/check.py reads GPU_AVAILABLE as true, 1, yes, y, or on.
+    # GPU_AVAILABLE is read as true, 1, yes, y, or on.
     gpu="${GPU_AVAILABLE:-}"
     gpu="$(printf '%s' "${gpu//[\"\']/}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
     case "$gpu" in
@@ -32,7 +32,7 @@ down-local:
     docker compose --profile local --profile local-cpu down
     docker compose --profile local --profile local-gpu down
 
-# Start hybrid stack (local DB only, cloud SEPEX + S3), register the cloud processes, then set up its database
+# Start the hybrid stack (local DB, cloud SEPEX + S3), register the cloud processes, set up the database
 up-hybrid: network
     #!/usr/bin/env bash
     set -euo pipefail
@@ -82,11 +82,11 @@ wipe confirm="":
     just down-local
     docker run --rm -v "$DATA":/data alpine rm -rf /data/db /data/minio /data/sepex
 
-# Register sepex/local/plugins with the SEPEX in .env (up-local runs this; rerun after editing a yml)
+# Register sepex/local/plugins (rerun after editing a yml)
 register-sepex-processes-local:
     uv run --script sepex/register_processes.py sepex/local/plugins
 
-# Register sepex/cloud/plugins with the SEPEX in .env (up-hybrid runs this; rerun after editing a yml)
+# Register sepex/cloud/plugins (rerun after editing a yml)
 register-sepex-processes-cloud:
     uv run --script sepex/register_processes.py sepex/cloud/plugins
 
@@ -98,24 +98,24 @@ seed-lakes aoi_config_path:
 seed-coasts aoi_config_path:
     uv run --project reconciler python reconciler/scripts/seed.py coasts {{aoi_config_path}}
 
-# Seed the network an AOI config names into the database and workspace/reach_network.parquet (its lakes and coasts must be seeded)
+# Seed the network an AOI config names (lakes and coasts must be seeded first)
 seed-network aoi_config_path:
     uv run --project reconciler python reconciler/scripts/seed.py network {{aoi_config_path}}
 
-# Stage a local file as source data at <TWOD_FIM_SOURCE_DATA_PREFIX>/<name> (refuses to replace a different file)
+# Stage a local file as source data at <TWOD_FIM_SOURCE_DATA_PREFIX>/<name>
 stage-source-data file name:
     uv run --project reconciler python reconciler/scripts/stage_source_data.py {{file}} {{name}}
 
-# Wait for the database, then write its defaults (up-local and up-hybrid run this; after the first write it changes nothing)
+# Wait for the database, then write its defaults
 setup-db:
     docker exec twodfim-db sh -c 'for i in $(seq 60); do pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" && exit 0; sleep 1; done; echo "database not accepting connections after 60s"; exit 1'
     just author-defaults
 
-# Write desired_state_defaults from the system-wide settings (setup-db runs this; a change needs --yes and re-checks every reach)
+# Write desired_state_defaults from the system-wide settings (a change needs --yes)
 author-defaults *flags:
     uv run --project reconciler python reconciler/scripts/author_intent.py defaults {{flags}}
 
-# Author intent for the network an AOI config names (needs the defaults setup-db writes)
+# Author intent for the network an AOI config names (run setup-db first)
 author-intent aoi_config_path:
     uv run --project reconciler python reconciler/scripts/author_intent.py aoi {{aoi_config_path}}
 
@@ -124,7 +124,7 @@ reconcile:
     cd reconciler && uv run python scripts/reconcile.py
 
 
-# Publish materialized reaches for flows2fim into a local folder or s3:// address: scenarios db, depth grid library, AEP VRTs
+# Publish materialized reaches for flows2fim into a local folder or s3:// address
 # (an AOI's reaches, or every materialized reach when no AOI config is given)
 f2f-snapshot out_dir aoi_config_path="":
     uv run --project reconciler python reconciler/scripts/f2f.py scenarios {{aoi_config_path}} {{out_dir}}

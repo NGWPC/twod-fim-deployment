@@ -1,12 +1,4 @@
-"""What a check does when the gap is a KWSE step.
-
-The step is run as a group: one SEPEX submission, one job per discharge chain
-still missing scenarios, and one marker holding the group. The subject is that
-decision and its bookkeeping — what is submitted, what is marked in flight, and
-what happens when there turns out to be nothing to submit. Everything the check
-touches outside itself is stubbed; the members' contents are tested in
-test_kwse_payload.
-"""
+"""Tests for KWSE submission."""
 
 from types import SimpleNamespace
 
@@ -19,7 +11,6 @@ REACH, REVISION = "100", 7
 
 
 class RecordingExecution:
-    """Records submissions without running anything."""
 
     def __init__(self, fail_with=None):
         self.jobs, self.groups = [], []
@@ -41,7 +32,6 @@ class RecordingExecution:
 
 @pytest.fixture
 def wired(monkeypatch):
-    """A reach whose gap is whatever `state.step` says, on a GPU host."""
     state = SimpleNamespace(step=gap.RUN_KWSE, members=[], marked=[], checks=[],
                             failures=[])
 
@@ -83,8 +73,6 @@ def test_a_kwse_gap_submits_one_group_and_marks_the_group_in_flight(wired):
     assert process == "runKwseScenariosLisfloodGpu"
     assert sent == members(200, 900)
     assert tags == [f"reach:{REACH}"]
-    # The marker holds the group, under the step's name, so the poll pass
-    # follows the group and the gap calculation still sees one rung in flight.
     assert wired.marked == [(gap.RUN_KWSE, result.submitted_ref, REVISION)]
     assert result.submitted_ref.startswith("group:")
     assert wired.checks == [REACH]
@@ -92,8 +80,6 @@ def test_a_kwse_gap_submits_one_group_and_marks_the_group_in_flight(wired):
 
 
 def test_cpu_hosts_submit_the_same_group_to_the_cpu_process(wired, monkeypatch):
-    """Chains run in parallel on either hardware; SEPEX admits as many as its
-    CPUs and memory hold."""
     monkeypatch.setenv("GPU_AVAILABLE", "false")
     wired.members = members(200, 900)
     execution = RecordingExecution()
@@ -106,8 +92,6 @@ def test_cpu_hosts_submit_the_same_group_to_the_cpu_process(wired, monkeypatch):
 
 
 def test_nothing_missing_submits_nothing_and_marks_nothing(wired):
-    """Every scenario is already in storage. An empty group is not a job to
-    wait on: no marker, and the requested check adopts the library."""
     wired.members = []
     execution = RecordingExecution()
 
@@ -134,9 +118,6 @@ def test_a_single_job_step_is_still_one_job(wired):
 
 
 def test_a_refused_group_is_a_failure_and_nothing_is_marked(wired):
-    """SEPEX validates the whole group before creating any job, so a refusal
-    means nothing is running. Recording it is what backs the reach off instead
-    of resubmitting the same refused request on every pass."""
     wired.members = members(200)
     execution = RecordingExecution(
         fail_with=RuntimeError("SEPEX POST /processes/x/group-execution -> 400: bad input"))

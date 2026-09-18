@@ -1,14 +1,15 @@
-"""Stage a local file as source data: <TWOD_FIM_SOURCE_DATA_PREFIX>/<name>.
+"""Stage a local file as source data.
 
-What a person does when adding source data, done through the deployment's own
-storage settings, so it works against MinIO as well as S3. Source data is never
-changed once staged — new data goes beside the old — so a different file already
-under the same name is refused; the same file again is a no-op.
+Uploads the file to <TWOD_FIM_SOURCE_DATA_PREFIX>/<name>. Refuses to replace an
+existing object whose contents differ; re-staging an identical file is a no-op.
 
 Usage:
-    uv run python scripts/stage_source_data.py <local file> <name>
+    just stage-source-data <file> <name>
 
-e.g. stage_source_data.py testdata/lulc.tif e2e/lulc.tif
+    python scripts/stage_source_data.py <file> <name>
+
+Example:
+    just stage-source-data ./nlcd_2023.tif lulc/nlcd_2023.tif
 """
 
 import argparse
@@ -42,8 +43,6 @@ def stage(local: Path, name: str) -> str:
 
     if head is not None:
         etag = head["ETag"].strip('"')
-        # A multipart upload's ETag is not an MD5, so size is all there is to
-        # compare; a single-part one is the MD5 itself.
         same = head["ContentLength"] == local.stat().st_size and (
             "-" in etag or etag == md5(local)
         )

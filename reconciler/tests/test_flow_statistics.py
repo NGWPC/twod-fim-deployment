@@ -1,9 +1,4 @@
-"""flow_statistics.py: which flow table an AOI reads, and reading any shape of it.
-
-Authoring and the AEP export both read through here, so the fallback from an
-AOI config to the system-wide settings, and the tolerance for a table's shape,
-are checked once for both.
-"""
+"""Tests for flow_statistics."""
 
 import sys
 from pathlib import Path

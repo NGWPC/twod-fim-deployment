@@ -175,9 +175,7 @@ inputs:
   - id: ds_of_lake
     title: ds_of_lake
     description: >-
-      Whether a lake sits immediately upstream of this reach. Such a reach has
-      no upstream mainstem centerline to walk up, so its inflow line goes
-      walk_us_dist_pct DOWN its own centerline instead (DR-007.4). Sourced from
+      Whether a lake sits immediately upstream of this reach. Sourced from
       reach_network.lake_outlet.
     input:
       literalDataDomain:
