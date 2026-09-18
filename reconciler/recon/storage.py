@@ -1,6 +1,6 @@
 """S3-compatible storage utilities.
 
-Used by orchestrator for artifact read/write/verify.
+Used by reconciler for artifact read/write/verify.
 Points to MinIO locally (via AWS_ENDPOINT_URL), real S3 in production.
 """
 

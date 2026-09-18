@@ -6,7 +6,7 @@ master password from Secrets Manager (via RDS_SECRET_ARN in .env),
 falling back to the PGPASSWORD environment variable when Secrets
 Manager is not available.
 
-Requires psycopg, installed with the orchestrator package.
+Requires psycopg, installed with the reconciler package.
 
 Usage:
   python3 deploy/init_db.py                    # idempotent DB setup

@@ -3,13 +3,13 @@
 > [!WARNING]
 > Draft Software. Many individual functions and code pieces are AI generated.
 
-Deployment + orchestration for the 2D-FIM system. This repo is the **orchestrator**
+Deployment + reconciliation for the 2D-FIM system. This repo is the **reconciler**
 and the **platform** it runs on. It does *not* contain the modeling jobs
 (`build_model`, `run_nd_scenarios`, `run_kwse_scenarios` those live in
 [`twod-fim-jobs`](https://github.com/NGWPC/twod-fim-jobs)) or the methodology
 ([`twod-fim-knowledge-base`](https://github.com/NGWPC/twod-fim-knowledge-base)).
 
-Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orchestrator-design.md`, `triggers-and-propagation.md`)
+Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `reconciler-design.md`, `triggers-and-propagation.md`)
 
 ## Layout
 
@@ -22,7 +22,7 @@ Design references: `twod-fim-knowledge-base/system-design/` (`guide.md`, `orches
 ├── example.env
 ├── example.cloud.env
 ├── example.aoi_config.jsonc # every AOI config option, commented (see RUNBOOK.md)
-├── orchestrator/            # reconciliation loop and job execution
+├── reconciler/            # reconciliation loop and job execution
 │   ├── pyproject.toml
 │   ├── Dockerfile
 │   ├── recon/               # reconciliation loop package

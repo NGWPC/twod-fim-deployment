@@ -48,7 +48,7 @@ cp example.cloud.env .env
 # Edit .env with real values
 
 # Install psycopg (required by init_db.py)
-cd orchestrator && uv pip install -e .
+cd reconciler && uv pip install -e .
 cd /opt/twod-fim-deployment
 
 # Initialize the database
@@ -62,7 +62,7 @@ python3 deploy/setup_sepex.py \
   --s3-bucket <bucket-name>
 
 # Seed the network, then author intent for it
-cd orchestrator
+cd reconciler
 uv run python scripts/seed.py
 uv run python scripts/author_intent.py --scope all
 
@@ -88,7 +88,7 @@ python3 deploy/init_db.py --reset
 ### Check reconciler
 
 ```bash
-cd /opt/twod-fim-deployment/orchestrator
+cd /opt/twod-fim-deployment/reconciler
 uv run python scripts/reconcile.py --once
 ```
 
@@ -97,7 +97,7 @@ uv run python scripts/reconcile.py --once
 Seeds a small test network and runs the reconciliation loop.
 
 ```bash
-cd /opt/twod-fim-deployment/orchestrator
+cd /opt/twod-fim-deployment/reconciler
 
 # Seed the network, then author the small end-to-end scope
 uv run python scripts/seed.py
@@ -131,7 +131,7 @@ aws s3 ls s3://<artifacts-bucket>/version=v1/ --recursive
 | `password authentication failed` | Wrong password in `.env`, or user not created (run `init_db.py`) |
 | `database does not exist` | Run `init_db.py` to initialize |
 | SEPEX unreachable | Check SEPEX is running: `curl http://<sepex-ip>/` (see [sepex.md](sepex.md)) |
-| `AccessDenied` on the LULC read | The orchestrator role needs read on the source bucket - check `external_source_bucket_names` is applied in the app stack |
+| `AccessDenied` on the LULC read | The reconciler role needs read on the source bucket - check `external_source_bucket_names` is applied in the app stack |
 | `PermanentRedirect` on the LULC read | `AWS_ENDPOINT_URL` is set. Leave it unset against real S3 - pinning one region's endpoint breaks reads of the us-west-2 source bucket |
 | `403 Forbidden` on the LULC read | `AWS_REQUEST_PAYER=requester` missing from `.env`, or from the SEPEX `.env` as `BUILDMODEL_AWS_REQUEST_PAYER` |
 | Timeout / no route on the LULC read | Cross-region S3 does not use the regional gateway endpoint - the private subnet needs NAT or TGW egress |

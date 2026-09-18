@@ -1,4 +1,4 @@
-# Orchestrator
+# Reconciler
 
 Reconciliation loop for 2D flood inundation model building.
 Polls the DB for stale reaches and processes them downstream-first (terminals before upstream).
@@ -88,7 +88,7 @@ This brings up:
 The reconciler runs on the host (not in a container):
 
 ```bash
-cd orchestrator
+cd reconciler
 uv run python scripts/reconcile.py --forever
 ```
 
@@ -112,11 +112,11 @@ different things. `seed.py` loads the network; `author_intent.py` says which of
 its reaches to build. With the test network, small enough to run end to end:
 
 ```bash
-just stage-source-data orchestrator/testdata/lulc.tif e2e/lulc.tif
-just stage-source-data orchestrator/testdata/lulc_lookup.json e2e/lulc_lookup.json
-just seed-lakes orchestrator/testdata/e2e.aoi_config.json
-just seed-network orchestrator/testdata/e2e.aoi_config.json
-just author-intent orchestrator/testdata/e2e.aoi_config.json
+just stage-source-data reconciler/testdata/lulc.tif e2e/lulc.tif
+just stage-source-data reconciler/testdata/lulc_lookup.json e2e/lulc_lookup.json
+just seed-lakes reconciler/testdata/e2e.aoi_config.json
+just seed-network reconciler/testdata/e2e.aoi_config.json
+just author-intent reconciler/testdata/e2e.aoi_config.json
 just reconcile
 ```
 
@@ -150,7 +150,7 @@ source, a local path or an `s3://` address:
 One command per AOI, into a local folder or an `s3://` address:
 
 ```bash
-just f2f <out-dir> orchestrator/testdata/e2e.aoi_config.json
+just f2f <out-dir> reconciler/testdata/e2e.aoi_config.json
 ```
 
 Without an AOI config (`just f2f <out-dir>`) it exports every materialized reach
@@ -159,9 +159,9 @@ in the database's network, forecast with the system-wide flow statistics.
 It runs the three steps of `scripts/f2f.py` in order, each also runnable on its own:
 
 ```bash
-uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios [aoi-config-path] <out-dir>
-uv run --project orchestrator python orchestrator/scripts/f2f.py library <out-dir>
-uv run --project orchestrator python orchestrator/scripts/f2f.py aep [aoi-config-path] <out-dir> [--image IMAGE]
+uv run --project reconciler python reconciler/scripts/f2f.py scenarios [aoi-config-path] <out-dir>
+uv run --project reconciler python reconciler/scripts/f2f.py library <out-dir>
+uv run --project reconciler python reconciler/scripts/f2f.py aep [aoi-config-path] <out-dir> [--image IMAGE]
 ```
 
 - `scenarios` writes `<out-dir>/scenarios.db` for the reaches of the AOI config's `network` (or of the database's network) that are materialized, `<out-dir>/start_reaches.csv`, the reaches controls start from, and `<out-dir>/models.gpkg`, the `domains`, `inflows` and `reaches` layers of the models those reaches' runs were made with (read from each model manifest's assets), every row carrying its `reach_id`
@@ -260,7 +260,7 @@ See `example.env` for additional optional variables (Docker platform, AWS sessio
 
 The DB schema in [`db/schema/`](../db/schema/) is the source of truth. It is
 applied by docker-compose on first boot via `docker-entrypoint-initdb.d`. The
-orchestrator does not create or modify tables - it only reads and writes data.
+reconciler does not create or modify tables - it only reads and writes data.
 
 ### Retry behavior
 
