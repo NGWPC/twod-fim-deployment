@@ -9,11 +9,10 @@ Design references: [`twod-fim-knowledge-base/system-design/`](https://github.com
 
 ## Layout
 
-|              |                                                                                                      |
-| ------------ | ---------------------------------------------------------------------------------------------------- |
-| `recon/`     | the reconciliation loop: gap calculation, checks, job submission, storage observation                |
-| `notebooks/` | how the loop works, by running it                                                                    |
-| `scripts/`   | `reconcile.py` (the loop), `seed.py` (load a network) and `author_intent.py` (say what is wanted of it), `f2f.py` (publish an AOI for flows2fim) |
+|            |                                                                                                      |
+| ---------- | ---------------------------------------------------------------------------------------------------- |
+| `recon/`   | the reconciliation loop: gap calculation, checks, job submission, storage observation                |
+| `scripts/` | `reconcile.py` (the loop), `seed.py` (load a network) and `author_intent.py` (say what is wanted of it), `f2f.py` (publish an AOI for flows2fim) |
 
 Reading order: `recon/gap.py` (gap calculation) then `recon/check.py` (one check) then `recon/execution.py` (job submission).
 
