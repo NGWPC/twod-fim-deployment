@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "orchestrator/**"
+      - "reconciler/**"
       - ".github/workflows/build-dev-images.yml"
   workflow_dispatch:
 
@@ -22,7 +22,7 @@ permissions: {}
 
 jobs:
   build:
-    name: Build orchestrator
+    name: Build reconciler
     runs-on: ubuntu-latest
 
     permissions:
@@ -47,7 +47,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/orchestrator
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/reconciler
           tags: |
             type=sha,prefix=sha-,format=short
             type=raw,value=dev,enable={{is_default_branch}}
@@ -55,7 +55,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./orchestrator
+          context: ./reconciler
           push: true
           platforms: linux/amd64
           provenance: false
@@ -67,7 +67,7 @@ jobs:
       - name: Summarize published tags
         run: |
           {
-            echo "### Published orchestrator image"
+            echo "### Published reconciler image"
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'

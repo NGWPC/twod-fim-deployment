@@ -6,7 +6,7 @@ It runs on a separate EC2 instance outside Terraform management.
 ## Prerequisites
 
 - twod-fim app stack deployed (`terraform apply` on `infra/terraform/app/`)
-- Orchestrator running on EC2 (`deploy/init_db.py` completed) (see [README.md](README.md))
+- Reconciler running on EC2 (`deploy/init_db.py` completed) (see [README.md](README.md))
 
 ### Variable reference
 
@@ -16,7 +16,7 @@ Placeholders used throughout this guide and where each value comes from:
 |---|---|
 | `<vpc-id>` | `terraform output -raw vpc_id` |
 | `<subnet-id>` | `terraform output -json private_subnet_ids` (pick one) |
-| `<orchestrator-sg-id>` | `terraform output -raw orchestrator_security_group_id` |
+| `<reconciler-sg-id>` | `terraform output -raw orchestrator_security_group_id` |
 | `<instance-profile-name>` | `terraform output -raw ec2_instance_profile_name` |
 | `<ami-id>` | `terraform output -raw ec2_ami_id` |
 | `<rds-sg-id>` | `terraform output -raw rds_security_group_id` |
@@ -51,11 +51,11 @@ aws ec2 create-security-group \
 Note the returned `GroupId`.
 
 ```bash
-# Allow orchestrator to reach SEPEX API (port 80)
+# Allow reconciler to reach SEPEX API (port 80)
 aws ec2 authorize-security-group-ingress \
   --group-id <sepex-sg-id> \
   --protocol tcp --port 80 \
-  --source-group <orchestrator-sg-id> \
+  --source-group <reconciler-sg-id> \
   --profile sandbox
 
 # Allow Lambda (Batch status callback) to reach SEPEX API (port 80)
@@ -73,12 +73,12 @@ aws ec2 authorize-security-group-ingress \
   --profile sandbox
 ```
 
-Note: all three rules reference Terraform-managed SGs (orchestrator, Lambda, RDS).
+Note: all three rules reference Terraform-managed SGs (reconciler, Lambda, RDS).
 Running `terraform apply` on the app stack may recreate those SGs with new IDs - re-add all three rules after each apply.
 
 ## 2. Launch EC2 instance
 
-Same AMI, instance type, subnet, and instance profile as the orchestrator.
+Same AMI, instance type, subnet, and instance profile as the reconciler.
 
 ```bash
 aws ec2 run-instances \
@@ -180,7 +180,7 @@ curl http://localhost/
 # Check plugins are registered
 curl http://localhost/processes
 
-# Test from orchestrator EC2 (via SEPEX private IP)
+# Test from reconciler EC2 (via SEPEX private IP)
 curl http://<sepex-private-ip>/
 ```
 
@@ -217,7 +217,7 @@ aws ec2 revoke-security-group-ingress \
 # 3. Delete the SEPEX security group
 aws ec2 delete-security-group --group-id <sepex-sg-id> --profile sandbox
 
-# 4. Drop the database (run from orchestrator EC2 via SSM)
+# 4. Drop the database (run from reconciler EC2 via SSM)
 psql -h <rds-address> -U twodfim_admin -d postgres -c "DROP DATABASE IF EXISTS sepex; DROP USER IF EXISTS sepex_app;"
 ```
 
@@ -227,7 +227,7 @@ SEPEX depends on Terraform-managed resources (RDS, security groups, Batch job de
 A `terraform destroy` + `apply` cycle recreates these with new IDs and addresses, which breaks SEPEX:
 
 - RDS is destroyed - the `sepex` database and connection string are gone
-- Orchestrator, Lambda, and RDS security groups get new IDs - SEPEX SG rules become stale
+- Reconciler, Lambda, and RDS security groups get new IDs - SEPEX SG rules become stale
 - The RDS SG also has a manually-added rule referencing the SEPEX SG (bidirectional dependency)
 - Batch job definitions and queues are recreated - plugin references may break
 
@@ -259,7 +259,7 @@ terraform destroy
 # 5. Rebuild
 terraform apply
 
-# 6. Deploy orchestrator (deploy/init_db.py) and gather prereq values
+# 6. Deploy reconciler (deploy/init_db.py) and gather prereq values
 #    (see Prerequisites section above)
 
 # 7. Follow this guide from "Create security group" onward

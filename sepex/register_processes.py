@@ -19,7 +19,7 @@ fixed in its .yml, both read from the repo's .env like $SEPEX_URL:
                       when true. Otherwise it is registered as the published
                       GHCR image, "ghcr.io/ngwpc/twod-fim-jobs/<name>:dev" --
                       the same image `docker tag`'d :local by
-                      orchestrator/README.md's setup instructions, so this is
+                      reconciler/README.md's setup instructions, so this is
                       just skipping that tag and registering the source
                       directly. Defaults false: nothing to build or pull by
                       hand first. Images not written ":local" (aws-batch's

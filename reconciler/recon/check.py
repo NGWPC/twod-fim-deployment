@@ -1,0 +1,764 @@
+"""One check: observe, work out the gap, act on it.
+
+This is the loop. Everything else is a part of it — queue.py says which reach,
+observe.py records what the address intent implies holds, gap.py decides,
+processing.py writes the work notes, jobs.py hears back from the execution
+system. Nothing here knows about notebooks or any other caller.
+
+A check is short. It never waits for a job: it submits, writes down that it
+did, and ends. What the job produced is discovered by a later check looking at
+storage, which is why a crash at any point costs at most some repeated work.
+"""
+
+import logging
+import os
+from dataclasses import dataclass, field
+from typing import Any
+
+import psycopg
+
+from recon import (
+    activity,
+    db,
+    gap,
+    identity,
+    intent,
+    observe,
+    plan,
+    processing,
+    queue,
+    scenarios,
+    storage,
+)
+from recon.config import settings
+from recon.execution import ExecutionService
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CheckResult:
+    """What a check saw and did. Returned so a notebook can narrate it."""
+
+    reach_id: str
+    revision: int
+    decision: str
+    observed: dict[str, Any] = field(default_factory=dict)
+    submitted_ref: str | None = None
+    note: str = ""
+
+    def __str__(self) -> str:
+        bits = [f"reach {self.reach_id}", f"rev {self.revision}", self.decision]
+        if self.note:
+            bits.append(self.note)
+        return " | ".join(bits)
+
+
+# One read, one point in time. Each proof is reduced to a boolean here — a
+# step's row exists AND proves that reach's current revision — so the gap
+# calculation never sees another reach's revision. The downstream reach's
+# proofs are judged against the downstream reach's own intent.
+_SNAPSHOT = """
+    SELECT
+        d.reach_id,
+        d.revision,
+        rn.is_terminal,
+        rn.reach_to_id AS downstream_reach_id,
+        COALESCE(mm.applied_revision  >= d.revision,  FALSE) AS model_ok,
+        COALESCE(mnd.applied_revision >= d.revision,  FALSE) AS nd_ok,
+        COALESCE(mkw.applied_revision >= d.revision,  FALSE) AS kwse_ok,
+        COALESCE(dmm.applied_revision  >= dd.revision, FALSE) AS ds_model_ok,
+        COALESCE(dnd.applied_revision  >= dd.revision, FALSE) AS ds_nd_ok,
+        COALESCE(dkw.applied_revision  >= dd.revision, FALSE) AS ds_kwse_ok,
+        COALESCE(drn.is_terminal, FALSE) AS ds_is_terminal,
+        (COALESCE(d.ld_ds_z_delta, f.ld_ds_z_delta) IS NOT NULL) AS has_stage_increment,
+        p.current_step
+    FROM desired_state d
+    JOIN reach_network rn USING (reach_id)
+    CROSS JOIN desired_state_defaults f
+    LEFT JOIN reach_network drn          ON drn.reach_id = rn.reach_to_id
+    LEFT JOIN materialized_models    mm  ON mm.reach_id  = d.reach_id
+    LEFT JOIN materialized_nd_runs   mnd ON mnd.reach_id = d.reach_id
+    LEFT JOIN materialized_kwse_runs mkw ON mkw.reach_id = d.reach_id
+    LEFT JOIN reach_processing p ON p.reach_id = d.reach_id
+    LEFT JOIN desired_state dd           ON dd.reach_id  = rn.reach_to_id
+    LEFT JOIN materialized_models    dmm ON dmm.reach_id = rn.reach_to_id
+    LEFT JOIN materialized_nd_runs   dnd ON dnd.reach_id = rn.reach_to_id
+    LEFT JOIN materialized_kwse_runs dkw ON dkw.reach_id = rn.reach_to_id
+    WHERE d.reach_id = %s
+"""
+
+
+def load_snapshot(
+    reach_id: str, *, conn: psycopg.Connection | None = None
+) -> gap.Snapshot | None:
+    """Everything a decision depends on, read in one query.
+
+    None when the reach has no desired_state row: a reach in the network means
+    nothing until intent is authored for it.
+    """
+    row = db.one(_SNAPSHOT, (reach_id,), conn=conn)
+    if row is None:
+        return None
+    return gap.Snapshot(
+        reach_id=row["reach_id"],
+        revision=row["revision"],
+        is_terminal=row["is_terminal"],
+        downstream_reach_id=row["downstream_reach_id"],
+        model_ok=row["model_ok"],
+        nd_ok=row["nd_ok"],
+        kwse_ok=row["kwse_ok"],
+        ds_model_ok=row["ds_model_ok"],
+        ds_nd_ok=row["ds_nd_ok"],
+        ds_kwse_ok=row["ds_kwse_ok"],
+        ds_is_terminal=row["ds_is_terminal"],
+        has_stage_increment=row["has_stage_increment"],
+        in_flight_step=row["current_step"],
+    )
+
+
+def _downstream_max_q_dir(downstream: str) -> str:
+    """The downstream reach's scenario folder at its HIGHEST discharge.
+
+    Read from that reach's proof rather than predicted, because the discharge
+    is emergent: the adaptive step algorithm chose it, and only that reach's
+    materialization knows what it was. Two things upstream need this folder —
+    the inundated area that bounds an nd run, and the stage transfer line that
+    shapes a model domain — so it is derived once here.
+    """
+    proof = db.one(
+        "SELECT model_id, run_identity_hash, q_set FROM materialized_nd_runs"
+        " WHERE reach_id = %s",
+        (downstream,),
+    )
+    if proof is None:
+        raise RuntimeError(
+            f"downstream reach {downstream} has no materialized nd library"
+        )
+    library = storage.nd_library_path(
+        downstream, proof["model_id"], proof["run_identity_hash"]
+    )
+    if library is None:
+        raise RuntimeError(
+            f"downstream reach {downstream} is materialized but its nd=<slope> "
+            "folder cannot be found"
+        )
+    return f"{library}/{identity.q_folder(max(proof['q_set']))}"
+
+
+def _model_geometries(reach_id: str, wanted: dict) -> list[str]:
+    """Geometry the model domain must contain besides the reach itself.
+
+    A non-terminal reach's domain has to extend to where water is transferred
+    in from below, so it includes the DOWNSTREAM reach's stage transfer line at
+    its highest discharge — the largest footprint that transfer ever has. This
+    is what the model rung waits for: gap.py holds a reach until its downstream
+    neighbour's nd library is proved, and this is the reason it does.
+
+    Terminal reaches have nothing below them and pass none.
+
+    Passed as an ADDRESS. The job takes either a WKT string or a path to a
+    GeoJSON and reads the same geometry out of both — verified equal coordinate
+    for coordinate, so the domain this produces is the one the inlined WKT
+    produced. What changes is where the geometry travels: a stage transfer line
+    is a few kilobytes of WKT and grows with the reach, and the payload rides on
+    the job container's command line.
+
+    Nothing here reads the file, so a transfer line that is missing fails inside
+    the job rather than before it is submitted. gap.py already holds the reach
+    until the downstream nd library is proved, and _downstream_max_q_dir raises
+    when that proof or its nd= folder is absent, so what is left uncovered is
+    narrow: a proved library whose stage transfer line was never written.
+
+    NOTE these geometries are NOT part of model identity. They move the domain,
+    so they change domain_code and not identity_hash — meaning a model built
+    without them still satisfies intent and will still be adopted. Changing
+    what is passed here does not trigger a rebuild by itself.
+    """
+    if wanted["is_terminal"]:
+        return []
+    return [f"{_downstream_max_q_dir(wanted['reach_to_id'])}/{storage.STL_FILENAME}"]
+
+
+# The reaches draining into one reach, and which of them is the mainstem.
+#
+# Mainstem = largest drainage area, matching what the job used to compute for
+# itself. Ties are broken by reach_id so the answer is stable: two reaches with
+# identical drainage area would otherwise pick differently between runs, and
+# the mainstem's geometry moves the inflow line, which moves the domain.
+_UPSTREAM = """
+    SELECT reach_id, total_da_sqkm
+    FROM reach_network
+    WHERE reach_to_id = %s
+    ORDER BY total_da_sqkm DESC NULLS LAST, reach_id
+"""
+
+
+def _upstream(reach_id: str) -> dict:
+    """Upstream reach ids for this reach, and the mainstem among them."""
+    rows = db.query(_UPSTREAM, (reach_id,))
+    return {
+        "reach_ids": [r["reach_id"] for r in rows],
+        "mainstem_reach_id": rows[0]["reach_id"] if rows else None,
+    }
+
+
+# Labels SEPEX stores with a job and can filter on (GET /jobs?tags=...).
+#
+# A reach tag is the one thing a person always wants when looking at the
+# execution system: every job SEPEX holds is otherwise identified only by a
+# process name and a uuid, and the reach is nowhere in either. With this, the
+# jobs belonging to a reach are one query — which is what you want when a
+# reach halts and you need its history.
+#
+# Namespaced `reach:<id>` rather than a bare number so it stays legible beside
+# tags added later, and because a bare id is indistinguishable from any other
+# number. SEPEX allows letters, digits, and `. - _ :` in a tag, so the colon is
+# valid; it rejects anything else, and a rejected tag fails the submission.
+def job_tags(reach_id: str) -> list[str]:
+    """The tags every submission for this reach carries."""
+    return [f"reach:{reach_id}"]
+
+
+def _build_model_payload(reach_id: str) -> dict:
+    """What build_model needs, with every identity input pinned.
+
+    Pinned rather than left to the job's defaults, so the job builds exactly
+    the identity the loop predicted — a default drifting inside the job image
+    would otherwise produce models at addresses the loop never looks at.
+
+    sdr_commit cannot be pinned: it is baked into the image. desired_state's
+    value must therefore match the deployed image, and the observe self-check
+    is what catches it when it does not.
+
+    The upstream reaches are supplied rather than left for the job to find.
+    The job reads the network from a file sorted by reach_id, so a lookup by
+    reach_to_id would mean reading every row group — while the loop has the
+    same question already answered by an index. Only the mainstem's GEOMETRY is
+    needed (it positions the inflow line), and the job fetches that itself by
+    id, so nothing large travels in the payload.
+    """
+    wanted = intent.effective(reach_id)
+    if wanted is None:
+        raise RuntimeError(f"no effective intent for reach {reach_id}")
+    upstream = _upstream(reach_id)
+    payload = {
+        "reach_id": reach_id,
+        "reach_network_path": storage.reach_network_path(),
+        "upstream_reach_ids": upstream["reach_ids"],
+        "upstream_mainstem_reach_id": upstream["mainstem_reach_id"],
+        "base_output_path": storage.model_base_path(reach_id),
+        "grid_resolution": float(wanted["grid_resolution"]),
+        "epsg_code": int(wanted["epsg_code"]),
+        "dem_source": wanted["dem_source"],
+        "lulc_source": wanted["lulc_source"],
+        # Already a path in the database, like the two sources above it, so it
+        # passes straight through. The job reads it and hashes what it finds,
+        # which is the same mapping identity was predicted from.
+        "lulc_lookup": wanted["lulc_lookup"],
+        # to do: should be part of identity
+        "ds_of_lake": bool(wanted["lake_outlet"]),
+        # No domain_buffer. It was a flat placeholder — one distance for every
+        # reach — standing in for a widening the job can now work out per reach,
+        # from the bankfull width its own drainage area implies. Sending a
+        # number would override that estimate with a worse one.
+        "other_geometries": _model_geometries(reach_id, wanted),
+    }
+    # Sent only when authored. Absent, the job computes the domain from the
+    # reach and other_geometries and the loop accepts what it computes; present,
+    # the job builds exactly this bbox, and observe looks for it at the address
+    # the bbox implies. Authored values need not be on the grid, so it is
+    # snapped outward first — the same snap observe applies before predicting
+    # the address, which is what keeps the two in agreement.
+    if wanted["model_domain"] is not None:
+        payload["domain"] = identity.snap_bbox(wanted["model_domain"], wanted["grid_resolution"])
+    return payload
+
+
+def _nd_boundary(reach_id: str, wanted: dict) -> dict:
+    """The downstream boundary condition for a normal-depth run: where it is
+    applied.
+
+    The boundary is a statement about what this reach drains INTO, never about
+    the reach itself, which is why it depends on the terminal/non-terminal
+    split the whole ladder turns on:
+
+      non-terminal  the downstream reach's inundated area at the HIGHEST
+                    discharge of its library — the largest wetted footprint it
+                    produces, so it bounds every scenario this reach will run
+      terminal      the lake or coast it drains into, published once per water
+                    body and shared by every reach ending there — DR-006 ALT-E.
+                    A plain outlet drains into neither and sends no polygon at
+                    all, leaving the job to derive one from the model itself
+
+    The downstream address is read from that reach's proof rather than
+    predicted, because the discharge in it is emergent: the adaptive step
+    algorithm chose it, and only that reach's materialization knows what it was.
+
+    The slope itself is no longer this function's business: the job derives it
+    from the reach's own DEM (elevation drop over its own centerline) and no
+    longer takes one as input.
+
+    Which leaves DR-006 ALT-E still unmet, and now unmeetable from here. It
+    asks for a FREEFALL at a terminal — water leaving the domain without
+    resistance, so it does not pool in the transition zone. The loop used to
+    pass a slope and could at least have passed a steep one; it now passes
+    none, and the job applies a terminal's own centerline slope like any other
+    reach's. Satisfying ALT-E is the job's to do, and nothing here can stand in
+    for it.
+    """
+    if wanted["is_terminal"]:
+        for kind in ("lake", "coast"):
+            feature_id = wanted[f"{kind}_to_id"]
+            if feature_id is not None:
+                return {
+                    "outflow_area_polygon_path": storage.boundary_polygon_path(
+                        kind, feature_id
+                    )
+                }
+        # A plain outlet names no water body, and needs none. The input is
+        # optional and the job derives an outflow area from the model's own
+        # domain and centerline when it is absent, so sending nothing is the
+        # correct instruction rather than a missing one.
+        return {}
+
+    downstream = wanted["reach_to_id"]
+    return {
+        "outflow_area_polygon_path": f"{_downstream_max_q_dir(downstream)}/{storage.INUNDATED_AREA_FILENAME}",
+    }
+
+
+def _library_scenarios(reach_id: str, model_id: str, wanted: db.Row) -> list[str]:
+    """Scenario manifests already published under this reach's run identity.
+
+    Everything, not just what a previous attempt adopted: a discharge rejected
+    against one reference is often accepted against the next, and the job
+    re-judges all of them against the bands in force now. An empty list is the
+    normal answer the first time a reach is swept.
+    """
+    _, run_hash = identity.run_identity(wanted)
+    library = storage.nd_library_path(reach_id, model_id, run_hash)
+    if library is None:
+        return []
+    return [
+        f"{library}/{identity.q_folder(q)}/{storage.SCENARIO_MANIFEST_FILENAME}"
+        for q in sorted(
+            q
+            for q in (
+                identity.parse_q_folder(name)
+                for name in storage.list_subfolders(library)
+            )
+            if q is not None
+        )
+    ]
+
+
+def _authored_bands(wanted: db.Row) -> dict:
+    """The authored resolution ranges, in the shape the job takes them.
+
+    Sent so the sweep targets the resolution intent asks for, rather than the
+    defaults in its own image — which are tighter than the ones authored here,
+    and were what every library before this was actually built to.
+
+    A range nobody authored, on the reach or the defaults row, is not sent: the
+    job then uses its own default for that criterion and `adopt` does not judge
+    it either (guide.md, on promoting an emergent dimension). So the pair stays
+    in step — a criterion is either authored, sent and judged, or none of the
+    three.
+    """
+    payload = {}
+    for field in ("ld_q_max_depth_increase_range",
+                  "ld_q_median_depth_increase_range",
+                  "ld_q_flooded_area_prcnt_increase_range"):
+        band = wanted[field]
+        if band is None or band.lower is None or band.upper is None:
+            continue
+        payload[field] = [float(band.lower), float(band.upper)]
+    return payload
+
+
+def _run_nd_payload(reach_id: str) -> dict:
+    """What run_nd_scenarios needs to produce the library intent asks for.
+
+    The discharge range and the resolution ranges are authored intent passed
+    straight through. The step is
+    only a STARTING increment — the job grows and shrinks it as the reach's
+    response curve demands — which is why the loop cannot predict the resulting
+    discharges and reads them back instead.
+
+    model_results_base_path is the bare results root. The job appends
+    `reach=<id>/<model_id>/<run_identity_hash>/` itself, so a per-reach prefix
+    here would be written into the path twice.
+    """
+    wanted = intent.effective(reach_id)
+    if wanted is None:
+        raise RuntimeError(f"no effective intent for reach {reach_id}")
+    model = db.one(
+        "SELECT model_id FROM materialized_models WHERE reach_id = %s", (reach_id,)
+    )
+    if model is None:
+        raise RuntimeError(f"reach {reach_id} has no materialized model to run against")
+    for field in (
+        "q_lower_bound",
+        "q_upper_bound",
+        "initial_dq_step_for_nd",
+        "q_grid_resolution",
+    ):
+        if wanted[field] is None:
+            raise RuntimeError(
+                f"reach {reach_id} has no {field}; nd cannot be submitted"
+            )
+    return {
+        "model_manifest_path": storage.model_artifact_path(reach_id, model["model_id"]),
+        "model_results_base_path": storage.results_root(),
+        # Whole cms. Discharge is integral end to end — authored as integer
+        # columns, run at integers, named into the q= folder as an integer, and
+        # recorded in q_set as an integer. Sending a float here would put the
+        # fraction back in at the one place it is allowed to enter.
+        "min_upstream_inflow": int(wanted["q_lower_bound"]),
+        "max_upstream_inflow": int(wanted["q_upper_bound"]),
+        "delta_upstream_inflow": int(wanted["initial_dq_step_for_nd"]),
+        # The axis every scenario must land on. The job snaps its own proposals
+        # to it, which is what makes "nothing finer exists" checkable when the
+        # library is read back.
+        "q_grid_resolution": int(wanted["q_grid_resolution"]),
+        # What the library already holds. Simulating is the expensive part of a
+        # scenario; the three readings the sweep needs are on the manifest and
+        # cost nothing to read. Listing storage is this loop's job, not the
+        # job's, so it is told rather than left to go looking -- and being told
+        # is what makes a retry cheap and the sweep idempotent.
+        "existing_scenarios": _library_scenarios(reach_id, model["model_id"], wanted),
+        # The resolution the library must reach. The same ranges adopt() judges
+        # the finished library by, so the sweep aims at what will be checked.
+        **_authored_bands(wanted),
+        **_nd_boundary(reach_id, wanted),
+        "volume_convergence_tolerance": settings.volume_convergence_tolerance,
+        "allow_water_on_edges": settings.allow_water_on_edges,
+    }
+
+
+def _kwse_inputs(
+    reach_id: str, context: scenarios.Planned, chain: tuple[plan.PlannedScenario, ...]
+) -> dict:
+    """What run_kwse_scenarios needs to run one chain of scenarios.
+
+    Unlike the nd payload, almost none of this is intent passed through. The
+    scenario list is COMPUTED — DR-042 and DR-043 set the envelope from what the
+    downstream reach has materialized and how much of its basin is ours, DR-033
+    fills it with a stage grid, and each target is bound to a real downstream
+    run. plan.py does all of that and
+    is deliberately pure, so this function's whole job is to turn its answer
+    into addresses.
+
+    Order is preserved exactly as planned. The job runs its scenarios serially
+    and a seed names either a scenario already in storage or one earlier in
+    this list, so reordering here would point a run at a depth grid that does
+    not exist yet.
+    """
+    payload_scenarios = [
+        {
+            "upstream_discharge": s.q,
+            "bc_value": s.z,
+            "downstream_Scenario": storage.scenario_manifest_path(
+                context.downstream_id,
+                context.ds_model_id,
+                context.ds_run_identity_hash,
+                scenarios.scenario_dir(
+                    s.downstream.bc_type, s.downstream.bc_value, s.downstream.q
+                ),
+            ),
+            "hotstart": {
+                "upstream_discharge": s.seed.q,
+                "bc_type": s.seed.bc_type,
+                "bc_value": s.seed.bc_value,
+                # Named rather than defaulted: the job's default is baked into its
+                # image, and this is the hash the loop predicted and will later
+                # observe against.
+                "identity_hash": context.run_identity_hash,
+            },
+        }
+        for s in chain
+    ]
+
+    return {
+        "model_manifest_path": storage.model_artifact_path(reach_id, context.model_id),
+        "model_results_base_path": storage.results_root(),
+        "scenarios": payload_scenarios,
+        "volume_convergence_tolerance": settings.volume_convergence_tolerance,
+        "allow_water_on_edges": settings.allow_water_on_edges,
+    }
+
+
+def _run_kwse_group(reach_id: str) -> list[dict]:
+    """One run_kwse_scenarios job per discharge chain still missing scenarios.
+
+    A chain is independent of every other (plan.chains), so each runs as its
+    own job and SEPEX decides how many run at once — on a GPU host or a CPU
+    one alike. Chains differ in length, and a job per chain leaves nothing
+    reserved while a short chain's neighbour finishes a long one.
+
+    Only what does not exist is submitted, one scenario at a time: a discharge
+    whose stages are all in storage has no job, and one that got partway
+    resumes at its first missing stage. That is what makes a retry after a
+    failure, a dismissal or a lost group cheap — it runs what is missing and
+    nothing else — and it is the same test observe applies, so what is missing
+    there is exactly what is submitted here.
+
+    An empty list means nothing is missing: the step is already done and the
+    next observation will adopt it.
+    """
+    try:
+        context = scenarios.planned(reach_id)
+    except scenarios.NotPlannable as why:
+        raise RuntimeError(str(why)) from why
+
+    return [
+        # The discharge is the label a person looks for among a group's jobs.
+        {"inputs": _kwse_inputs(reach_id, context, chain), "tags": [f"q:{chain[0].q}"]}
+        for chain in scenarios.pending(reach_id, context)
+    ]
+
+
+PAYLOADS = {
+    gap.BUILD_MODEL: _build_model_payload,
+    gap.RUN_ND: _run_nd_payload,
+}
+
+# The steps carried out as a group of jobs rather than one: the builder returns
+# one member per job, all for the same process.
+GROUPS = {
+    gap.RUN_KWSE: _run_kwse_group,
+}
+
+# The SEPEX process each STEP is carried out by. A step and a process are not
+# the same thing: build_model has one process regardless, but a normal-depth run
+# is one of a matrix — the solver picks the model, $GPU_AVAILABLE picks the
+# hardware, and
+# only their product is a registered process. Only lisflood is built; a solver
+# with no entry is refused here, where the reason is legible, rather than
+# surfacing later as a 404 from SEPEX.
+#
+# These are SEPEX process ids, which is the loop's whole vocabulary for
+# execution now. Which image serves a process, on what hardware, with which
+# environment and mounts — and where SEPEX was configured to read that from —
+# is SEPEX's business and is not represented here at all.
+#
+# The mapping stays OUT of the gap calculation and out of reach_processing on
+# purpose. Which variant ran is a realization detail, like the domain code: the
+# rung of the ladder is `run_nd_scenarios` whichever process serves it, and
+# reach_processing.current_step records the step (its CHECK constraint allows
+# exactly the three step names). The variant is recorded where history lives —
+# the activity log — and the job reference is the handle to the run itself.
+BUILD_MODEL_PROCESS = "buildModel"
+RUN_ND_PROCESSES = {
+    ("lisflood", False): "runNdScenariosLisfloodCpu",
+    ("lisflood", True): "runNdScenariosLisfloodGpu",
+}
+RUN_KWSE_PROCESSES = {
+    ("lisflood", False): "runKwseScenariosLisfloodCpu",
+    ("lisflood", True): "runKwseScenariosLisfloodGpu",
+}
+
+# The steps whose process depends on the solver and the hardware. build_model is
+# absent on purpose: it runs no solver, so it has one process whatever a reach
+# asks for.
+SOLVER_PROCESSES = {gap.RUN_ND: RUN_ND_PROCESSES, gap.RUN_KWSE: RUN_KWSE_PROCESSES}
+
+
+# Whether this machine can run a solver on a GPU.
+#
+# Read from the environment at the moment it is needed, not held in Settings.
+# Settings describes what this DEPLOYMENT is — its database, its bucket, its
+# execution layer — and travels in .env. Whether a GPU is present is a property
+# of the HOST the jobs land on, which is why it is set by whoever starts the
+# process and not written down beside the bucket name.
+#
+# Parsed rather than truthiness-tested: a bare bool() on a string is true for
+# every non-empty value, so GPU_AVAILABLE=false would read as True. That exact
+# mistake shipped in the job images and made a CPU build ask for CUDA.
+GPU_AVAILABLE_ENV = "GPU_AVAILABLE"
+_TRUE = {"true", "1", "yes", "y", "on"}
+
+
+def gpu_available() -> bool:
+    """True when $GPU_AVAILABLE says this host has a usable GPU.
+
+    Defaults to false: a machine without a device works without being told
+    anything, and asking for the GPU process where none exists fails at the
+    solver rather than falling back.
+    """
+    return os.environ.get(GPU_AVAILABLE_ENV, "").strip().lower() in _TRUE
+
+
+def _process_id(step: str, reach_id: str) -> str:
+    """The SEPEX process that carries out a step for this reach.
+
+    Two things pick it: the solver, which is authored intent, and whether this
+    host has a GPU, which is $GPU_AVAILABLE. Intent is read only when the step
+    actually varies by it, so build_model costs no extra query.
+    """
+    if step == gap.BUILD_MODEL:
+        return BUILD_MODEL_PROCESS
+    processes = SOLVER_PROCESSES.get(step)
+    if processes is None:
+        raise RuntimeError(f"no SEPEX process for step {step!r}")
+    wanted = intent.effective(reach_id)
+    if wanted is None:
+        raise RuntimeError(f"no effective intent for reach {reach_id}")
+    key = (wanted["solver"], gpu_available())
+    if key not in processes:
+        raise RuntimeError(
+            f"no {step} process for solver {wanted['solver']!r} "
+            f"({GPU_AVAILABLE_ENV}={gpu_available()}); "
+            f"built variants are {sorted(processes)}"
+        )
+    return processes[key]
+
+
+def run_check(reach_id: str, execution: ExecutionService) -> CheckResult:
+    """Check one reach, and act on what the gap turns out to be.
+
+    A check submits whenever there is a gap. There is no concurrency limit and
+    no way to ask for one: SEPEX holds the resources, keeps the queue, and
+    admits work against its own pool, so a submission the loop makes is a
+    statement about what is NEEDED, never a claim that capacity exists. A job
+    it cannot start yet sits queued, which is the system working.
+
+    Which hardware variant of a multi-process step is asked for comes from
+    $GPU_AVAILABLE, not from the caller: it is a property of the host the jobs
+    land on rather than of one check.
+    """
+    processing.start_check(reach_id)  # stamped now, at the start, never at the end
+    seen = observe.observe_reach(reach_id)
+    seen_nd = observe.observe_nd_runs(reach_id)
+    seen_kwse = observe.observe_kwse_runs(reach_id)
+    # A change to this reach's nd proof changes what the reaches above it can
+    # do: it is their outflow boundary, so one appearing unblocks them and one
+    # being retracted invalidates work they may already have started. Told here
+    # rather than at submission because this is the moment it becomes true —
+    # and unlike submission, it also covers a library that has gone away.
+    # A kwse library counts for the same reason: the reach above reads the
+    # minimum across BOTH of this reach's tables to find its own floor, so a
+    # stage library appearing lowers that floor and widens what it can run.
+    if seen_nd.get("changed") or seen_kwse.get("changed"):
+        queue.request_check_upstream(reach_id)
+
+    # Work landing is what ends a failure streak. Adoption — a step's proof that
+    # was not there before — is that signal; a retraction is not, which is why
+    # `found` is tested alongside `changed`.
+    if any(o.get("changed") and o.get("found") for o in (seen, seen_nd, seen_kwse)):
+        processing.clear_failures(reach_id)
+
+    snapshot = load_snapshot(reach_id)
+    if snapshot is None:
+        note = (
+            "desired_state_defaults not seeded"
+            if intent.defaults_missing()
+            else "no desired_state"
+        )
+        return CheckResult(reach_id, -1, "skipped", seen, note=note)
+
+    event = activity.begin(
+        reach_id,
+        "check",
+        snapshot.revision,
+        {
+            "model": seen.get("found"),
+            "nd": seen_nd.get("found"),
+            "kwse": seen_kwse.get("found"),
+        },
+    )
+    decision = gap.calculate(snapshot)
+    result = CheckResult(
+        reach_id,
+        snapshot.revision,
+        type(decision).__name__,
+        {"model": seen, "nd": seen_nd, "kwse": seen_kwse},
+    )
+
+    try:
+        if isinstance(decision, gap.NoGap):
+            # Whatever was running produced this; the marker has served its
+            # purpose. Also stop saying we are waiting on anyone.
+            processing.clear_step(reach_id)
+            processing.wait_on(reach_id, None)
+            result.note = "satisfied"
+
+        elif isinstance(decision, gap.InFlight):
+            result.note = f"{decision.step} already running, left alone"
+
+        elif isinstance(decision, gap.AwaitingDownstream):
+            processing.wait_on(reach_id, decision.reach_id)
+            result.note = f"{decision.step} waits on reach {decision.reach_id}"
+
+        elif isinstance(decision, gap.AwaitingInputs):
+            # Not a failure: nothing was attempted, so there is nothing to back
+            # off from. It simply stays here until the missing data is authored.
+            processing.wait_on(reach_id, None)
+            result.note = f"{decision.step} awaiting inputs: {decision.reason}"
+
+        elif isinstance(decision, gap.RunStep):
+            processing.wait_on(reach_id, None)
+            process_id = _process_id(decision.step, reach_id)
+            if decision.step in GROUPS:
+                members = GROUPS[decision.step](reach_id)
+                ref = (execution.submit_group(process_id, members, tags=job_tags(reach_id))
+                       if members else None)
+                submitted = f"{len(members)} {process_id} jobs"
+            else:
+                ref = execution.submit(
+                    process_id, PAYLOADS[decision.step](reach_id), tags=job_tags(reach_id)
+                )
+                submitted = process_id
+
+            if ref is None:
+                # Everything the step asks for is already in storage — it landed
+                # between this check's observation and now. Nothing is marked in
+                # flight, so the check requested below adopts it.
+                result.note = f"{decision.step}: nothing missing, nothing submitted"
+            else:
+                # The STEP is what goes in the marker, not the process that
+                # served it: that column is the ladder's rung, and the gap
+                # calculation and its CHECK constraint both speak in steps. The
+                # variant is named in the note, which the activity log keeps.
+                processing.mark_in_flight(reach_id, decision.step, ref, snapshot.revision)
+                result.submitted_ref = ref
+                result.note = f"submitted {submitted} ({ref[:18]})"
+            # Ask to be looked at again, so the result gets noticed without
+            # waiting for the next sweep.
+            queue.request_check(reach_id)
+
+    except Exception as exc:  # submission failed; the reach must not stall
+        failure = processing.record_failure(reach_id, str(exc))
+        activity.end(event, "failed", error=str(exc)[:2000])
+        result.decision, result.note = (
+            "Failed",
+            (
+                f"{exc} (failure {failure['consecutive_failures']}"
+                + (", halted)" if failure["halted"] else ")")
+            ),
+        )
+        logger.exception("check failed for reach %s", reach_id)
+        return result
+
+    # One activity outcome for both kinds of not-proceeding; the decision name
+    # in the detail says which, and reach_status keeps them apart as states.
+    outcome = (
+        "blocked"
+        if isinstance(decision, (gap.AwaitingDownstream, gap.AwaitingInputs))
+        else "ok"
+    )
+    activity.end(event, outcome, {"decision": result.decision, "note": result.note})
+    logger.info("%s", result)
+    return result
+
+
+def sweep(execution: ExecutionService, limit: int | None = None) -> list[CheckResult]:
+    """Check every reach that is currently due, once.
+
+    The list is read once at the start rather than re-queried as it goes, so a
+    sweep terminates: checks request further checks, and a sweep that kept
+    re-reading its own queue would chase them forever. Call it again to pick
+    those up — which is what the loop does anyway.
+    """
+    return [run_check(r["reach_id"], execution) for r in queue.due_reaches(limit)]

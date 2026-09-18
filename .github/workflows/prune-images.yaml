@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   prune:
-    name: Prune orchestrator
+    name: Prune reconciler
     runs-on: ubuntu-latest
 
     permissions:
@@ -31,7 +31,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           owner: ${{ github.repository_owner }}
-          package: ${{ github.event.repository.name }}/orchestrator
+          package: ${{ github.event.repository.name }}/reconciler
 
           # Only touch images older than two weeks.
           older-than: 2 weeks

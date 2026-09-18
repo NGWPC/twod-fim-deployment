@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy SEPEX alongside the twod-fim orchestrator on EC2.
+"""Deploy SEPEX alongside the twod-fim reconciler on EC2.
 
 Handles database creation, configuration, and startup using a pre-built container image.
 Run on the SEPEX EC2 instance after infrastructure provisioning (see deploy/sepex.md steps 1-3).

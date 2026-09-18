@@ -92,19 +92,19 @@ register-sepex-processes-cloud:
 
 # Seed the lakes an AOI config names into the database and workspace/lakes/
 seed-lakes aoi_config_path:
-    uv run --project orchestrator python orchestrator/scripts/seed.py lakes {{aoi_config_path}}
+    uv run --project reconciler python reconciler/scripts/seed.py lakes {{aoi_config_path}}
 
 # Seed the coasts an AOI config names into the database and workspace/coasts/
 seed-coasts aoi_config_path:
-    uv run --project orchestrator python orchestrator/scripts/seed.py coasts {{aoi_config_path}}
+    uv run --project reconciler python reconciler/scripts/seed.py coasts {{aoi_config_path}}
 
 # Seed the network an AOI config names into the database and workspace/reach_network.parquet (its lakes and coasts must be seeded)
 seed-network aoi_config_path:
-    uv run --project orchestrator python orchestrator/scripts/seed.py network {{aoi_config_path}}
+    uv run --project reconciler python reconciler/scripts/seed.py network {{aoi_config_path}}
 
 # Stage a local file as source data at <TWOD_FIM_SOURCE_DATA_PREFIX>/<name> (refuses to replace a different file)
 stage-source-data file name:
-    uv run --project orchestrator python orchestrator/scripts/stage_source_data.py {{file}} {{name}}
+    uv run --project reconciler python reconciler/scripts/stage_source_data.py {{file}} {{name}}
 
 # Wait for the database, then write its defaults (up-local and up-hybrid run this; after the first write it changes nothing)
 setup-db:
@@ -113,30 +113,30 @@ setup-db:
 
 # Write desired_state_defaults from the system-wide settings (setup-db runs this; a change needs --yes and re-checks every reach)
 author-defaults *flags:
-    uv run --project orchestrator python orchestrator/scripts/author_intent.py defaults {{flags}}
+    uv run --project reconciler python reconciler/scripts/author_intent.py defaults {{flags}}
 
 # Author intent for the network an AOI config names (needs the defaults setup-db writes)
 author-intent aoi_config_path:
-    uv run --project orchestrator python orchestrator/scripts/author_intent.py aoi {{aoi_config_path}}
+    uv run --project reconciler python reconciler/scripts/author_intent.py aoi {{aoi_config_path}}
 
 # Run the reconciliation loop until the network settles
 reconcile:
-    cd orchestrator && uv run python scripts/reconcile.py
+    cd reconciler && uv run python scripts/reconcile.py
 
 
 # Publish materialized reaches for flows2fim into a local folder or s3:// address: scenarios db, depth grid library, AEP VRTs
 # (an AOI's reaches, or every materialized reach when no AOI config is given)
 f2f-snapshot out_dir aoi_config_path="":
-    uv run --project orchestrator python orchestrator/scripts/f2f.py scenarios {{aoi_config_path}} {{out_dir}}
-    uv run --project orchestrator python orchestrator/scripts/f2f.py library {{out_dir}}
-    uv run --project orchestrator python orchestrator/scripts/f2f.py aep {{aoi_config_path}} {{out_dir}}
+    uv run --project reconciler python reconciler/scripts/f2f.py scenarios {{aoi_config_path}} {{out_dir}}
+    uv run --project reconciler python reconciler/scripts/f2f.py library {{out_dir}}
+    uv run --project reconciler python reconciler/scripts/f2f.py aep {{aoi_config_path}} {{out_dir}}
 
 
 # Seed the test network and author the small end-to-end scope
 test-e2e:
-    just stage-source-data orchestrator/testdata/lulc.tif e2e/lulc.tif
-    just stage-source-data orchestrator/testdata/lulc_lookup.json e2e/lulc_lookup.json
-    just seed-lakes orchestrator/testdata/e2e.aoi_config.json
-    just seed-network orchestrator/testdata/e2e.aoi_config.json
-    just author-intent orchestrator/testdata/e2e.aoi_config.json
+    just stage-source-data reconciler/testdata/lulc.tif e2e/lulc.tif
+    just stage-source-data reconciler/testdata/lulc_lookup.json e2e/lulc_lookup.json
+    just seed-lakes reconciler/testdata/e2e.aoi_config.json
+    just seed-network reconciler/testdata/e2e.aoi_config.json
+    just author-intent reconciler/testdata/e2e.aoi_config.json
     just reconcile
