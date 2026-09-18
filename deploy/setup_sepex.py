@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-"""Deploy SEPEX alongside the twod-fim reconciler on EC2.
+"""Deploy SEPEX on an EC2 host.
 
-Handles database creation, configuration, and startup using a pre-built container image.
-Run on the SEPEX EC2 instance after infrastructure provisioning (see deploy/sepex.md steps 1-3).
+Sets up the SEPEX database on RDS, then installs and starts the SEPEX
+container. See deploy/sepex.md for the full walkthrough.
 
 Usage:
-  python3 deploy/setup_sepex.py \
-    --rds-address <rds-address> \
-    --rds-secret-arn <rds-secret-arn> \
-    --sepex-password <password> \
-    --s3-bucket <bucket-name>
+    python deploy/setup_sepex.py \
+        --rds-address <host> \
+        --rds-secret-arn <arn> \
+        --sepex-password <password> \
+        --s3-bucket <bucket> \
+        [--image IMAGE] [--install-dir DIR] [--reset] [--skip-db]
 
-Where:
-  --rds-address     RDS hostname (terraform output -raw rds_address)
-  --rds-secret-arn  RDS master secret ARN (terraform output -raw rds_master_user_secret_arn)
-  --sepex-password  Password for the sepex_app database user (choose one)
-  --s3-bucket       S3 bucket for SEPEX storage (prod_bucket_name or test_bucket_name from terraform.tfvars)
-  --image           Container image (default: ghcr.io/dewberry/sepex:dev)
-  --install-dir     Install directory (default: /opt/sepex)
-  --reset           Drop and recreate the sepex database
-  --skip-db         Skip database setup, only deploy
+--reset drops and recreates the sepex database; --skip-db deploys without
+touching it.
 """
 
 import argparse
@@ -170,7 +164,6 @@ def setup_database(rds_address, sepex_password, pg_env, reset=False):
     else:
         print(f"  {SEPEX_DB}: created")
 
-    # PG 16: transfer public schema ownership so sepex_app can create tables
     print("Setting schema ownership...")
     psql(rds_address, SEPEX_DB, f"ALTER SCHEMA public OWNER TO {SEPEX_USER};", pg_env)
     print(f"  public schema owned by {SEPEX_USER}")
@@ -201,8 +194,6 @@ def write_config(install_dir, rds_address, sepex_password, s3_bucket, image):
         db_name=SEPEX_DB,
         s3_bucket=s3_bucket,
     )
-    # The .env contains the DB password in POSTGRES_CONN_STRING because SEPEX
-    # reads it as a single connection string. File permissions restrict access.
     env_path = install_dir / ".env"
     env_path.touch(mode=0o600, exist_ok=True)
     env_path.write_text(env_content)

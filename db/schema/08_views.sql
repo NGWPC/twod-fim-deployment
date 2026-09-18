@@ -1,28 +1,9 @@
--- 08_views.sql
--- Per guide.md, what can be derived is not stored.
---
--- Views are dropped and recreated rather than replaced, so this file drops them
--- in dependency order — dependents first. On a fresh boot the order is
--- irrelevant; on a re-run against a live database it is the difference between
--- working and not.
 DROP VIEW IF EXISTS reach_status;
--- reach_realized_runs and stale_kwse_runs are gone. The first computed
--- aggregates from per-scenario rows; those aggregates are now stored by observe
--- in the materialized_* tables, so there is nothing to compute. The second
--- looked for KWSE runs whose source run had been deleted; staleness is no
--- longer detected that way — a KWSE library's bounds are recomputed from what
--- the downstream reach currently materializes, so a downstream change fails the
--- span check with no provenance involved.
+
 DROP VIEW IF EXISTS reach_realized_runs;
 
 DROP VIEW IF EXISTS stale_kwse_runs;
 
--- ---------------------------------------------------------------------------
--- reach_status: one row per reach, everything a status viewer needs.
--- ---------------------------------------------------------------------------
--- Joins intent (desired_state), what has been materialized (materialized_models),
--- and what the system is doing (reach_processing), so a dashboard is a single
--- SELECT. History and live feeds come from reach_activity instead.
 DROP VIEW IF EXISTS reach_status;
 
 CREATE VIEW reach_status AS
@@ -31,17 +12,9 @@ SELECT
     rn.reach_to_id AS downstream_reach_id,
     rn.is_headwater,
     rn.is_terminal,
-    -- The single place a reach's state is named. reach_processing stores only
-    -- halted; everything else here is read off the columns that already say it,
-    -- so there is no second answer able to disagree with the first. Order is
-    -- precedence: no intent outranks everything, then halted, then a job in
-    -- flight over a retry wait.
+
     CASE WHEN d.reach_id IS NULL THEN
-        -- In the network, but nobody has asked for anything here. The loop will
-        -- never look at it: the candidate query starts FROM desired_state, so a
-        -- reach without intent cannot be a candidate. Named separately from
-        -- 'new' because 'new' means "not looked at yet" and this means "never
-        -- will be" — a distinction anyone watching this view needs.
+
         'no_intent'
     WHEN p.halted THEN
         'halted'
@@ -53,57 +26,18 @@ SELECT
         AND nd.applied_revision >= d.revision
         AND NOT rn.is_terminal
         AND COALESCE(d.ld_ds_z_delta, f.ld_ds_z_delta) IS NULL THEN
-        -- Waiting on a person rather than on the network, which is the whole
-        -- reason this is named apart from awaiting_downstream: that one
-        -- resolves itself as the wave arrives, this one only when somebody
-        -- authors the missing value.
-        --
-        -- The condition it used to carry was a terminal reach naming no lake or
-        -- coast. That was right while such a reach had no outflow boundary and
-        -- no job could make one; the run job now derives an outflow area from
-        -- the model's own domain when none is supplied, so a plain outlet needs
-        -- nothing from anybody and the old test could only ever have been wrong.
-        --
-        -- What genuinely has no source is the stage increment. DR-033 ALT-B
-        -- picks it from a fixed menu and nothing derives it, so a reach with it
-        -- unauthored here AND in the defaults row can never have a KWSE library
-        -- planned. Terminals are excluded because they get none at all
-        -- (ISU-013), so the value would never be read for them.
-        --
-        -- Gated on model and nd being proved, which mirrors the gap
-        -- calculation: a reach that has not reached the kwse rung is not yet
-        -- waiting on this. That gate is also what keeps it from swallowing
-        -- awaiting_downstream, whose reaches have not got here.
-        --
-        -- Ranked ABOVE finished deliberately. Intent asks for a KWSE library on
-        -- every non-terminal reach (DR-001 ALT-A), and one that cannot be built
-        -- until a person acts is not a reach that is done.
+
         'awaiting_inputs'
     WHEN mm.applied_revision >= d.revision
         AND nd.applied_revision >= d.revision
         AND (rn.is_terminal
             OR kw.applied_revision >= d.revision) THEN
-        -- Every step satisfied at the current revision. Each carries its own
-        -- revision and this is their conjunction, so a reach is finished only
-        -- when all of them are current.
-        --
-        -- Terminal reaches are excused the kwse claim rather than failing it.
-        -- They get no stage library at all (ISU-013), so no row will ever
-        -- appear, and requiring one would leave every outlet unfinished
-        -- forever — and with it every reach that waits on an outlet.
-        --
-        -- This outranks 'new' deliberately: a reach whose work is materialized
-        -- and current is finished whether or not the loop has ever looked at
-        -- it. That is the ordinary case after a database is rebuilt against a
-        -- populated bucket, and calling it 'new' would suggest work is pending
-        -- when there is none. It outranks 'awaiting_downstream' for the same
-        -- reason — a satisfied reach is satisfied even if a wait pointer from
-        -- an earlier rung was left behind.
+
         'finished'
     WHEN p.blocked_on_reach_id IS NOT NULL THEN
         'awaiting_downstream'
     WHEN p.reach_id IS NULL THEN
-        -- Never looked at, and nothing materialized to say otherwise.
+
         'new'
     ELSE
         'due'
@@ -121,16 +55,13 @@ SELECT
     mm.confirmed_at AS model_confirmed_at,
     d.revision AS desired_revision,
     COALESCE(mm.applied_revision, - 1) AS model_applied_revision,
-    -- TRUE when intent has moved past what has been materialized. An absent
-    -- materialization row reads as -1, so "never built" and "built against
-    -- older intent" answer the same way, which is what the loop wants.
+
     (d.reach_id IS NOT NULL
         AND (COALESCE(mm.applied_revision, - 1) < d.revision
             OR COALESCE(nd.applied_revision, - 1) < d.revision
             OR (NOT rn.is_terminal
                 AND COALESCE(kw.applied_revision, - 1) < d.revision))) AS has_gap,
-    -- Presence of a run row IS the proof that step is materialized, so these
-    -- are booleans rather than counts of anything.
+
     (nd.reach_id IS NOT NULL) AS nd_materialized,
     COALESCE(nd.applied_revision, - 1) AS nd_applied_revision,
     cardinality(nd.q_set) AS nd_discharges,
@@ -139,7 +70,7 @@ SELECT
     nd.confirmed_at AS nd_confirmed_at,
     (kw.reach_id IS NOT NULL) AS kwse_materialized,
     COALESCE(kw.applied_revision, - 1) AS kwse_applied_revision,
-    -- How many stage scenarios the library holds, across every discharge.
+
     (SELECT count(*) FROM jsonb_array_elements(kw.scenario_index) g,
                           jsonb_array_elements(g -> 'runs') r) AS kwse_scenarios,
     p.consecutive_failures,
@@ -155,5 +86,3 @@ FROM
     LEFT JOIN reach_processing p ON p.reach_id = rn.reach_id
     LEFT JOIN materialized_nd_runs nd ON nd.reach_id = rn.reach_id
     LEFT JOIN materialized_kwse_runs kw ON kw.reach_id = rn.reach_id;
-
-COMMENT ON VIEW reach_status IS 'One row per reach joining intent, what exists, and current work status. Backs the status viewer.';

@@ -1,14 +1,6 @@
-"""Database access for the reconciliation loop.
+"""Database access.
 
-The only module that names psycopg, so swapping the driver or the connection
-strategy is one file's problem. Functions rather than a class holding a
-connection: per guide.md the code is function shaped, with no load-mutate-save
-lifecycle. The database is the brain — an object caching parts of it would just
-be a second, staler copy.
-
-Every helper takes an optional `conn`. Pass one when several statements have to
-land together; leave it out and the statement gets its own connection and
-commits on its own.
+Connection handling and row helpers for the reconciliation loop.
 """
 
 from collections.abc import Sequence
@@ -25,11 +17,7 @@ Row = dict[str, Any]
 
 @contextmanager
 def connect(dsn: str | None = None, *, read_only: bool = False):
-    """Open one connection to the twodfim database.
-
-    Commits on a clean exit, rolls back if the block raises. `read_only` has
-    the database refuse any write made through it.
-    """
+    """Open one connection to the twodfim database."""
     with psycopg.connect(
         dsn or settings.pipeline_db_connection_string, row_factory=dict_row
     ) as conn:

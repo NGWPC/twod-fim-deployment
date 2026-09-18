@@ -1,34 +1,16 @@
-"""Build the CONUS flow statistics table.
+"""Build and subset the CONUS flow statistics table.
 
-This is what `settings.flow_statistics` names by default (see
-flow_statistics.py) -- the table author-intent.py and f2f.py fall back to when
-an AOI config names none of its own. One-time data prep, not part of the
-runbook or `just`: rerun it only to regenerate that table, then
-`just stage-source-data <out> flows/<name>.parquet` to publish it.
-
-Joins NHF flowpaths to an AEP source table (e.g. NWM flows v3) on the NHF
-reference flowpath id, fits log-log drainage-area regressions per return-period
-column to fill gaps and clip outliers to the 95% prediction interval, estimates
-bankfull depth, and writes one parquet with a text reach_id column -- the NHF
-flowpath id, which modify_network keeps as the downstream reach's id when it
-merges reaches, so it matches a network's reach_id.
+"build" joins NHF flowpaths to an AEP source and writes a per-reach parquet.
+"clip" subsets an already-built table to one network's reaches.
 
 Usage:
-    uv run scripts/bound_flows.py build <nhf.gpkg> <aep-source.parquet> <out.parquet> [--sample N] [--no-plots]
-    uv run scripts/bound_flows.py clip <network.gpkg> <table.parquet> <out.parquet>
+    python scripts/bound_flows.py build <nhf.gpkg> <aep_source.parquet> <out.parquet>
+                                        [--sample N] [--no-plots]
+    python scripts/bound_flows.py clip <network.gpkg> <table.parquet> <out.parquet>
 
-`clip` subsets an already-built table to one network's reaches, e.g. testdata.
-
-Blackburn-Lynch Bankfull Depth Citation: Blackburn-Lynch, Whitney, Carmen T.
-Agouridis, and Christopher D. Barton, 2017. Development of Regional Curves for
-Hydrologic Landscape Regions (HLR) in the Contiguous United States. Journal of
-the American Water Resources Association (JAWRA) 53(4): 903-928.
-https://doi.org/10.1111/1752-1688.12540
+--sample truncates to N reaches for a quick run. --no-plots skips the drainage
+area regression plots.
 """
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["geopandas>=1.0", "pandas", "numpy", "scipy>=1.13", "matplotlib>=3.10", "pyarrow>=15"]
-# ///
 
 import argparse
 import json
@@ -40,7 +22,6 @@ import numpy as np
 import pandas as pd
 from scipy.stats import linregress, t
 
-# --- NHF layer / field names ---
 NHF_REFERENCE_LAYER = "reference_flowpaths"
 NHF_FLOWPATHS_LAYER = "flowpaths"
 NHF_FLOWPATH_ID_FIELD = "fp_id"
@@ -49,7 +30,6 @@ NHF_DA_COL = "total_da_sqkm"
 AEP_ID_FIELD = "ID"
 OUT_FLOWPATH_ID = "reach_id"
 
-# --- Flow / frequency columns ---
 SRC_FIELDS = [
     AEP_ID_FIELD,
     "high_flow_threshold",
@@ -72,7 +52,6 @@ RI_COLS = [
 ]
 AEP_COLS = ["f2year", "f5year", "f10year", "f25year", "f50year", "f100year"]
 
-# --- QC schema ---
 REQUIRED_FIELDS = [
     "high_flow_threshold",
     "f2year",
@@ -116,8 +95,6 @@ def load_nhf(
     )
     nhf = nhf.set_index(OUT_FLOWPATH_ID)
 
-    # NHF flowpath ids are integers. Held as int64 here so the id written out as
-    # text is its exact digits, never a float's "123.0" or rounded mantissa.
     unkeyed = nhf.index.isna()
     if unkeyed.any():
         print(f"  dropping      {unkeyed.sum()} row(s) with no flowpath id")
@@ -277,8 +254,6 @@ def enrich_nhf(
         )
 
     nhf_in["bkf_depth_m"] = nhf_in[NHF_DA_COL].apply(blackburn_lynch_bkf_depth)
-    # Rounded up rather than to nearest, so a nonzero flow never rounds down to
-    # the unusable 0.0 -- the smallest a positive value can come out is 0.1.
     nhf_in[RI_COLS] = np.ceil(nhf_in[RI_COLS] * 10) / 10
     return nhf_in
 

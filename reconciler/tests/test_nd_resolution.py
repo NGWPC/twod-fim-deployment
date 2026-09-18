@@ -1,25 +1,13 @@
-"""Adoption is pure, so its tests are plain data.
-
-Storage holds whatever has been written there, from however many sweeps. None of
-that is consulted: every scenario is judged only on the three readings in its own
-manifest, against the authored bands, by the same rule the sweep applies to a
-trial. The search is over every pair rather than consecutive ones, so it can step
-over a scenario that leads nowhere instead of committing to it.
-"""
+"""Tests for ND resolution."""
 
 from psycopg.types.range import Range
 
 from recon.observe import adopt
 
-# Bands as author_intent writes them: depths in metres, area as a percentage of
-# the earlier scenario's own area.
 WANTED = {
     "ld_q_max_depth_increase_range": Range(0.75, 1.25),
     "ld_q_median_depth_increase_range": Range(0.25, 0.5),
     "ld_q_flooded_area_prcnt_increase_range": Range(10, 15),
-    # The discharge axis the library had to land on. Two entries a single grid
-    # step apart have nothing between them; anything wider skipped values that
-    # could have been run.
     "q_grid_resolution": 10,
 }
 
@@ -31,8 +19,6 @@ def entry(q: int, max_depth: float, median_depth: float = 0.0,
 
 
 def depths(*pairs: tuple[int, float]) -> list[dict]:
-    """A library that only exercises the max-depth band: the other two are held
-    flat, so they never reach a floor and never breach a ceiling."""
     return [entry(q, d) for q, d in pairs]
 
 
@@ -44,8 +30,6 @@ def test_a_library_that_already_fits_is_adopted_whole():
 
 
 def test_a_redundant_scenario_is_passed_over():
-    """150 is too similar to 100, and 100 to 200 is a good step on its own, so
-    keeping 150 would cost a KWSE stage grid for nothing."""
     library = depths((100, 2.0), (150, 2.2), (200, 3.0))
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200]
@@ -53,15 +37,11 @@ def test_a_redundant_scenario_is_passed_over():
 
 
 def test_a_load_bearing_scenario_is_kept():
-    """Dropping 200 leaves a step of 2.5, past the ceiling, so it has to stay."""
     library = depths((100, 2.0), (200, 3.0), (300, 4.5))
     assert adopt(library, WANTED).q_set == [100, 200, 300]
 
 
 def test_the_search_steps_over_a_dead_end():
-    """250 is reachable from 100, but nothing legal leaves it: 250 to 300 is too
-    big and they are not neighbours. A left-to-right walk taking the furthest
-    legal step would land on it and be stuck. Looking at every pair does not."""
     library = depths((100, 2.0), (200, 3.0), (250, 2.6), (300, 4.0))
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200, 300]
@@ -69,32 +49,22 @@ def test_the_search_steps_over_a_dead_end():
 
 
 def test_a_backwards_reading_is_just_a_step_too_small():
-    """A scenario that reads lower than the one before it is not a special case.
-    It failed to reach any floor, which is reject_low like any other."""
     library = depths((100, 2.0), (200, 1.8), (300, 3.0))
     assert adopt(library, WANTED).q_set == [100, 300]
 
 
 def test_a_step_over_a_ceiling_is_only_allowed_between_neighbours():
-    """Without this the cheapest answer is one stride from bottom to top, since
-    fewer scenarios always wins on count. 150 and 200 sit in the gap, so the
-    search has to route through them."""
     library = depths((100, 2.0), (150, 2.8), (200, 3.6), (300, 5.0))
     result = adopt(library, WANTED)
     assert result.q_set == [100, 150, 200, 300], "must not leap 100 to 300"
 
 
 def test_a_step_over_a_ceiling_across_skipped_grid_values_leaves_no_library():
-    """100 and 200 are ten grid steps apart and the step breaks a ceiling. Every
-    grid value between them could have been run, so the edge is illegal, there is no
-    route across the library, and the reach does not prove."""
     result = adopt(depths((100, 2.0), (200, 4.0)), WANTED)
     assert result.holes and "no route" in result.holes[0]
 
 
 def test_a_step_over_a_ceiling_a_single_grid_step_apart_is_accepted():
-    """The same breach a single grid step apart: nothing finer exists on the axis,
-    so no re-run improves on it and the library stands."""
     result = adopt(depths((100, 2.0), (110, 4.0)), WANTED)
     assert result.q_set == [100, 110]
     assert result.holes == []
@@ -102,8 +72,6 @@ def test_a_step_over_a_ceiling_a_single_grid_step_apart_is_accepted():
 
 
 def test_without_a_grid_only_storage_adjacency_is_left():
-    """A reach seeding never placed on a grid. Nothing can be decided about what
-    was skipped, so neighbours in storage are all there is to go on."""
     wanted = {**WANTED, "q_grid_resolution": None}
     result = adopt(depths((100, 2.0), (200, 4.0)), wanted)
     assert result.q_set == [100, 200], "adjacent in storage, so tolerated"
@@ -111,8 +79,6 @@ def test_without_a_grid_only_storage_adjacency_is_left():
 
 
 def test_median_depth_alone_can_carry_a_step():
-    """Acceptance needs only ONE criterion inside its band. Here max depth and
-    flooded area both fall short of their floors and the step still stands."""
     library = [entry(100, 2.0, 0.50, 1.00), entry(200, 2.1, 0.85, 1.02)]
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200]
@@ -120,8 +86,6 @@ def test_median_depth_alone_can_carry_a_step():
 
 
 def test_flooded_area_alone_can_carry_a_step():
-    """The same, carried by the third criterion. This is the common case low in
-    a reach's range, where area moves long before either depth does."""
     library = [entry(100, 2.0, 0.50, 1.00), entry(200, 2.1, 0.55, 1.12)]
     result = adopt(library, WANTED)
     assert result.q_set == [100, 200]
@@ -129,8 +93,6 @@ def test_flooded_area_alone_can_carry_a_step():
 
 
 def test_any_criterion_over_its_ceiling_vetoes_a_step():
-    """Max depth is a perfect +1.00, but flooded area moved 20% against a 15%
-    ceiling. reject_high wins, so 300 cannot follow 100 directly."""
     library = [
         entry(100, 2.00, 0.50, 1.00),
         entry(200, 2.50, 0.60, 1.08),
@@ -140,8 +102,6 @@ def test_any_criterion_over_its_ceiling_vetoes_a_step():
 
 
 def test_an_unauthored_band_takes_no_part():
-    """NULL on both desired_state and the defaults row. With nothing authored at
-    all there is no resolution to judge, and the library stands as it is."""
     wanted = dict.fromkeys(WANTED, None)
     library = depths((100, 2.0), (150, 2.01), (200, 9.0))
     result = adopt(library, wanted)
@@ -163,10 +123,6 @@ def test_adoption_never_reorders_or_invents_discharges():
 
 
 def test_a_step_too_small_is_expected_not_a_finding():
-    """The sweep publishes the nearest line whenever no line clears a floor, so
-    a too-small step in the adopted library is the normal state wherever the
-    bands and the grid disagree -- not something to raise on every pass. 200 and
-    210 cannot be dropped: 100 to 210 would break the ceiling."""
     result = adopt(depths((100, 2.0), (200, 3.0), (210, 3.4), (310, 4.4)), WANTED)
     assert result.q_set == [100, 200, 210, 310]
     assert result.holes == []

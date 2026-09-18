@@ -1,29 +1,19 @@
 #!/usr/bin/env python
 """Run the reconciliation loop from a terminal.
 
-One pass is two questions put to the database, in this order:
+Each pass checks the reaches that need looking at and acts on what it finds.
+By default the loop exits once the network settles.
 
-  1. which jobs are we waiting on?  poll them, clear the finished, ask for
-     checks. First, so a finished job is noticed in the same pass.
-  2. which reaches are due?         check each: observe, gap, act.
+Usage:
+    just reconcile
 
-Neither question needs anything remembered from the previous pass, which is
-what makes this safe to interrupt. Every fact the loop relies on is in the
-database before the call that wrote it returns, so Ctrl-C, a lost SSH session
-or a reboot costs at most one duplicate job — and jobs are content addressed,
-so a duplicate is wasted compute rather than a wrong answer.
+    python scripts/reconcile.py [--interval SECONDS] [--once] [--forever] [-v]
 
-There is no concurrency limit here. SEPEX is the execution layer: it keeps the
-queue and admits work against its own resource pool, so this loop submits
-whatever is needed and lets SEPEX decide when it runs. A limit here could only
-withhold work SEPEX had room for.
-
-Examples:
-
-    python scripts/reconcile.py                  # until settled, then exit
-    python scripts/reconcile.py --forever        # keep going, like a service
-    python scripts/reconcile.py --once           # a single pass, for cron
-    GPU_AVAILABLE=true python scripts/reconcile.py   # ask for the GPU jobs
+Options:
+    --interval   seconds between passes (default 20)
+    --once       a single pass, then exit
+    --forever    keep going after the network settles
+    -v           log every check, not just the ones that act
 """
 
 import argparse
@@ -51,12 +41,7 @@ TALLY = """
 
 
 def build_execution(args: argparse.Namespace) -> ExecutionService:
-    """The execution layer. There is one, and it is SEPEX.
-
-    Nothing here says which hardware a job runs on. A CPU and a GPU run are
-    separate registered SEPEX processes, and which one is asked for comes from
-    $GPU_AVAILABLE — a property of the host, not of this runner.
-    """
+    """The execution layer."""
     logging.info("SEPEX at %s", settings.sepex_url)
     return SepexClient(base_url=settings.sepex_url)
 
@@ -76,10 +61,6 @@ def one_pass(execution: ExecutionService) -> int:
 
     submitted = 0
     for row in queue.due_reaches():
-        # Every due reach is checked and, if it has a gap, submitted. Holding
-        # work back here would be guessing at SEPEX's capacity from outside;
-        # SEPEX queues what it cannot start yet, and a queued job is the system
-        # working rather than a problem to avoid.
         result = check.run_check(row["reach_id"], execution)
         if result.submitted_ref:
             submitted += 1
@@ -112,10 +93,6 @@ def main() -> int:
         datefmt="%H:%M:%S",
         stream=sys.stdout,
     )
-    # A pass checks every due reach, and most checks decide to do nothing —
-    # so at default volume the loop reports what it DID: submissions, job
-    # outcomes, and one summary line per pass. -v adds the per-check verdicts,
-    # which is what you want when asking "why is this reach not moving?".
     logging.getLogger("recon").setLevel(
         logging.INFO if args.verbose else logging.WARNING
     )
@@ -151,9 +128,6 @@ def main() -> int:
 
             if args.once:
                 break
-            # Settled means nothing running and nothing started — not that every
-            # reach is finished. A network with reaches awaiting inputs or halted
-            # settles below 100%, and that is the correct place to stop.
             quiet = quiet + 1 if (now["in_flight"] == 0 and submitted == 0) else 0
             if quiet >= 2 and passes > 2 and not args.forever:
                 logging.info(

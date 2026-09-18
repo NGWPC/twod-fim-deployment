@@ -1,10 +1,4 @@
-"""example.aoi_config.jsonc is the documentation of an AOI config, so it must stay complete.
-
-It lists every key aoi_config.py accepts, each with what leaving it out does. A
-key added to aoi_config.py without an entry here would be an option nobody can
-find, so the example is checked against aoi_config.KEYS rather than trusted to
-keep up.
-"""
+"""Tests for the example AOI config."""
 
 import sys
 from pathlib import Path
@@ -22,7 +16,6 @@ def test_the_example_loads_as_an_aoi_config():
 
 
 def test_the_example_names_every_key_an_aoi_config_accepts():
-    """Active or commented out, every key appears, so every option is documented."""
     text = EXAMPLE.read_text()
     missing = sorted(key for key in aoi_config.KEYS if f'"{key}"' not in text)
     assert not missing, f"example.aoi_config.jsonc does not document: {missing}"

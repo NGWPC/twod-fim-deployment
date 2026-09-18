@@ -1,42 +1,18 @@
 #!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["pyyaml", "python-dotenv"]
-# ///
-"""Register one folder of process definitions with SEPEX.
+"""Register a folder of process definitions with SEPEX.
 
-SEPEX is a separate service. POST /processes/{id} adds a process and
-PUT /processes/{id} replaces one. Running it twice is safe as long as
-process definitions do not change between runs.
-
-The target is $SEPEX_URL, read from the repo's .env the same way the loop
-reads it: processes belong on the SEPEX the loop submits to.
-
-Two things about a docker process definition are resolved here rather than
-fixed in its .yml, both read from the repo's .env like $SEPEX_URL:
-
-  $USE_LOCAL_IMAGES  An image written as "<name>:local" is registered as-is
-                      when true. Otherwise it is registered as the published
-                      GHCR image, "ghcr.io/ngwpc/twod-fim-jobs/<name>:dev" --
-                      the same image `docker tag`'d :local by
-                      reconciler/README.md's setup instructions, so this is
-                      just skipping that tag and registering the source
-                      directly. Defaults false: nothing to build or pull by
-                      hand first. Images not written ":local" (aws-batch's
-                      blank image, or a cloud .yml that already names GHCR
-                      directly) are untouched either way.
-
-  $GPU_AVAILABLE      A process whose id ends Cpu or Gpu is a hardware variant
-                      of a step recon/check.py routes by $GPU_AVAILABLE
-                      (RUN_ND_PROCESSES, RUN_KWSE_PROCESSES) -- the loop on
-                      this deployment only ever asks for the variant matching
-                      it, so only that one is registered. A variant left
-                      unregistered this way is not deleted if some earlier run
-                      registered it; it is reported "(not ours, left alone)".
+Reads <folder>/*/*.yml and adds or replaces each process. SEPEX_URL must be set
+in the environment or the repo's .env. USE_LOCAL_IMAGES selects locally built
+":local" images; GPU_AVAILABLE selects the GPU variant of each process.
 
 Usage:
-  uv run sepex/register_processes.py sepex/local/plugins
-  uv run sepex/register_processes.py sepex/cloud/plugins
+    just register-sepex-processes-local
+    just register-sepex-processes-cloud
+
+    uv run --script sepex/register_processes.py <folder>
+
+Example:
+    uv run --script sepex/register_processes.py sepex/local/plugins
 """
 
 import json
@@ -52,9 +28,6 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-# Parsed rather than truthiness-tested, and kept identical to
-# recon/check.py's _TRUE: a bare bool() on a string is true for every
-# non-empty value, so e.g. GPU_AVAILABLE=false would read as True.
 _TRUE = {"true", "1", "yes", "y", "on"}
 
 
@@ -74,11 +47,7 @@ def resolve_image(image: str, use_local: bool) -> str:
 
 
 def wanted_hardware(process_id: str, gpu: bool) -> bool:
-    """Whether this process id is the hardware variant $GPU_AVAILABLE calls for.
-
-    True for a process id that names no hardware at all (buildModel): it runs
-    the same everywhere.
-    """
+    """Whether this process id is the hardware variant $GPU_AVAILABLE calls for."""
     if process_id.endswith("Cpu"):
         return not gpu
     if process_id.endswith("Gpu"):
@@ -145,10 +114,6 @@ def register(base_url: str, definition: dict, served: set[str]) -> bool:
 
     print(f"  FAILED   {process_id}: {method} -> {status}: {text[:300]}")
     if method == "PUT" and status == 500:
-        # SEPEX replaces a process by moving <PLUGINS_DIR>/<id>/<id>.yml aside,
-        # which is where it writes the ones registered through this API. A
-        # process it loaded from a plugins folder at startup lives under
-        # another name, so it can be neither replaced nor deleted this way.
         print(
             "           It was probably loaded from files at startup, not registered "
             "here. Clear SEPEX's plugins folder once, restart it, and rerun."

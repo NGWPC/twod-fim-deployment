@@ -1,27 +1,7 @@
-"""Predict a model's identity from effective intent.
+"""Identity derivation.
 
-Intent implies an identity; the identity implies an address; observe looks at
-the address. This module is the first arrow. It is a copy of the hashing in
-twod-fim-jobs (utils/hashing.py + the Identity model in models/build_model.py),
-kept here so the loop can compute an address without launching a container —
-the only per-reach input is the reach geometry, which the database already
-holds.
-
-A copy of a recipe can drift from the original, so every observation runs the
-self-check in verify_manifest(): the manifest carries both the identity object
-and the hash the job computed from it, and re-hashing must reproduce it. Drift
-becomes a loud error on the first manifest seen, not a silent network-wide
-rebuild. When a shared identity package exists, this file is what it replaces.
-
-Two representation details are load-bearing, learned from the job's own types:
-
-  grid_resolution is a FLOAT in the identity (pydantic field), so it must
-  serialize as 10.0, never 10 — "10.0" and "10" hash differently.
-
-  lulc_lookup is hashed with INT keys (dict[int, float]); the JSON it is read
-  from has string keys, and json.dumps sorts by the original key type before
-  stringifying, so {"100": ..} and {100: ..} sort differently once codes pass
-  two digits. Keys are coerced back to int before hashing.
+Predicts the addresses that intent implies, mirroring how the jobs repo derives
+them.
 """
 
 import hashlib
@@ -35,10 +15,6 @@ from shapely import wkb as shapely_wkb
 HASH_ALGORITHM = "sha256"
 HASH_LENGTH = 8
 
-# The identity object's exact key set (models/build_model.py::Identity). A
-# manifest whose identity carries any other key is refused: it means the jobs
-# repo added an identity dimension this copy does not know about, and adopting
-# it would mean trusting a hash we cannot reproduce.
 IDENTITY_KEYS = frozenset({
     "sdr_commit",
     "reach_geom_hash",
@@ -60,31 +36,13 @@ def hash_dict(d: Mapping[Any, Any], role_length: int | None = HASH_LENGTH) -> st
     return hash_str(json.dumps(dict(d), sort_keys=True, separators=(",", ":")), role_length)
 
 def reach_geom_hash(geom_wkb: bytes) -> str:
-    """Hash of the reach geometry's WKT, via shapely.
-
-    WKB -> shapely -> .wkt reproduces the bytes the job hashes, because the job
-    reads the same geometry through geopandas, which also formats WKT with
-    shapely. PostGIS ST_AsText formats differently and must not be used here.
-    """
+    """Hash of the reach geometry's WKT, via shapely."""
     return hash_str(shapely_wkb.loads(bytes(geom_wkb)).wkt)
 
 
 def lulc_lookup_mapping(path: str) -> dict[int, float]:
-    """The land-cover to roughness mapping a path resolves to.
-
-    The database holds the address; identity is over the CONTENT, because that
-    is what the job hashes — it reads the same file and hashes the mapping, not
-    the string it was handed. So predicting an address means reading the file,
-    and this is the one place the recipe below reaches storage.
-
-    Read on every call rather than cached. A cache would be nearly free, since
-    this is one small deployment-wide file, but a reconciler holding a stale
-    mapping predicts addresses the job will not write to, and would go on doing
-    it until restart. If the reads ever matter, cache them here, where the
-    staleness window is visible.
-    """
-    from recon import storage  # local: storage imports config, and this is the
-                               # only function in this module that needs either
+    """The land-cover to roughness mapping a path resolves to."""
+    from recon import storage
 
     doc = storage.read_json(path)
     if doc is None:
@@ -93,13 +51,7 @@ def lulc_lookup_mapping(path: str) -> dict[int, float]:
 
 
 def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
-    """The identity object and hash this reach's effective intent implies.
-
-    `intent` needs: sdr_commit, grid_resolution, epsg_code, dem_source,
-    lulc_source, lulc_lookup (a path), geom_wkb. Field construction mirrors
-    jobs/build_model.py line for line — including that the lookup is resolved
-    from its path first, which is what the job does with the same input.
-    """
+    """The identity object and hash this reach's effective intent implies."""
     lulc_lookup = lulc_lookup_mapping(intent["lulc_lookup"])
     identity = {
         "sdr_commit": intent["sdr_commit"],
@@ -114,15 +66,7 @@ def model_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
 
 
 def snap_bbox(bbox: Sequence[float], grid_resolution: float) -> list[float]:
-    """An authored domain bbox snapped outward to the grid, as the job snaps one.
-
-    Mirrors the snapping in the jobs repo's build_model_domain: mins floor, maxes
-    ceil, so the snapped bbox always contains what was authored. The database
-    accepts any values, so this is what makes an authored domain one the job
-    can build and the loop can predict; everything downstream — the payload,
-    the domain code, the manifest comparison — uses the snapped bbox, never the
-    raw one.
-    """
+    """An authored domain bbox snapped outward to the grid, as the job snaps one."""
     resolution = float(grid_resolution)
     xmin, ymin, xmax, ymax = (float(v) for v in bbox)
     return [
@@ -134,20 +78,7 @@ def snap_bbox(bbox: Sequence[float], grid_resolution: float) -> list[float]:
 
 
 def domain_code(bbox: Sequence[float], geom_wkb: bytes, grid_resolution: float) -> str:
-    """The realization code a snapped domain bbox (snap_bbox) implies for this reach.
-
-    Mirrors the jobs repo's build_model_domain + Domain.offset_str, float
-    operation for float operation, so the code comes out as the job writes it:
-    the anchor is the reach centroid snapped DOWN to the grid, and each offset is
-    the distance from the anchor to one bbox edge in grid cells, truncated by
-    int() as offset_str does. A computed domain cannot be predicted this way —
-    its bbox depends on what the job derives — but an authored one is exactly
-    the bbox the job is handed, which is what makes this address knowable.
-
-    The centroid is taken from the geometry as the database holds it, the same
-    bytes reach_geom_hash reads, so this carries the same assumption identity
-    prediction already does: that the job reads the reach in that CRS.
-    """
+    """The realization code a snapped domain bbox (snap_bbox) implies for this reach."""
     resolution = float(grid_resolution)
     centroid = shapely_wkb.loads(bytes(geom_wkb)).centroid
     ax = math.floor(centroid.x / resolution) * resolution
@@ -164,27 +95,7 @@ def verify_manifest(
     model_id: str,
     authored_domain: Sequence[float] | None = None,
 ) -> list[str]:
-    """Why this manifest should NOT be adopted; empty list means it is sound.
-
-    Checks are about trust, not correctness of the model itself:
-      - the manifest belongs to this reach and to the folder it sits in
-      - its identity object hashes to the identity_hash it claims (self-check;
-        this is what catches drift between this copy and the job's recipe)
-      - its identity carries exactly the keys this copy knows
-      - when a domain is authored, the domain it was built over IS that bbox,
-        as snap_bbox snaps it (callers pass the snapped bbox)
-
-    `model_id` is the folder the manifest was found in, and BOTH halves of it
-    are checked: the identity hash, and the realization code after it. Trusting
-    the folder name for the realization is what let a model manifest be adopted
-    under a domain code that was not its own — the same misfiling a scenario
-    manifest is refused for.
-
-    The authored domain check is what the address alone cannot give. The domain
-    code is offsets from an anchor, so it names a bbox only relative to where
-    the job put that anchor; the manifest records the bbox itself, and that is
-    what intent is compared with.
-    """
+    """Why this manifest should NOT be adopted; empty list means it is sound."""
     problems = []
     folder_hash, _, _ = model_id.partition("_")
     if authored_domain is not None:
@@ -214,32 +125,11 @@ def verify_manifest(
     return problems
 
 
-# ---------------------------------------------------------------------------
-# Run identity
-# ---------------------------------------------------------------------------
-# A run's identity is the methodology pin plus the solver — and nothing about
-# the reach. Every reach in the deployment therefore shares one run identity
-# hash, which is worth knowing before it surprises you: it is the recipe the
-# runs were produced by, not an address unique to anything.
-#
-# The reach-specific part of the address is the model identity hash above it in
-# the path, and the scenario point below it.
 RUN_IDENTITY_KEYS = frozenset({"sdr_commit_id", "solver"})
 
 
 def run_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
-    """The run identity object and hash this reach's effective intent implies.
-
-    `intent` needs: sdr_commit, solver.
-
-    solver is just the solver's name (e.g. "lisflood") — the job no longer
-    takes a version as part of its identity; the solver binary that runs is
-    whichever one is baked into the image the loop chose (by solver and
-    hardware), the same way sdr_commit is baked in rather than passed. A
-    disagreement between what desired_state names and what got deployed shows
-    up as runs that never appear at the address the loop predicted, not as
-    corruption.
-    """
+    """The run identity object and hash this reach's effective intent implies."""
     identity = {
         "sdr_commit_id": intent["sdr_commit"],
         "solver": intent["solver"],
@@ -247,31 +137,11 @@ def run_identity(intent: Mapping[str, Any]) -> tuple[dict, str]:
     return identity, hash_dict(identity)
 
 
-# ---------------------------------------------------------------------------
-# The scenario point — a run's realization
-# ---------------------------------------------------------------------------
-# Mirrors make_scenario_dir_name/make_scenario_code in the jobs repo. Both
-# halves of an ND scenario folder are EMERGENT now:
-#
-#   nd=<slope>  the job derives the slope itself from the reach's own DEM
-#               (elevation drop over its own centerline), so the loop cannot
-#               predict it and finds it by listing (storage.nd_library_path).
-#   q=<value>   the adaptive step algorithm decides which discharges are
-#               hydraulically distinct enough to keep, so the loop cannot
-#               predict them either and reads them back. Only the two ends are
-#               guaranteed, because the job always runs min and max.
-#
-# So an ND library is a listing down to the slope, and a listing below it.
 RUN_NAME_Q_ROUNDING_PRECISION = 0
 
 
 def q_folder(q: int) -> str:
-    """The `q=<discharge>` folder for one scenario.
-
-    Discharge is integral, so this is a rendering rather than a rounding and
-    parse_q_folder recovers the value exactly. The format string keeps the
-    job's own precision constant so the two sides cannot drift.
-    """
+    """The `q=<discharge>` folder for one scenario."""
     return f"q={q:.{RUN_NAME_Q_ROUNDING_PRECISION}f}"
 
 
@@ -285,33 +155,17 @@ def parse_q_folder(name: str) -> int | None:
         return None
 
 
-# The downstream half of a scenario folder. Mirrors format_downstream_string in
-# the jobs repo, whose precision constants are copied here for the same reason
-# the hashing recipe is: the loop has to name a folder the job will also name,
-# without launching a container to ask.
 RUN_NAME_KWSE_ROUNDING_PRECISION = 1
 RUN_NAME_SLOPE_ROUNDING_PRECISION = 1
 
 
 def kwse_folder(z: float) -> str:
-    """The `kwse=<stage>` folder for one KWSE scenario.
-
-    The stage is the one IMPOSED at this reach's downstream end — the grid
-    target — not whatever the run went on to achieve at its upstream end. One
-    decimal place, so a 0.25 m grid renders 224.25 as `kwse=224.2`; that is
-    lossy but consistent, because the loop and the job round identically and
-    neither ever parses a stage back out of a folder name.
-    """
+    """The `kwse=<stage>` folder for one KWSE scenario."""
     return f"kwse={z:.{RUN_NAME_KWSE_ROUNDING_PRECISION}f}"
 
 
 def nd_folder(slope: float) -> str:
-    """The `nd=<slope>` folder holding a reach's normal-depth library.
-
-    Scientific notation with the sign stripped, which is what the job does. That
-    makes the rendering lossy in a way worth knowing: 1.2e4 and 1.2e-4 both come
-    out `nd=1.2E04`, so a folder name cannot tell you a slope's sign.
-    """
+    """The `nd=<slope>` folder holding a reach's normal-depth library."""
     formatted = (
         f"{slope:.{RUN_NAME_SLOPE_ROUNDING_PRECISION}e}"
         .replace("-", "").replace("+", "").replace("e", "E")
@@ -320,14 +174,7 @@ def nd_folder(slope: float) -> str:
 
 
 def parse_nd_folder(name: str) -> float | None:
-    """The slope an `nd=<value>` folder names, or None if it is not one.
-
-    Needed because the slope is emergent — the job derives it from the reach's
-    own DEM — so the only place the loop can read it is the folder the job
-    created. Recovering it is enough to name that folder again, which is all a
-    hotstart reference needs, even though the sign stripping above means the
-    value recovered is not necessarily the slope the job started from.
-    """
+    """The slope an `nd=<value>` folder names, or None if it is not one."""
     if not name.startswith("nd="):
         return None
     try:
@@ -336,29 +183,11 @@ def parse_nd_folder(name: str) -> float | None:
         return None
 
 
-# The scenario's realization code and the folder it lives in are two renderings
-# of the same thing, produced by one pair of functions in the jobs repo
-# (utils/naming.py: get_scenario_code and get_scenario_dir_name share their
-# formatting helpers). So the code can be turned back into the directory it
-# implies, and compared with where the manifest actually sits:
-#
-#     ND1.5E04Q1000  ->  nd=1.5E04/q=1000
-#     KWSE200.2Q200  ->  kwse=200.2/q=200
-#
-# This is the scenario's equivalent of comparing a model's model_id to its
-# folder, and it covers BOTH halves of the realization — the downstream
-# condition and the discharge — where reading a discharge alone covered one.
 _SCENARIO_CODE = re.compile(r"^(ND|KWSE)(.+?)Q(\d+)$")
 
 
 def scenario_dir_from_code(code: str) -> str | None:
-    """The `<nd|kwse>=<value>/q=<value>` directory a scenario code implies.
-
-    None when the code is not one this copy recognises, which is refused rather
-    than guessed at: an unrecognised code means the jobs repo names scenarios in
-    a way this mirror does not know, and adopting it would mean trusting a
-    location we cannot check.
-    """
+    """The `<nd|kwse>=<value>/q=<value>` directory a scenario code implies."""
     found = _SCENARIO_CODE.match(code or "")
     if not found:
         return None
@@ -370,12 +199,7 @@ def verify_scenario_manifest(
     manifest: Mapping[str, Any], reach_id: str, run_hash: str, model_id: str,
     scenario_dir: str,
 ) -> list[str]:
-    """Why this scenario manifest should NOT be adopted; empty means sound.
-
-    The same trust checks as verify_manifest, plus the two that only a run has:
-    it was produced against the model intent currently asks for, and it sits in
-    the folder its own discharge names.
-    """
+    """Why this scenario manifest should NOT be adopted; empty means sound."""
     problems = []
     if manifest.get("reach_id") != reach_id:
         problems.append(f"manifest reach_id {manifest.get('reach_id')} != {reach_id}")
@@ -385,11 +209,6 @@ def verify_scenario_manifest(
     if manifest.get("model_id") != model_id:
         problems.append(f"manifest model_id {manifest.get('model_id')} != {model_id}")
 
-    # The realization: which scenario point this is. scenario_code is the
-    # manifest's own claim about that, and scenario_dir is where it was found,
-    # so comparing them asks whether the manifest belongs where it sits. Both
-    # halves at once — the downstream condition and the discharge — because the
-    # code carries both.
     code = manifest.get("scenario_code")
     implied = scenario_dir_from_code(code) if code else None
     if implied != scenario_dir:

@@ -1,19 +1,4 @@
-"""Where the loop looks must be where the job writes.
-
-The run job builds its own output path from the base it is handed:
-
-    RunScenarioInputs.scenario_out_dir
-      = f"{base_out_dir}/reach={reach_id}/{model_identity_hash}/{run_identity_hash}/{scenario_dir_name}"
-
-with base_out_dir = inputs.model_results_base_path. Every segment the loop adds
-to that base is therefore written into the path TWICE, and every segment it
-leaves out is one it will not look under. Sending a per-reach prefix produced
-exactly that: `.../results/reach=5/<hash>/reach=5/<model_id>/...`, and nothing
-the loop predicted was ever found.
-
-These tests reproduce the job's formula from the outside and assert the two
-agree. They are the check that a base path is not silently re-prefixed again.
-"""
+"""Tests for path construction."""
 
 import pytest
 
@@ -30,13 +15,11 @@ IDENTITY_HASH, _, DOMAIN_CODE = MODEL_ID.partition("_")
 
 
 def job_scenario_out_dir(base_out_dir: str) -> str:
-    """RunScenarioInputs.scenario_out_dir, reproduced from the jobs repo."""
     return (f"{base_out_dir}/reach={REACH}/{IDENTITY_HASH}/{RUN_HASH}"
             f"/{ND_FOLDER}/{Q_FOLDER}")
 
 
 def test_the_loop_looks_where_the_job_writes():
-    """The whole point: one path, built two ways, must be the same string."""
     written = job_scenario_out_dir(storage.results_root())
     looked_at = (f"{storage.run_base_path(REACH, MODEL_ID, RUN_HASH)}"
                  f"/{ND_FOLDER}/{Q_FOLDER}")
@@ -44,8 +27,6 @@ def test_the_loop_looks_where_the_job_writes():
 
 
 def test_the_base_handed_to_the_job_adds_nothing_of_its_own():
-    """results_root is what goes in the payload. It must carry no reach and no
-    model, because the job appends both — that doubling was the bug."""
     root = storage.results_root()
     assert "reach=" not in root
     assert MODEL_ID not in root
@@ -53,10 +34,6 @@ def test_the_base_handed_to_the_job_adds_nothing_of_its_own():
 
 
 def test_runs_are_filed_under_the_model_identity_hash_alone():
-    """Domain code EXCLUDED (guide.md: "runs file under identity, not under id
-    which will have domain code"). The domain is a realization: widening it
-    gives the reach a new model_id, and results addressed by model_id would all
-    be stranded by that."""
     base = storage.run_base_path(REACH, MODEL_ID, RUN_HASH)
     assert f"/{IDENTITY_HASH}/{RUN_HASH}" in base
     assert DOMAIN_CODE not in base, "domain code leaked into the results address"

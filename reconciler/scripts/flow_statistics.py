@@ -1,17 +1,7 @@
-"""Flow statistics: which per-reach flow table an AOI reads, and reading it.
+"""Flow statistics lookup.
 
-Two commands read the same table for different columns. author_intent.py takes
-the discharge bounds from it; f2f.py takes the AEP flows it forecasts with. Both
-ask here, so an AOI config names its table and columns once and the fallback to
-the system-wide settings cannot drift between them.
-
-Any parquet or CSV works: the reach id may be a column or the index, and every
-column may be called anything, as long as the AOI config (or the settings) say
-what. modify_network keeps the downstream reach's id when it merges reaches, so a
-network's reach_id matches the NHF flowpath id the default table is keyed by.
-
-Reach ids are text. A reach modify_network split out of one flowpath is named
-<flowpath id>_<n>, and every piece takes the flowpath's flows: see flow_id.
+Resolves which per-reach flow table an AOI reads and which columns it uses,
+falling back to the system-wide settings, and reads the table.
 """
 
 import sys
@@ -39,7 +29,6 @@ class FlowStatistics:
 
 def for_aoi(aoi: dict) -> FlowStatistics:
     """The AOI's own table and column names, each falling back to the setting of the same name."""
-    # Present but empty is a mistake in the AOI config, not a request for the default.
     aep_columns = aoi["flow_aep_columns"] if "flow_aep_columns" in aoi else settings.flow_aep_columns
     if not (isinstance(aep_columns, list) and aep_columns and all(isinstance(c, str) for c in aep_columns)):
         sys.exit(f"`flow_aep_columns` must be a non-empty list of column names, not {aep_columns!r}")
@@ -64,11 +53,7 @@ def flow_id(reach_id: str) -> str:
 
 
 def read(path: Path, reach_id_column: str, columns: Mapping[str, str]) -> pd.DataFrame:
-    """The table at `path`, indexed by reach id as text, holding just `columns`.
-
-    `columns` maps each column wanted to the AOI config key that names it, so a
-    missing one is reported with the key to fix.
-    """
+    """The table at `path`, indexed by reach id as text, holding just `columns`."""
     if path.suffix.lower() == ".csv":
         table = pd.read_csv(path, dtype={reach_id_column: str})
     else:

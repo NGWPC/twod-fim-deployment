@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Initialize the RDS database for the 2D FIM pipeline.
+"""Initialize the database.
 
-Reads connection info from .env in the repo root. Resolves the RDS
-master password from Secrets Manager (via RDS_SECRET_ARN in .env),
-falling back to the PGPASSWORD environment variable when Secrets
-Manager is not available.
-
-Requires psycopg, installed with the reconciler package.
+Reads connection details from .env in the repo root, resolves the master
+password from Secrets Manager when RDS_SECRET_ARN is set, then applies
+db/schema/*.sql in order.
 
 Usage:
-  python3 deploy/init_db.py                    # idempotent DB setup
-  python3 deploy/init_db.py --reset            # drop and recreate from scratch
-  PGPASSWORD=<pw> python3 deploy/init_db.py    # explicit master password
+    python deploy/init_db.py [--reset] [--schema-dir PATH]
+
+Options:
+    --reset        drop and recreate the database from scratch
+    --schema-dir   path to db/schema/ (defaults to the one beside this repo)
 """
 
 import argparse

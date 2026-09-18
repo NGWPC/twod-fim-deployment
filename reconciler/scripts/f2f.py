@@ -1,73 +1,23 @@
 #!/usr/bin/env python
-"""Publish materialized reaches for flows2fim, into a local folder or storage.
+"""Publish materialized reaches for flows2fim.
 
-Three steps, each a command, run in order by `just f2f`:
+Three steps, written into <out-dir>, which may be a local folder or an s3://
+address:
 
-  scenarios [aoi-config-path] <out-dir>
-            <out-dir>/scenarios.db: the `scenarios` and `network` tables
-            flows2fim reads, for the reaches that are materialized, where each
-            depth grid is in storage, and `reach_ids`, the number flows2fim
-            knows each reach by
-            <out-dir>/start_reaches.csv: the reaches flows2fim controls start
-            from, and the stage each starts at
-            <out-dir>/models.gpkg: the `domains`, `inflows` and `reaches`
-            layers of the models those reaches' runs were made with, each
-            row carrying its reach_id
-  library   <out-dir>
-            <out-dir>/library/<number>/z_<stage>/f_<flow>.tif: the depth
-            grids scenarios.db names, copied from the results tree
-  aep       [aoi-config-path] <out-dir>
-            <out-dir>/aep/<column>/: for each AEP column of the flow
-            statistics, a forecast, flows2fim controls for it from
-            start_reaches.csv, and a depth VRT
-
-With an AOI config, the reaches are those of its `network`, and its flow
-statistics are forecast. Without one, they are every reach in the database's
-network, and the system-wide flow statistics are forecast.
-
-Read only: the database through a connection it refuses writes on, storage
-by reading and copying from. The one thing written is <out-dir>, which is
-refused inside the storage root or the source data root.
-
-<out-dir> is a local folder or an s3:// address, and each export goes into a
-new, empty one: an export is a snapshot of what is materialized when it runs,
-so exporting again, for more reaches or other ones, is a new out-dir. sqlite and flows2fim work on local files only, so every file is written
-in a local folder first -- <out-dir> itself, or a temporary one when <out-dir> is
-in storage -- and uploaded from there. The library is the exception: into
-storage it is copied object to object and never passes through this machine,
-and flows2fim reads it where it is, through GDAL's /vsis3/.
-
-The database, not storage, says what a reach's library is. Its adopted
-discharges are `materialized_nd_runs.q_set`, and the schema says outright that
-storage may hold more runs left behind by an earlier sweep, which the loop
-ignores; the KWSE stage libraries are built at the adopted discharges and no
-others. So walking the results tree would adopt the surplus as well, and every
-surplus discharge is one with a normal-depth run and no stage library. flows2fim
-matches a forecast on flow before stage, so a forecast landing nearest a
-surplus discharge would find only the nd row and map a backwater-controlled
-reach at normal depth. Measured on a 41-reach network: 24 reaches held surplus
-runs, and 16 of 31 interior reaches degraded that way at the 50yr forecast --
-while passing `flows2fim validate` 1:1, because the surplus was self-consistent.
-
-The one part of a grid's address the database cannot supply is the `nd=<slope>`
-folder, because the job computes the slope from the reach's own DEM. It is
-discovered in storage, exactly as the loop does (storage.nd_library_path).
-
-flows2fim parses reach ids as integers, while a reach id here is text: a reach
-modify_network split out of one flowpath is named <flowpath id>_<n>. So every
-table, file and library folder flows2fim reads names a reach by a number, and
-`reach_ids` in scenarios.db maps each number to its reach id. The numbers
-belong to one export only. Once flows2fim takes text ids, they go.
-
-Discharges are cms, the unit the whole system is authored in -- desired_state
-bounds, q_set, the q= folders. flows2fim's help says cfs, but it never converts:
-it matches a forecast value against `us_flow` in the scenarios table, so a cms
-forecast against a cms library is what agrees.
+    scenarios   scenarios.db, the tables flows2fim reads
+    library     the depth grids scenarios.db names
+    aep         AEP forecasts, flows2fim controls and depth VRTs
 
 Usage:
-    uv run python scripts/f2f.py scenarios [aoi-config-path] <out-dir>
-    uv run python scripts/f2f.py library <out-dir>
-    uv run python scripts/f2f.py aep [aoi-config-path] <out-dir> [--image IMAGE]
+    just f2f-snapshot <out-dir> [<aoi-config-path>]
+
+    python scripts/f2f.py scenarios <aoi-config-path> <out-dir>
+    python scripts/f2f.py library <out-dir>
+    python scripts/f2f.py aep <aoi-config-path> <out-dir>
+
+With no AOI config, every materialized reach in the database is published using
+the system-wide flow statistics. The aep step runs flows2fim in docker and
+pulls the image if it is not present.
 """
 
 import argparse
@@ -97,7 +47,6 @@ from recon.config import settings
 SCENARIOS_DB = "scenarios.db"
 START_REACHES = "start_reaches.csv"
 MODELS_GPKG = "models.gpkg"
-# Each layer of models.gpkg, and the model manifest asset it is read from.
 MODEL_LAYERS = {"domains": "domain", "inflows": "inflow_line", "reaches": "centerline"}
 REACH_IDS = "reach_ids"
 LIBRARY_DIR = "library"
@@ -105,7 +54,6 @@ AEP_DIR = "aep"
 DEPTH_GRID_FILENAME = "depth.tif"
 
 IMAGE = "ghcr.io/ngwpc/flows2fim:0.5.0"
-# The stage flows2fim controls gives a start reach: normal depth.
 START_STAGE = "nd"
 CONTAINER_OUT = Path("/out")
 
@@ -114,17 +62,8 @@ def is_missing(exc: ClientError) -> bool:
     return exc.response["Error"]["Code"] in ("404", "NoSuchKey")
 
 
-# --- out-dir -------------------------------------------------------------
-
-
 class OutDir:
-    """Where an export is published: a local folder, or an s3:// address.
-
-    Files are named relative to <out-dir>, with `/`. Each is written at
-    `local(name)`: <out-dir> itself when it is a folder, `work` when it is in
-    storage, from where `publish` uploads it. `fetch` is the other direction, so
-    a step can build on what the one before it published.
-    """
+    """Where an export is published: a local folder, or an s3:// address."""
 
     def __init__(self, location: str, work: Path) -> None:
         self.location = location.rstrip("/")
@@ -181,17 +120,8 @@ class OutDir:
         return storage.get_s3_client().list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)["KeyCount"] > 0
 
 
-# --- scenarios -----------------------------------------------------------
-
-
 def library_stage_dir(boundary_condition: str, ds_wse: float) -> str:
-    """The `z_…` folder a scenario's depth grid belongs in.
-
-    flows2fim keys a library on the stage IMPOSED downstream, spelled with the
-    decimal point as an underscore. Rendered through identity.kwse_folder so
-    the library and the results tree round a stage identically -- the folder
-    names have to agree for a grid to be found where the controls table says.
-    """
+    """The `z_…` folder a scenario's depth grid belongs in."""
     if boundary_condition == "nd":
         return "z_nd"
     return "z_" + identity.kwse_folder(ds_wse).removeprefix("kwse=").replace(".", "_")
@@ -203,13 +133,7 @@ def library_grid_name(us_flow: float) -> str:
 
 
 def nd_scenarios(conn, reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
-    """Scenario rows and grid addresses for each of these reaches with an ND library.
-
-    Iterates `q_set`, the adopted discharges, and reads the upstream-end stage
-    for each from `us_min_wse_curve`. The curve is observed from storage and so
-    may carry surplus discharges too; indexing it by the adopted q is what
-    leaves those behind.
-    """
+    """Scenario rows and grid addresses for each of these reaches with an ND library."""
     rows, sources = [], []
     for reach in db.query(
         """
@@ -238,14 +162,7 @@ def nd_scenarios(conn, reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
 
 
 def kwse_scenarios(conn, reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
-    """Scenario rows and grid addresses for each of these reaches with a stage library.
-
-    A KWSE run has two stages and they are not interchangeable: `bc` is the one
-    imposed at this reach's downstream end, which names the folder and is what
-    flows2fim controls on; `wse` is the one achieved at its upstream end, which
-    the reach above matches against. The scenario index is the only record that
-    pairs them.
-    """
+    """Scenario rows and grid addresses for each of these reaches with a stage library."""
     rows, sources = [], []
     for reach in db.query(
         """
@@ -274,15 +191,7 @@ def kwse_scenarios(conn, reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]
 
 
 def network_rows(links: list[tuple[str, str | None]], reach_ids: set[str]) -> tuple[list[tuple], list[tuple]]:
-    """Downstream links for the reaches being exported, and the ones cut.
-
-    A link is kept only if its downstream reach is also in the export. A reach
-    can be materialized before the one below it is, and the AOI's network can
-    end at a reach that drains out of it; pointing flows2fim at a reach with no
-    scenarios would leave it looking for controls that cannot exist. Treating
-    it as an outlet is what the loop does with a clipped network edge, and an
-    outlet is where a traversal legitimately starts.
-    """
+    """Downstream links for the reaches being exported, and the ones cut."""
     rows, cut = [], []
     for reach_id, downstream_id in sorted(links):
         if reach_id not in reach_ids:
@@ -295,20 +204,7 @@ def network_rows(links: list[tuple[str, str | None]], reach_ids: set[str]) -> tu
 
 
 def write_start_reaches(path: Path, links: list[tuple[str, str | None]], numbers: dict[str, int]) -> list[str]:
-    """Write the reaches controls start from, each at normal depth, for `controls -scsv`.
-
-    Controls are traced upstream from the reaches with nowhere left to drain in
-    the export: the true terminals, and the reaches network_rows cut off from a
-    downstream neighbour that is not exported. Normal depth is the only start a
-    terminal has, since it has no stage library. For a cut reach it is the
-    fallback: the stage its real downstream neighbour would hold is unknown
-    until that neighbour is exported, so the reach and everything above it are
-    mapped as if it drained freely.
-
-    A file rather than a list on the command line, so a large AOI's starts do not
-    run into argument limits, and so what a map started from is kept beside it
-    and can be edited before aep runs.
-    """
+    """Write the reaches controls start from, each at normal depth, for `controls -scsv`."""
     starts = [reach_id for reach_id, downstream_id in links if downstream_id is None]
     pd.DataFrame(
         {"reach_id": [numbers[r] for r in starts], "control_stage": [START_STAGE] * len(starts)}
@@ -329,11 +225,7 @@ def write_scenarios_db(
     numbers: dict[str, int],
     aoi_config_described: str | None,
 ) -> None:
-    """Write the two tables flows2fim reads, plus the reach numbers, where each grid is and what was exported.
-
-    `aoi_config_described` is the AOI config the export was scoped by, or None
-    for every materialized reach.
-    """
+    """Write the tables flows2fim reads."""
     number = numbers.__getitem__
     scenario_rows = [(number(row[0]), *row[1:]) for row in scenario_rows]
     source_rows = [(number(row[0]), *row[1:]) for row in source_rows]
@@ -357,9 +249,6 @@ def write_scenarios_db(
             """
         )
         connection.execute("CREATE TABLE network (reach_id INTEGER PRIMARY KEY, updated_to_id INTEGER)")
-        # Not part of the flows2fim contract. Keyed exactly like the scenarios
-        # UNIQUE so the library step can join the two without guessing, and
-        # holding full s3:// addresses so it needs no database connection.
         connection.execute(
             """
             CREATE TABLE scenario_sources (
@@ -372,8 +261,6 @@ def write_scenarios_db(
             )
             """
         )
-        # Not part of the flows2fim contract either: the reach id behind each
-        # number every other table uses.
         connection.execute(f"CREATE TABLE {REACH_IDS} (reach_id INTEGER PRIMARY KEY, twodfim_reach_id TEXT NOT NULL UNIQUE)")
         connection.executemany(
             f"INSERT INTO {REACH_IDS} (reach_id, twodfim_reach_id) VALUES (?, ?)",
@@ -422,12 +309,7 @@ def reaches_in_scope(conn, aoi: dict | None) -> tuple[set[str], str]:
 
 
 def run_models(conn, reach_ids: set[str]) -> dict[str, str]:
-    """The model each of these reaches' runs were made with: reach id -> model_id.
-
-    Read from the run tables rather than materialized_models, because the maps
-    come from the runs, and a model rebuilt since would not be the one they
-    were made with. A reach's nd and kwse runs share a model; nd is read first.
-    """
+    """The model each of these reaches' runs were made with: reach id -> model_id."""
     return {
         r["reach_id"]: r["model_id"]
         for r in db.query(
@@ -497,7 +379,6 @@ def export_model_layers(models: dict[str, str], path: Path) -> tuple[dict[str, i
     """models.gpkg for these reaches' models; the row count of each layer, and the reaches whose model was not found."""
     s3 = storage.get_s3_client()
     reach_ids = sorted(models)
-    # Concurrent, because it is four reads per reach.
     with ThreadPoolExecutor(max_workers=16) as pool:
         read = list(pool.map(lambda r: read_model_layers(s3, r, models[r]), reach_ids))
     missing = [r for r, layers in zip(reach_ids, read) if layers is None]
@@ -558,9 +439,6 @@ def export_scenarios(aoi: dict | None, out: OutDir) -> None:
         print(f"                {out.address(MODELS_GPKG)}")
 
 
-# --- library -------------------------------------------------------------
-
-
 def read_sources(scenarios_db: Path) -> list[dict]:
     """Every scenario's grid address, as the scenarios step wrote them."""
     with sqlite3.connect(scenarios_db) as connection:
@@ -594,11 +472,7 @@ def library_name(source: dict) -> str:
 
 
 def download_grid(s3, source: dict, destination: Path) -> str:
-    """Download one grid into a local library: 'copied', 'present' or 'missing'.
-
-    'present' is a grid an interrupted run already downloaded: it is written
-    under another name and renamed when complete, so one that exists is whole.
-    """
+    """Download one grid into a local library: 'copied', 'present' or 'missing'."""
     if destination.exists():
         return "present"
     bucket, key = storage.parse_s3_path(source["depth_grid"])
@@ -615,10 +489,7 @@ def download_grid(s3, source: dict, destination: Path) -> str:
 
 
 def copy_grid(s3, source: dict, destination: str) -> str:
-    """Copy one grid into a library in storage, object to object: as download_grid.
-
-    A copy lands whole or not at all, so one that exists is whole.
-    """
+    """Copy one grid into a library in storage, object to object: as download_grid."""
     destination_bucket, destination_key = storage.parse_s3_path(destination)
     try:
         s3.head_object(Bucket=destination_bucket, Key=destination_key)
@@ -637,12 +508,7 @@ def copy_grid(s3, source: dict, destination: str) -> str:
 
 
 def mark_missing(scenarios_db: Path, missing: list[dict]) -> bool:
-    """Set map_exists = 0 for scenarios whose depth grid is not in storage.
-
-    That is the column flows2fim controls consults before choosing a scenario,
-    so a missing grid narrows the choice instead of producing a controls row
-    pointing at nothing.
-    """
+    """Set map_exists = 0 for scenarios whose depth grid is not in storage."""
     if not missing:
         return False
     print(f"missing         {len(missing)} depth grid(s); their scenarios get map_exists = 0:")
@@ -677,7 +543,6 @@ def export_library(out: OutDir) -> None:
             return copy_grid(s3, source, out.address(name))
         return download_grid(s3, source, out.local(name))
 
-    # Concurrent, because a library is thousands of small objects.
     with ThreadPoolExecutor(max_workers=16) as pool:
         outcomes = list(pool.map(place, sources, names))
 
@@ -690,18 +555,8 @@ def export_library(out: OutDir) -> None:
         out.publish(SCENARIOS_DB)
 
 
-# --- aep -----------------------------------------------------------------
-
-
 def forecast(flows: pd.DataFrame, column: str, reaches: dict[int, str]) -> pd.DataFrame:
-    """One AEP column as a flows2fim forecast (feature_id, discharge) for these reaches, in cms.
-
-    `reaches` maps each reach's flows2fim number, the feature_id, to its reach
-    id. Each reach takes the flow listed under its flow id, so every piece of a
-    split flowpath is forecast with the flowpath's discharge. Reaches the table
-    has no value for are left out rather than stopping the run; the caller
-    counts them.
-    """
+    """One AEP column as a flows2fim forecast (feature_id, discharge) for these reaches, in cms."""
     numbers = sorted(reaches)
     values = flows[column].reindex([flow_statistics.flow_id(reaches[n]) for n in numbers])
     values.index = pd.Index(numbers, name="feature_id")
@@ -726,13 +581,7 @@ def read_reaches(scenarios_db: Path) -> dict[int, str]:
 
 
 def gdal_storage_access() -> tuple[dict[str, str], list[str]]:
-    """The environment GDAL in a container reads storage with, and the docker arguments it needs.
-
-    The credentials are this machine's, resolved as boto3 resolves them -- keys,
-    a profile, SSO or a role -- and handed over as keys, since the container
-    can see none of those. Against an endpoint other than AWS (MinIO), GDAL is
-    pointed at it; one on this machine is reached through the host gateway.
-    """
+    """GDAL storage environment and the matching docker arguments."""
     session = boto3.Session()
     credentials = session.get_credentials()
     if credentials is None:
@@ -741,7 +590,6 @@ def gdal_storage_access() -> tuple[dict[str, str], list[str]]:
     environment = {
         "AWS_ACCESS_KEY_ID": frozen.access_key,
         "AWS_SECRET_ACCESS_KEY": frozen.secret_key,
-        # Every grid is opened by its path, so listing the folder first is wasted requests.
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     }
     if frozen.token:
@@ -766,14 +614,7 @@ def gdal_storage_access() -> tuple[dict[str, str], list[str]]:
 
 
 class Flows2Fim:
-    """flows2fim in docker, with <out-dir>'s local folder mounted as its one directory.
-
-    It runs in docker because it shells out to GDAL, and the published image is
-    where both are known to be present. The container runs as the calling user,
-    so the controls, VRTs and any GDAL sidecars come back owned by whoever ran
-    this rather than by root. When <out-dir> is in storage, the container is
-    also given what GDAL needs to read the library from there.
-    """
+    """flows2fim in docker, with <out-dir>'s local folder mounted as its one directory."""
 
     def __init__(self, image: str, out: OutDir) -> None:
         self.image = image
@@ -802,7 +643,6 @@ class Flows2Fim:
                 "docker", "run", "--rm",
                 "--user", f"{os.getuid()}:{os.getgid()}",
                 "-v", f"{self.out_dir}:{CONTAINER_OUT}",
-                # Named only, so the values are not on a command line.
                 *(arg for name in self.environment for arg in ("-e", name)),
                 *self.docker_args,
                 self.image,
@@ -814,16 +654,7 @@ class Flows2Fim:
 
 
 def post_process_vrt(vrt_path: Path, out: OutDir) -> None:
-    """Make a local VRT's source paths relative, and composite overlaps by maximum.
-
-    flows2fim writes the paths it saw. In a local out-dir those are the
-    container's, and rewriting them relative to the VRT is what lets the output
-    be moved, or handed to someone else, and still open. In storage they are
-    the /vsis3/ paths of the library and stay so: GDAL joins a relative path to
-    the VRT's own key without resolving `..`, and S3 keys are literal, so
-    `../../library` would name no object. A /vsis3/ path opens from anywhere with
-    access to the bucket.
-    """
+    """Make a local VRT's source paths relative, and composite overlaps by maximum."""
     tree = ElementTree.parse(vrt_path)
     root = tree.getroot()
     for source_filename in root.findall(".//SourceFilename") if not out.in_storage else []:
@@ -841,8 +672,6 @@ def post_process_vrt(vrt_path: Path, out: OutDir) -> None:
         pixel_function.text = "max"
     ElementTree.indent(tree, space="  ")
     tree.write(vrt_path, encoding="UTF-8", xml_declaration=True)
-    # flows2fim creates the file owner-only; give it the permissions any other
-    # output here gets, so it can be handed on like the grids it points at.
     umask = os.umask(0)
     os.umask(umask)
     vrt_path.chmod(0o666 & ~umask)
@@ -855,7 +684,6 @@ def export_aep(aoi: dict | None, out: OutDir, image: str) -> None:
             sys.exit(f"No {out.address(name)}; run the scenarios step first")
     if not out.holds(LIBRARY_DIR):
         sys.exit(f"No {out.address(LIBRARY_DIR)}; run the library step first")
-    # flows2fim reads a library in storage where it is, not a copy of it.
     library = out.gdal_path(LIBRARY_DIR) if out.in_storage else out.local(LIBRARY_DIR)
 
     reach_ids = read_reaches(scenarios_db)
@@ -887,9 +715,6 @@ def export_aep(aoi: dict | None, out: OutDir, image: str) -> None:
         rows.to_csv(flows_csv, index=False)
 
         flows2fim.run("controls", "-db", scenarios_db, "-f", flows_csv, "-o", controls_csv, "-scsv", start_reaches)
-        # controls still visits a reach the forecast has no flow for, and picks
-        # its lowest discharge. Mapping that would show water nobody forecast,
-        # so such reaches are dropped before the depth VRT is built.
         controls = pd.read_csv(controls_csv)
         forecast_controls = controls[controls["reach_id"].isin(rows["feature_id"])]
         if len(forecast_controls) < len(controls):
@@ -903,9 +728,6 @@ def export_aep(aoi: dict | None, out: OutDir, image: str) -> None:
             f"{column:<16}{out.address(names[2])}  ({len(rows)} reach(es) mapped"
             f"{f', {without} without flows not mapped' if without else ''})"
         )
-
-
-# --- command line --------------------------------------------------------
 
 
 def main() -> None:
@@ -922,7 +744,6 @@ def main() -> None:
     for step in (scenarios, library, aep):
         step.add_argument("out_dir", metavar="out-dir", help="where everything is written: a local folder or an s3:// address")
     args = ap.parse_args()
-    # Line by line, so this script's report and flows2fim's own output appear in order.
     sys.stdout.reconfigure(line_buffering=True)
 
     print(f"out-dir         {args.out_dir}")

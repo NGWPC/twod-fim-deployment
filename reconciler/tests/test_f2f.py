@@ -1,9 +1,4 @@
-"""f2f.py: the parts of a flows2fim export that do not need a database or docker.
-
-Library names have to agree with what the controls table says, the network has
-to end where the export does, and a forecast has to leave out what it cannot
-forecast rather than stop. The full run is exercised against a stack.
-"""
+"""Tests for f2f."""
 
 import sqlite3
 import sys
@@ -163,7 +158,6 @@ def test_model_layers_are_one_layer_each_with_the_reach_id_first(tmp_path):
         return {
             "domains": f2f.tag_reach(gpd.GeoDataFrame({"offset_str": ["N1"]}, geometry=[box(x, 0, x + 1, 1)], crs=5070), reach_id),
             "inflows": f2f.tag_reach(gpd.GeoDataFrame({"ind": [1]}, geometry=[LineString([(x, 0), (x, 1)])], crs=5070), reach_id),
-            # A centerline carries the reach id the network gave it, as a float in older models.
             "reaches": f2f.tag_reach(
                 gpd.GeoDataFrame({"reach_id": [1.0], "stream_order": [3]}, geometry=[LineString([(x, 0), (x + 1, 1)])], crs=5070),
                 reach_id,

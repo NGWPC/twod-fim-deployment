@@ -1,12 +1,6 @@
-"""Append-only history: one row each time something happens to a reach.
+"""Activity history.
 
-The only table with a time dimension, so it is what a timeline, a live feed, or
-"why did this reach do that" is built from. Nothing reads it to make a decision
-— a check works everything out from current state, never from history — which
-is exactly why it is safe for it to be lossy, trimmed, or turned off.
-
-Rows are opened when something starts and stamped when it ends, so an
-unfinished row is visible as one with no ended_at.
+Append-only log: one row each time something happens to a reach.
 """
 
 import json
@@ -46,11 +40,7 @@ def end(
     *,
     conn: psycopg.Connection | None = None,
 ) -> None:
-    """Close a row opened by begin().
-
-    detail is merged rather than replaced, so what was known at the start
-    survives alongside what was learned by the end.
-    """
+    """Close a row opened by begin()."""
     db.query(
         """
         UPDATE reach_activity SET

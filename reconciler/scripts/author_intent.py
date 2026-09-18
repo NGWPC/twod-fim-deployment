@@ -1,46 +1,19 @@
-"""Author intent: what is wanted, in two separate commands.
+"""Author desired state: the system-wide defaults, and one AOI's own network.
 
-Seeding loads a network; this says what to build from it.
-
-  defaults  desired_state_defaults, the single row every reach falls back to,
-            from the system-wide settings (config.py, .env). Written when the
-            database is set up (`just setup-db`, which up-local and up-hybrid
-            run), and again only to change a default on purpose: any change to the
-            row fires bump_all_reach_revisions, which re-checks every reach of
-            every AOI. So a change is shown first, with how many reaches it
-            re-checks, and written only with --yes.
-  aoi       desired_state, one row per reach of an AOI's own network that the
-            flow statistics cover: discharge bounds from those statistics,
-            placed on a discharge grid, and the AOI's own dem_source,
-            lulc_source and lulc_lookup when it names them (NULL, meaning the
-            default, when it does not). Never touches the defaults row — a
-            command for one AOI must not have a deployment-wide effect.
-
-The flow statistics are the AOI's own table when it names one, with its own
-column names, and otherwise the system-wide default: bound_flows.py's CONUS
-output. They are matched on reach_id, which is the NHF flowpath id —
-modify_network keeps the downstream reach's id when it merges reaches.
-
-An AOI authors only reaches in its own `network` file, so several AOIs can
-share one database without one authoring over another. Which of them is decided
-by the flow statistics: a reach they do not cover has no discharge range and is
-not authored — and is counted in the report, so a real gap in the statistics is
-seen rather than silently skipped. A test AOI limits its run the same way,
-with a flow file covering only the reaches it wants.
-
-Adds and updates, never deletes. A reach authored before with unchanged values
-keeps its revision, so nothing it has built is invalidated.
-
-The network must be seeded first: desired_state.reach_id is a foreign key into
-reach_network, and what is authored is checked against the network actually
-loaded.
+"defaults" writes desired_state_defaults from the system-wide settings; run it
+once before authoring any AOI. "aoi" authors the reaches of the network an AOI
+config names, leaving anything it does not override on the defaults.
 
 Usage:
-    uv run python scripts/author_intent.py defaults [--yes]
-    uv run python scripts/author_intent.py aoi <aoi-config-path>
+    just author-defaults                     # first time
+    just author-defaults --yes               # change the row in force
+    just author-intent <aoi-config-path>
 
-<aoi-config-path> is a local path or an s3:// address. See aoi_config.py for the
-keys read here.
+    python scripts/author_intent.py defaults [--yes]
+    python scripts/author_intent.py aoi <aoi-config-path>
+
+--yes is required to change defaults already in force, because every reach is
+re-checked afterwards.
 """
 
 import argparse
@@ -57,29 +30,15 @@ import flow_statistics
 from recon import db, storage
 from recon.config import settings
 
-# Q bounds, derived from flow statistics rather than authored by hand (DR-029
-# ALT-D: the library runs from the high flow threshold to the 100-year
-# discharge). Which columns hold those is the flow table's business
-# (flow_q_lower_column, flow_q_upper_column); how they become bounds is intent,
-# which is why the formula lives here.
 Q_LOWER_BOUND_MULTIPLIER = 1.0
 Q_UPPER_BOUND_MULTIPLIER = 1.0
 DQ_STEP_FIELD = "initial_dq_step_for_nd"
 Q_GRID_FIELD = "q_grid_resolution"
-# The discharge axis a library may land on, cms, anchored to zero (DR-041).
 Q_GRID_MENU = (2, 5, 10, 50, 100)
-# Seeding never picks coarser than this. Beyond it a grid stops being a
-# resolution floor and starts dictating the library's shape.
 Q_GRID_SEED_CEILING = 10
-# A range with fewer lines than this cannot describe a library, so the grid is
-# refined until it fits or the menu runs out.
 Q_GRID_MIN_LINES = 10
 
-# More reaches than this and the report lists counts instead of every reach.
 REPORT_EACH_REACH_UP_TO = 50
-
-
-# --- discharge bounds ----------------------------------------------------
 
 
 def read_q_bounds(path: Path, flows: flow_statistics.FlowStatistics) -> pd.DataFrame:
@@ -106,7 +65,6 @@ def load_q_bounds(bounds: pd.DataFrame, reaches: list[dict]) -> list[dict]:
             missing_reaches.append(reach_id)
             continue
         if isinstance(row, pd.DataFrame):
-            # duplicate row
             continue
         low = max(
             np.ceil(row["q_lower"] * Q_LOWER_BOUND_MULTIPLIER).astype(
@@ -147,36 +105,7 @@ def load_q_bounds(bounds: pd.DataFrame, reaches: list[dict]) -> list[dict]:
 
 
 def narrow(reaches: list[dict], lower_factor: float, upper_factor: float) -> list[dict]:
-    """Pull the discharge bounds inward by an AOI's q_bound_factors.
-
-    NOT methodology: DR-029 says the library runs from the high flow threshold
-    to the 100-year discharge, and an AOI without factors authors exactly
-    that. Factors exist for test AOIs, whose cost is set by how far the
-    adaptive sweep has to travel, so a shorter journey is a shorter run of the
-    same shape.
-
-    The step is deliberately NOT recomputed. It is an absolute increment in cms,
-    and leaving it at the value the full range implied is the whole point: the
-    sweep then crosses a shorter distance in the same size paces, which is fewer
-    runs. Rescaling it to the new range would restore the original count in
-    smaller steps and save nothing.
-
-    Both roundings go inward — up at the bottom, down at the top — so the result
-    is never wider than the factors ask for.
-
-    A narrow enough reach has no room for both factors, and gives them up one at
-    a time rather than all at once. The lower factor goes first: raising the
-    floor drops the smallest discharges, which are the cheapest to simulate,
-    while lowering the ceiling drops the largest, which wet the most cells and
-    cost the most. Whatever room a reach has is worth spending on the ceiling.
-
-    Giving up both leaves the authored range, which is the one outcome that must
-    stay reachable: desired_state_flow_bounds_chk requires lower < upper, so
-    bounds that crossed would abort the whole authoring run, and an inverted
-    range describes no library anyone could build.
-    """
-    # Tried in order, first fit wins. The last is the authored range itself, so
-    # the ladder always lands somewhere.
+    """Pull the discharge bounds inward by an AOI's q_bound_factors."""
     concessions = ((lower_factor, upper_factor), (1.0, upper_factor), (1.0, 1.0))
     for r in reaches:
         authored = (r["q_lower_bound"], r["q_upper_bound"])
@@ -188,25 +117,13 @@ def narrow(reaches: list[dict], lower_factor: float, upper_factor: float) -> lis
         else:  # pragma: no cover - the last concession is the authored range
             low, high = authored
         r["q_lower_bound"], r["q_upper_bound"] = low, high
-        # What the report needs to say how far this reach got: the range it came
-        # from, and which factors survived.
         r["narrowed"] = None if (low, high) == authored else authored
         r["factors"] = (lower, upper)
     return reaches
 
 
 def choose_q_grid(low: int, high: int) -> int:
-    """The discharge grid this reach's range can carry.
-
-    The coarsest option seeding will pick, no coarser than
-    `Q_GRID_SEED_CEILING`, that still leaves `Q_GRID_MIN_LINES` lines between
-    the bounds. A coarse grid is cheap where the range is wide, but a narrow
-    range needs a fine one or the library has nowhere to put its entries — so
-    the menu is walked from coarse to fine and the first that fits wins.
-
-    When nothing fits, the finest option is used and the range is simply too
-    narrow to describe a library.
-    """
+    """The discharge grid this reach's range can carry."""
     for grid in sorted(
         (g for g in Q_GRID_MENU if g <= Q_GRID_SEED_CEILING), reverse=True
     ):
@@ -216,22 +133,12 @@ def choose_q_grid(low: int, high: int) -> int:
 
 
 def snap_to_grid(value: int, grid: int) -> int:
-    """The nearest grid value, never zero.
-
-    Zero discharge is not a scenario anyone can run, so a value that rounds
-    down to the anchor takes the first grid value above it instead.
-    """
+    """The nearest grid value, never zero."""
     return max(round(value / grid) * grid, grid)
 
 
 def place_on_q_grid(reaches: list[dict]) -> list[dict]:
-    """Put every reach's bounds and opening step on its own discharge grid.
-
-    Done after the bounds are known and after any narrowing, because the grid
-    is chosen from the range that survived. Snapping is to the NEAREST line: a
-    bound is a statistic with its own error, and moving it to the closer line
-    respects that better than always widening.
-    """
+    """Put every reach's bounds and opening step on its own discharge grid."""
     for r in reaches:
         low, high = r.get("q_lower_bound"), r.get("q_upper_bound")
         if low is None or high is None:
@@ -241,36 +148,14 @@ def place_on_q_grid(reaches: list[dict]) -> list[dict]:
         r["q_lower_bound"] = snap_to_grid(low, grid)
         r["q_upper_bound"] = snap_to_grid(high, grid)
         if r["q_upper_bound"] <= r["q_lower_bound"]:
-            # The range collapsed onto one line. Give it a single interval so
-            # the row still describes something, and let the report flag it.
             r["q_upper_bound"] = r["q_lower_bound"] + grid
         if r.get(DQ_STEP_FIELD):
             r[DQ_STEP_FIELD] = snap_to_grid(r[DQ_STEP_FIELD], grid)
     return reaches
 
 
-# --- which reaches ------------------------------------------------------
-#
-# Authoring fewer reaches than the network holds does not make a smaller
-# network. It is the same network with a smaller ask, which is the line the
-# loop itself draws: a reach in the network means nothing until intent is
-# authored for it (intent.effective), and the queue puts its question to
-# desired_state, not to reach_network. So the reaches authored still see the
-# true topology, the true mainstem, and the true geometry a full run would give
-# them — check.py's _upstream reads reach_network, not this table.
-#
-# One rule constrains what is authored, and it is the ladder's: every rung above
-# the first waits on the reach DOWNSTREAM. A reach whose downstream has no intent
-# waits on a proof nothing will ever write. What is authored must therefore be
-# DOWNSTREAM-CLOSED — every reach's downstream is authored too, or already has
-# intent — and check_downstream_closed enforces that.
-
-
 def reaches_to_author(aoi: dict, own: set[str], seeded: set[str], covered: set[str], flows: str) -> set[str]:
-    """The reaches of the AOI's own network that its flow statistics cover.
-
-    `covered` holds flow ids, so a split reach is covered by its flowpath's row.
-    """
+    """The reaches of the AOI's own network that its flow statistics cover."""
     unseeded = sorted(own - seeded)
     if unseeded:
         sys.exit(
@@ -284,11 +169,7 @@ def reaches_to_author(aoi: dict, own: set[str], seeded: set[str], covered: set[s
 
 
 def check_downstream_closed(reaches: list[dict], authored: set[str], intended: set[str]) -> None:
-    """Refuse to author reaches that cannot finish.
-
-    Silent otherwise: a dangling reach authors cleanly and then sits at
-    awaiting_downstream until someone reads the activity log.
-    """
+    """Refuse to author reaches that cannot finish."""
     satisfied = authored | intended
     by_id = {r["reach_id"]: r for r in reaches}
     dangling = [
@@ -303,9 +184,6 @@ def check_downstream_closed(reaches: list[dict], authored: set[str], intended: s
             "not downstream-closed; these reaches would wait forever on a\n"
             f"downstream reach nothing is authored for:\n{lines}"
         )
-
-
-# --- sources -------------------------------------------------------------
 
 
 def defaults_from_settings() -> dict:
@@ -326,16 +204,10 @@ def defaults_from_settings() -> dict:
 
 
 def lookup_readable(address: str) -> bool:
-    """The loop reads the lookup to predict identity, so a missing one matters
-    before any reach relies on it."""
+    """Whether the lookup can be read."""
     return storage.read_json(address) is not None
 
 
-# --- database ------------------------------------------------------------
-
-# Read from the database rather than the GeoPackage so what is authored is checked
-# against the network that is actually loaded — including seed.py's clip rule,
-# which turns a reach pointing off the edge of the extract into an outlet.
 _NETWORK = "SELECT reach_id, reach_to_id FROM reach_network ORDER BY reach_id"
 
 _DEFAULTS = """
@@ -362,13 +234,6 @@ _DEFAULTS = """
         ld_q_flooded_area_prcnt_increase_range = EXCLUDED.ld_q_flooded_area_prcnt_increase_range
 """
 
-# Upsert again, for the same reason: a reach already authored with the same
-# values is not a change, so its revision holds and nothing it has built is
-# invalidated. A source the AOI config does not name is written as NULL, which
-# is "use the default" — the AOI config is the author of these rows.
-# Each default's column type, so settings are compared with the row in force by
-# Postgres itself: a numrange written "[1.50,2.5]" equals "[1.5,2.5]", 30 equals
-# 30.0. Comparing the text would call those changes and re-check every reach.
 _DEFAULT_TYPES = {
     "sdr_commit": "text",
     "grid_resolution": "double precision",
@@ -397,12 +262,7 @@ def defaults_changes(proposed: dict, conn) -> list[tuple[str, str, str]] | None:
 
 
 def author_defaults(yes: bool) -> None:
-    """Write desired_state_defaults from the system-wide settings.
-
-    A first write goes straight in and an unchanged row is left alone. A change
-    re-checks every reach with intent, in every AOI, so it is shown first and
-    written only with --yes.
-    """
+    """Write desired_state_defaults from the system-wide settings."""
     proposed = defaults_from_settings()
     with db.connect() as conn:
         changes = defaults_changes(proposed, conn)
@@ -456,8 +316,6 @@ def author(aoi: dict) -> None:
     if defaults is None:
         sys.exit("desired_state_defaults has no row yet, so the database is not set up; run `just setup-db`")
     sources = {key: aoi.get(key) for key in ("dem_source", "lulc_source", "lulc_lookup")}
-    # The lookup these reaches will actually use: the AOI's, or the default in
-    # force in the database — not whatever .env on this machine says.
     lookup = sources["lulc_lookup"] or defaults["lulc_lookup"]
     if not lookup_readable(lookup):
         whose = "this AOI's" if sources["lulc_lookup"] else "the default in force"
@@ -484,12 +342,8 @@ def author(aoi: dict) -> None:
         )
         if factors is not None:
             authoring = narrow(authoring, *factors)
-        # Last, so the grid is chosen from the range that actually survived and
-        # the bounds written to the row are the ones on it.
         authoring = place_on_q_grid(authoring)
 
-        # Revisions as they stand, so the report can say what actually moved
-        # rather than what was written over.
         before = {
             r["reach_id"]: r["revision"]
             for r in db.query("SELECT reach_id, revision FROM desired_state", conn=conn)
@@ -522,15 +376,13 @@ def author(aoi: dict) -> None:
     print(f"  revision moved{len(moved):>3}")
     print(f"  unchanged     {len(after) - len(new) - len(moved)}")
     if factors is not None:
-        print(f"bounds          narrowed by {factors[0]}x lower, {factors[1]}x upper (q_bound_factors, not DR-029)")
+        print(f"bounds          narrowed by {factors[0]}x lower, {factors[1]}x upper (q_bound_factors)")
 
     if len(authoring) > REPORT_EACH_REACH_UP_TO:
         return
     print()
     for r in sorted(authoring, key=lambda r: r["reach_id"]):
         rng = f"{r['q_lower_bound']}-{r['q_upper_bound']} cms"
-        # Say so when the range on the row is not the one DR-029 implies, and
-        # which factors a tight reach had to give up to stay a valid range.
         was, kept = r.get("narrowed"), r.get("factors")
         if kept is None:
             note = ""

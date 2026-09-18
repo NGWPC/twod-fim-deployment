@@ -1,67 +1,37 @@
-// An AOI config: the payload for one area of interest's seed, author and f2f
-// commands. Give each command its path, a local path or an s3:// address:
+// AOI config: the payload for the seed, author and f2f commands.
+// Pass it by path, local or s3://:
 //   just seed-network <workdir>/aoi_config.jsonc
-// Nothing looks it up or stores it. Copying it into provenance afterwards is
-// record keeping only (RUNBOOK.md, "Keep a record").
 //
-// {source_data} stands for TWOD_FIM_SOURCE_DATA_PREFIX, filled in from .env so the file
-// names no bucket. A relative path is relative to this
-// file; full paths keep a copy kept elsewhere meaning the same thing.
+// {source_data} stands for TWOD_FIM_SOURCE_DATA_PREFIX, filled in from .env.
+// A relative path is relative to this file.
 //
-// The optional keys below are commented out, with placeholder values. An AOI
-// config only overrides: left out, dem_source, lulc_source and lulc_lookup come
-// from the database's own desired_state_defaults, and the flow statistics keys
-// from the system-wide settings. Uncomment one only to give this AOI something
-// different: a source set to the default's value still pins these reaches to
-// that value, so they would no longer follow a later change of the default.
+// Commented-out keys are optional; left out, they fall back to the
+// system-wide defaults.
 {
-  // A label for people, printed by the commands. Nothing looks it up or checks
-  // it. Left out, the commands name the AOI config by its path alone.
+  // Label for people. Optional.
   "name": "huc6_120401",
-  // Free text for people. Nothing reads it.
+  // Free text. Optional.
   "description": "HUC6 120401. Network from modify_network with stream_order_filter_threshold 3.",
-  // Read by seed-network and author-intent: modify_network's network.gpkg
-  // (layer reach_network), straight from where modify_network wrote it. Left
-  // out, both commands stop.
+  // Required by seed-network and author-intent. GeoPackage, layer reach_network.
   "network": "<workdir>/<identity_hash>/network.gpkg",
-  // Read by seed-lakes: a GeoPackage with layer lakes_polygons, keyed by
-  // lake_id. Left out, seed-lakes stops. Lakes are seeded once per storage
-  // generation, so an AOI whose lakes are already seeded can leave this out;
-  // seed-network still checks that every lake its network names is there.
+  // Required by seed-lakes. GeoPackage, layer lakes_polygons, keyed by lake_id.
   "lakes": "{source_data}/hydrofabric/nhf.gpkg",
-  // Read by seed-coasts: a GeoPackage with layer coastal_influence_polygons,
-  // keyed by coast_id. Left out, seed-coasts stops. Same as lakes otherwise.
+  // Required by seed-coasts. GeoPackage, layer coastal_influence_polygons, keyed by coast_id.
   "coasts": "{source_data}/coastal_influence/coastal_influence.gpkg"
-  // Read by author-intent: a .parquet or .csv of per-reach flows. Only the
-  // network's reaches it covers are authored. Left out, the system-wide flow
-  // statistics are used.
+  // Per-reach flows for author-intent: .parquet or .csv.
   // "flow_statistics": "{source_data}/<flows>.parquet",
-  // What flow_statistics calls the reach id (a column or the index), and the two
-  // columns the discharge bounds come from (DR-029: from the high flow threshold
-  // to the 100-year discharge). Left out, the system-wide column names are used.
+  // Column names in flow_statistics.
   // "flow_reach_id_column": "<reach-id-column>",
   // "flow_q_lower_column": "<high-flow-threshold-column>",
   // "flow_q_upper_column": "<100-year-discharge-column>",
-  // Read by f2f: the columns of the flow statistics forecast as AEP flows, one
-  // set of flows2fim controls and one depth VRT each. Left out, the system-wide
-  // AEP columns are used.
+  // Flow statistics columns exported by f2f as AEP flows.
   // "flow_aep_columns": ["<aep-column>", "<aep-column>"],
-  // Where jobs read elevation for this AOI's reaches: an address a job can
-  // open (s3://, https://, /vsi...), never a local path. Left out, the reaches
-  // store no value and follow the database's desired_state_defaults. Part of
-  // model identity, so changing it rebuilds these reaches' models.
+  // Elevation source. Must be an address a job can open (s3://, https://, /vsi...).
   // "dem_source": "{source_data}/<dem>.tif",
-  // Where jobs read land cover. Same rules as dem_source; left out, the reaches
-  // follow the database's desired_state_defaults.
+  // Land cover source. Same rules as dem_source.
   // "lulc_source": "{source_data}/<land-cover>.tif",
-  // The land-cover to Manning's n JSON. Must be s3://, because the loop reads it
-  // too, and must already exist, which author-intent checks. Left out, the
-  // reaches follow the database's desired_state_defaults. Identity hashes the
-  // file's content, so editing the file rebuilds every model that uses it.
+  // Land-cover to Manning's n JSON. Must be s3:// and must already exist.
   // "lulc_lookup": "{source_data}/<lookup>.json",
-  // [lower, upper]: pull each reach's discharge bounds inward, with lower >= 1
-  // raising the floor and 0 < upper <= 1 lowering the ceiling, to keep a test run
-  // short. Left out, the bounds are DR-029's full range, which is what a real
-  // AOI wants.
+  // [lower, upper]: narrow each reach's discharge bounds, to keep a test run short.
   // "q_bound_factors": [1.3, 0.7]
 }
